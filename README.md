@@ -133,12 +133,32 @@ imperfect; a finding requires human review, and *"no findings" does not mean "no
 vulnerabilities."* All results apply only to the specific model, prompt, tool set,
 and configuration version that was tested.
 
-## Contributing / Responsible Disclosure
+## Contributing
 
 Contributions are welcome once the Phase 0 spine lands — issues and discussion are
 open in the meantime.
 
-**Responsible disclosure:** if you believe you've found a security issue in
-RedCell itself, please report it privately via GitHub's
+```bash
+git clone https://github.com/Sumire-no-kai/RedCell.git
+cd RedCell
+python -m venv .venv && .venv/Scripts/activate   # Linux/macOS: source .venv/bin/activate
+pip install -e ".[dev]"
+pytest
+```
+
+The test suite runs entirely offline against a scripted LLM provider, so it needs
+no API key and costs nothing. Please keep it that way: model calls belong behind
+the `LLMProvider` abstraction.
+
+## Responsible Disclosure
+
+If you believe you've found a security issue **in RedCell itself**, report it
+privately via GitHub's
 [private security advisory](https://github.com/Sumire-no-kai/RedCell/security/advisories/new)
-feature rather than opening a public issue.
+feature rather than opening a public issue. See [SECURITY.md](SECURITY.md) for
+scope and what to expect.
+
+> **Note on the Arena:** the bundled benchmark agents are **deliberately
+> vulnerable** — canary leakage, cross-tenant reads, and forbidden tool calls are
+> intended behaviour and are what RedCell exists to detect. Those are not security
+> issues; please don't report them as such.
