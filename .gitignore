@@ -53,6 +53,8 @@ env/
 coverage.xml
 htmlcov/
 .tox/
+.ipynb_checkpoints/
+*.so
 
 # ── Supabase ────────────────────────────────────────────────
 supabase/.branches/
@@ -67,6 +69,21 @@ supabase/.temp/
 *.findings.json
 *.run.json
 
+# 本地状态库(Phase 0 用 SQLite 存 attempt / trace)
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+
+# 实验产出与 LLM 响应缓存
+# 缓存可能含靶场 canary 与攻击 prompt,且体积大,一律本地保留。
+/results/
+/plots/
+.llm_cache/
+*.parquet
+
 # ── Docker ──────────────────────────────────────────────────
 docker-compose.override.yml
 
@@ -79,8 +96,9 @@ docker-compose.override.yml
 Thumbs.db
 desktop.ini
 
-# ── Claude Code local ───────────────────────────────────────
+# ── AI coding agents (local state) ──────────────────────────
 .claude/settings.local.json
+.codex/
 
 # ── Logs / temp ─────────────────────────────────────────────
 *.log
