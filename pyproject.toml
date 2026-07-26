@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "redcell"
+version = "0.0.1"
+description = "Adaptive security evaluation for tool-using AI agents"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.7",
+    "pydantic-settings>=2.2",
+    "typer>=0.12",
+    "structlog>=24.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+    "black>=24.4",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/redcell"]
+
+# ── Lint / format ────────────────────────────────────────────
+# 单一来源:IDE(PyCharm)与 CI 共用同一份配置,避免三方产出风格打架。
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "SIM", "RUF"]
+ignore = [
+    "RUF001", # 允许文档字符串里的中文全角标点
+    "RUF002",
+    "RUF003",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+# ── Tests ────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q"
