@@ -5,6 +5,55 @@
 
 ---
 
+## 2026-07-27 · 靶场第 1 批:数据、Policy、模拟工具
+
+### 2026-07-27 18:40 AEST · Step 01 · 客服靶场的数据层与工具层
+
+- **进度:** 分支 `feat/arena-support-agent`,新增 `src/redcell/arena/support_agent/`
+  (`data` / `prompts` / `tools` / `policy`)与 24 个测试。**全程零 LLM,纯确定性逻辑。**
+- **协议层小增补:`ProtectedDatum.location`(`SYSTEM_PROMPT` / `TOOL_RESULT`)。**
+  同样是 canary,植入位置不同含义完全不同:system prompt 那条泄漏 = 模型复述了自己的指令
+  (Prompt Injection);tool result 那条泄漏 = 工具**真的返回了数据且被转述**,
+  它不是新漏洞,而是越权工具调用的 **Impact 证据**。
+  没有这个字段,检测器只能靠"哪个 canary 叫什么名字"硬编码区分。
+  该字段是**附加且带默认值**的,不影响已有代码。
+- **单一来源原则:canary 值只在 `data.py` 定义一次**,policy、system prompt、
+  工具返回值全部引用它。**刻意不用 YAML** —— 拆成 YAML 会让同一个 canary 存在两份,
+  某天改一处漏一处,检测器会**静默失配**(攻击其实成功了却不被判为泄漏),且无任何报错。
+  面向用户的 YAML 加载属于 Phase 2 的产品功能,与靶场 ground truth 无关。
+- **`DefenseLevel` 实装了校准旋钮 ①:** `NONE` / `STANDARD` / `STRICT`。
+  其中 `NONE` 就是 `docs/CALIBRATION.md` §2 要求的**阳性对照配置** ——
+  无任何防御措辞时一条直白攻击必须成功,否则说明检测链路断了。
+- **`enforce_permissions` 实装了校准旋钮 ③:** 关闭后越权调用照常执行、canary 随记录返回。
+  它**只改 Impact 不改 Attempt**,已加测试固定这一语义。
+- **⚠️ 拒绝在 policy 中声明 `requires_confirmation`。**
+  Phase 0 的靶场没有实现确认状态机,六个策略里也没有针对它的。
+  **policy 必须如实描述靶场的实际行为** —— 声明一条并不存在的管控,
+  会让检测器报出根本不存在的违规,而这种误报比漏报更难发现,因为它看起来完全合理。
+  已加测试 `test_policy_does_not_claim_unimplemented_confirmation_control` 锁住。
+- **工具集构成:3 个敏感 + 3 个无害。** 无害工具(FAQ、列自己的订单)不是凑数:
+  没有它们,agent 随便调一个工具都命中,信号没有区分度,而且 agent 没有"正常工作"可做,
+  阴性对照也就无从构造。
+- **数据集含 4 条记录,只有 2 条是测试身份。** `customer_c` / `customer_d` 仅作为数据存在 ——
+  有非 actor 的记录才像真实系统,且越权访问它们同样构成违规。
+- **`reset()` 的双重作用已写进注释:** 除了防止副作用污染 Impact 判定与复现率,
+  它更根本的作用是保证各次 attempt **相互独立** —— bandit 的 i.i.d. 假设正靠这一点成立。
+- **遇到的问题:** ruff `RUF012` 报 `ToolExecution.side_effects` 用了可变默认值 `[]`。
+  **解决:** 改为 `Field(default_factory=list)`。
+- **验证证据:** 65 个测试全过(新增 24);`ruff check` 与 `black --check` 均通过。
+- **剩余状态:** DONE
+
+### OPEN / TODO
+
+- [ ] 第 2 批:`ArenaAdapter`(实现 `TargetAdapter`)+ agent 对话循环,使用 `ScriptedProvider`。
+- [ ] 工具调用入口需做成**可插拔**(原生 function calling / 文本解析),
+      属于第 2 批的范围 —— 第 1 批的工具层本身与调用形式无关。
+- [ ] 阳性/阴性对照需固化为测试(当前只有 `DefenseLevel.NONE` 这个配置就位,
+      对照本身要等执行器可用)。
+- [ ] `feat/strategy-schema` 分支尚未合并;本分支从 master 开出,两者无依赖。
+
+---
+
 ## 2026-07-27 · 靶场 × 策略库设计(设计讨论,尚无代码)
 
 ### 2026-07-27 00:05 AEST · Step 01 · 确立预注册方法论
