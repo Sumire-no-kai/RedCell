@@ -43,13 +43,41 @@
 - **验证证据:** 65 个测试全过(新增 24);`ruff check` 与 `black --check` 均通过。
 - **剩余状态:** DONE
 
+### 2026-07-27 19:05 AEST · Step 02 · ArenaAdapter 与工具调用编解码
+
+- **进度:** 同分支追加 `codec.py` 与 `adapter.py`,新增 20 个测试。仍然零 LLM 成本
+  (全部跑 `ScriptedProvider`)。
+- **`ToolCallCodec` 抽象层 —— D2 那条"可插拔"待办的落地。**
+  它封装的是"靶场与模型之间怎么表达一次工具调用"这个约定:
+  `system_suffix()` 决定工具如何被告知模型、`decode()` 从回复里拆出调用、
+  `encode_results()` 把结果喂回去、`results_role` 决定用什么角色喂。
+  换协议 = 换一个实现类,`ArenaAdapter` 与执行器一行不动。
+- **⚠️ 只实装 `TextToolCallCodec` 一种,原生 FC 留到 W2 末。**
+  理由与保留多轮策略时同源但方向相反:原生 FC 现在写出来**无法测试** ——
+  `ScriptedProvider` 只返回字符串,结构化 tool_calls 在它上面无从验证,
+  而 `LLMResponse` 目前也没有该字段。现在写只会得到一段没跑过的代码。
+  届时补 `LLMResponse.tool_calls` 字段并新增一个 codec 实现即可。
+  文本协议本身不是权宜之计:它对任何能跟随格式指令的模型都成立。
+- **新增第二道成本刹车 `MAX_TOOL_ITERATIONS = 5`。**
+  `max_turns` 管的是对话轮数,但**一轮之内**模型可以无限地"再查一次" ——
+  那一轮仍然只算**一次 attempt**,于是 token 消耗脱离了查询预算的约束。
+  已加测试验证达到上限即停。
+- **`results_role` 默认 `USER` 而非 `TOOL`:** 并非所有 provider 都接受 `tool` 角色,
+  而文本协议的卖点正是"任何模型都能跑"。原生 FC 的实现会覆写为 `TOOL`。
+- **坏格式的工具调用不算调用,但也不会作为正常回复展示** ——
+  否则模型吐出的半截标记会被当成给用户的答复,污染 assistant_message。已加测试。
+- **`send()` 的语义确认:** 一次 `send()` = 一轮对话;轮内的多次工具调用属于同一轮,
+  不额外计入轮数预算。这与"一次 attempt = 一场完整会话"的计量约定是两层不同的粒度。
+- **验证证据:** 85 个测试全过(新增 20);`ruff check` 与 `black --check` 均通过。
+- **剩余状态:** DONE
+
 ### OPEN / TODO
 
-- [ ] 第 2 批:`ArenaAdapter`(实现 `TargetAdapter`)+ agent 对话循环,使用 `ScriptedProvider`。
-- [ ] 工具调用入口需做成**可插拔**(原生 function calling / 文本解析),
-      属于第 2 批的范围 —— 第 1 批的工具层本身与调用形式无关。
-- [ ] 阳性/阴性对照需固化为测试(当前只有 `DefenseLevel.NONE` 这个配置就位,
-      对照本身要等执行器可用)。
+- [ ] 阳性/阴性对照需固化为测试。执行器已就位,`DefenseLevel.NONE` +
+      直白攻击的阳性对照现在可以写了;阴性对照(正常客服请求零 Finding)
+      需等检测器落地才有意义。
+- [ ] 检测器(Level-1)尚未实现 —— 下一批。
+- [ ] 原生 FC codec + `LLMResponse.tool_calls` 字段,W2 末接真 provider 时补。
 - [ ] `feat/strategy-schema` 分支尚未合并;本分支从 master 开出,两者无依赖。
 
 ---

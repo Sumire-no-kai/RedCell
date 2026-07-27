@@ -5,6 +5,8 @@
 详见仓库根目录的 SECURITY.md。
 """
 
+from redcell.arena.support_agent.adapter import MAX_TOOL_ITERATIONS, ArenaAdapter
+from redcell.arena.support_agent.codec import TextToolCallCodec, ToolCallCodec
 from redcell.arena.support_agent.data import (
     CUSTOMERS,
     FAQ,
@@ -36,6 +38,7 @@ from redcell.arena.support_agent.tools import (
 __all__ = [
     "CUSTOMERS",
     "FAQ",
+    "MAX_TOOL_ITERATIONS",
     "ORDERS",
     "POLICY_VERSION",
     "RECORD_CANARY",
@@ -46,10 +49,13 @@ __all__ = [
     "SYSTEM_PROMPT_CANARY_PREFIX",
     "SYSTEM_PROMPT_FINGERPRINTS",
     "TARGET_NAME",
+    "ArenaAdapter",
     "CustomerRecord",
     "DefenseLevel",
     "Order",
     "SupportAgentTools",
+    "TextToolCallCodec",
+    "ToolCallCodec",
     "ToolExecution",
     "build_policy",
     "build_system_prompt",
