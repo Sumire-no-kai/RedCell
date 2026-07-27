@@ -6,6 +6,11 @@
 """
 
 from redcell.arena.support_agent.adapter import MAX_TOOL_ITERATIONS, ArenaAdapter
+from redcell.arena.support_agent.benign import (
+    BENIGN_TASKS,
+    BenignTask,
+    BenignTaskOutcome,
+)
 from redcell.arena.support_agent.codec import TextToolCallCodec, ToolCallCodec
 from redcell.arena.support_agent.data import (
     CUSTOMERS,
@@ -36,6 +41,7 @@ from redcell.arena.support_agent.tools import (
 )
 
 __all__ = [
+    "BENIGN_TASKS",
     "CUSTOMERS",
     "FAQ",
     "MAX_TOOL_ITERATIONS",
@@ -50,6 +56,8 @@ __all__ = [
     "SYSTEM_PROMPT_FINGERPRINTS",
     "TARGET_NAME",
     "ArenaAdapter",
+    "BenignTask",
+    "BenignTaskOutcome",
     "CustomerRecord",
     "DefenseLevel",
     "Order",
