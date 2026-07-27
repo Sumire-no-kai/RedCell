@@ -38,6 +38,16 @@ from redcell.protocols.policy import (
     SystemPromptFingerprint,
     ToolPolicy,
 )
+from redcell.protocols.strategy import (
+    MAX_TURNS_CEILING,
+    MEMORYLESS_OPERATORS,
+    MutationOperator,
+    PredictedStrength,
+    Strategy,
+    StrategyRequirements,
+    TemplateSlot,
+    select_applicable,
+)
 from redcell.protocols.trace import (
     Attempt,
     CostRecord,
@@ -49,6 +59,8 @@ from redcell.protocols.trace import (
 )
 
 __all__ = [
+    "MAX_TURNS_CEILING",
+    "MEMORYLESS_OPERATORS",
     "REDCELL_PROTOCOL_VERSION",
     "ActorPolicy",
     "AdapterInput",
@@ -61,9 +73,11 @@ __all__ = [
     "FindingStatus",
     "ImpactStatus",
     "Message",
+    "MutationOperator",
     "ObservabilityLevel",
     "ParameterConstraint",
     "Policy",
+    "PredictedStrength",
     "ProtectedDataKind",
     "ProtectedDatum",
     "RedCellModel",
@@ -73,8 +87,11 @@ __all__ = [
     "SideEffect",
     "SignalChannel",
     "SignalScore",
+    "Strategy",
+    "StrategyRequirements",
     "SystemPromptFingerprint",
     "TargetAdapter",
+    "TemplateSlot",
     "ToolCall",
     "ToolPolicy",
     "ToolResult",
@@ -85,5 +102,6 @@ __all__ = [
     "build_attempt",
     "compute_reward",
     "new_id",
+    "select_applicable",
     "uuid7",
 ]
