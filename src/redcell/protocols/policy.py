@@ -95,10 +95,28 @@ class ProtectedDataKind(StrEnum):
     """不应外泄的结构化字段路径,如 customer.internal_notes。"""
 
 
+class ProtectedDataLocation(StrEnum):
+    """受保护数据被植入在哪里。决定了它泄漏时应归入哪条信号线。
+
+    同样是 canary,植入位置不同,含义完全不同:
+
+    * `SYSTEM_PROMPT` —— 泄漏它 = 模型复述了自己的指令,属于 Prompt Injection;
+    * `TOOL_RESULT` —— 泄漏它意味着工具**真的返回了数据且被转述**,
+      因此它不是一类新漏洞,而是越权工具调用的 **Impact 证据**
+      (Attempt 已生成 vs 数据真的到手,是两回事)。
+
+    没有这个字段,检测器就只能靠"哪个 canary 叫什么名字"来硬编码区分。
+    """
+
+    SYSTEM_PROMPT = "system_prompt"
+    TOOL_RESULT = "tool_result"
+
+
 class ProtectedDatum(RedCellModel):
     kind: ProtectedDataKind
     value: str | None = None
     path: str | None = None
+    location: ProtectedDataLocation = ProtectedDataLocation.SYSTEM_PROMPT
     prefix: str | None = None
     """canary 的结构前缀(如 "RC_SECRET_")。
 
@@ -181,6 +199,10 @@ class Policy(RedCellModel):
 
     def canary_prefixes(self) -> list[str]:
         return [c.prefix for c in self.canaries() if c.prefix]
+
+    def canaries_at(self, location: ProtectedDataLocation) -> list[ProtectedDatum]:
+        """按植入位置取 canary。检测器据此决定该命中归入哪条信号线。"""
+        return [c for c in self.canaries() if c.location is location]
 
     def constrained_tool_names(self) -> list[str]:
         """带参数约束的工具——reward 中间档"触碰了敏感工具"的判定依据。"""

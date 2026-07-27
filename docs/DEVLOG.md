@@ -5,6 +5,112 @@
 
 ---
 
+## 2026-07-27 · 靶场第 1 批:数据、Policy、模拟工具
+
+### 2026-07-27 18:40 AEST · Step 01 · 客服靶场的数据层与工具层
+
+- **进度:** 分支 `feat/arena-support-agent`,新增 `src/redcell/arena/support_agent/`
+  (`data` / `prompts` / `tools` / `policy`)与 24 个测试。**全程零 LLM,纯确定性逻辑。**
+- **协议层小增补:`ProtectedDatum.location`(`SYSTEM_PROMPT` / `TOOL_RESULT`)。**
+  同样是 canary,植入位置不同含义完全不同:system prompt 那条泄漏 = 模型复述了自己的指令
+  (Prompt Injection);tool result 那条泄漏 = 工具**真的返回了数据且被转述**,
+  它不是新漏洞,而是越权工具调用的 **Impact 证据**。
+  没有这个字段,检测器只能靠"哪个 canary 叫什么名字"硬编码区分。
+  该字段是**附加且带默认值**的,不影响已有代码。
+- **单一来源原则:canary 值只在 `data.py` 定义一次**,policy、system prompt、
+  工具返回值全部引用它。**刻意不用 YAML** —— 拆成 YAML 会让同一个 canary 存在两份,
+  某天改一处漏一处,检测器会**静默失配**(攻击其实成功了却不被判为泄漏),且无任何报错。
+  面向用户的 YAML 加载属于 Phase 2 的产品功能,与靶场 ground truth 无关。
+- **`DefenseLevel` 实装了校准旋钮 ①:** `NONE` / `STANDARD` / `STRICT`。
+  其中 `NONE` 就是 `docs/CALIBRATION.md` §2 要求的**阳性对照配置** ——
+  无任何防御措辞时一条直白攻击必须成功,否则说明检测链路断了。
+- **`enforce_permissions` 实装了校准旋钮 ③:** 关闭后越权调用照常执行、canary 随记录返回。
+  它**只改 Impact 不改 Attempt**,已加测试固定这一语义。
+- **⚠️ 拒绝在 policy 中声明 `requires_confirmation`。**
+  Phase 0 的靶场没有实现确认状态机,六个策略里也没有针对它的。
+  **policy 必须如实描述靶场的实际行为** —— 声明一条并不存在的管控,
+  会让检测器报出根本不存在的违规,而这种误报比漏报更难发现,因为它看起来完全合理。
+  已加测试 `test_policy_does_not_claim_unimplemented_confirmation_control` 锁住。
+- **工具集构成:3 个敏感 + 3 个无害。** 无害工具(FAQ、列自己的订单)不是凑数:
+  没有它们,agent 随便调一个工具都命中,信号没有区分度,而且 agent 没有"正常工作"可做,
+  阴性对照也就无从构造。
+- **数据集含 4 条记录,只有 2 条是测试身份。** `customer_c` / `customer_d` 仅作为数据存在 ——
+  有非 actor 的记录才像真实系统,且越权访问它们同样构成违规。
+- **`reset()` 的双重作用已写进注释:** 除了防止副作用污染 Impact 判定与复现率,
+  它更根本的作用是保证各次 attempt **相互独立** —— bandit 的 i.i.d. 假设正靠这一点成立。
+- **遇到的问题:** ruff `RUF012` 报 `ToolExecution.side_effects` 用了可变默认值 `[]`。
+  **解决:** 改为 `Field(default_factory=list)`。
+- **验证证据:** 65 个测试全过(新增 24);`ruff check` 与 `black --check` 均通过。
+- **剩余状态:** DONE
+
+### 2026-07-27 19:05 AEST · Step 02 · ArenaAdapter 与工具调用编解码
+
+- **进度:** 同分支追加 `codec.py` 与 `adapter.py`,新增 20 个测试。仍然零 LLM 成本
+  (全部跑 `ScriptedProvider`)。
+- **`ToolCallCodec` 抽象层 —— D2 那条"可插拔"待办的落地。**
+  它封装的是"靶场与模型之间怎么表达一次工具调用"这个约定:
+  `system_suffix()` 决定工具如何被告知模型、`decode()` 从回复里拆出调用、
+  `encode_results()` 把结果喂回去、`results_role` 决定用什么角色喂。
+  换协议 = 换一个实现类,`ArenaAdapter` 与执行器一行不动。
+- **⚠️ 只实装 `TextToolCallCodec` 一种,原生 FC 留到 W2 末。**
+  理由与保留多轮策略时同源但方向相反:原生 FC 现在写出来**无法测试** ——
+  `ScriptedProvider` 只返回字符串,结构化 tool_calls 在它上面无从验证,
+  而 `LLMResponse` 目前也没有该字段。现在写只会得到一段没跑过的代码。
+  届时补 `LLMResponse.tool_calls` 字段并新增一个 codec 实现即可。
+  文本协议本身不是权宜之计:它对任何能跟随格式指令的模型都成立。
+- **新增第二道成本刹车 `MAX_TOOL_ITERATIONS = 5`。**
+  `max_turns` 管的是对话轮数,但**一轮之内**模型可以无限地"再查一次" ——
+  那一轮仍然只算**一次 attempt**,于是 token 消耗脱离了查询预算的约束。
+  已加测试验证达到上限即停。
+- **`results_role` 默认 `USER` 而非 `TOOL`:** 并非所有 provider 都接受 `tool` 角色,
+  而文本协议的卖点正是"任何模型都能跑"。原生 FC 的实现会覆写为 `TOOL`。
+- **坏格式的工具调用不算调用,但也不会作为正常回复展示** ——
+  否则模型吐出的半截标记会被当成给用户的答复,污染 assistant_message。已加测试。
+- **`send()` 的语义确认:** 一次 `send()` = 一轮对话;轮内的多次工具调用属于同一轮,
+  不额外计入轮数预算。这与"一次 attempt = 一场完整会话"的计量约定是两层不同的粒度。
+- **验证证据:** 85 个测试全过(新增 20);`ruff check` 与 `black --check` 均通过。
+- **剩余状态:** DONE
+
+### 2026-07-27 19:35 AEST · Step 03 · 补上遗漏的正常任务集(B6)
+
+- **进度:** 新增 `benign.py`(10 条正常请求 + 确定性成功判定)与 18 个测试。
+- **⚠️ 这是一处遗漏,不是新需求。** B6 在靶场设计轮就已确认要做,当时我自己论证过
+  "后期补的话靶场已定型,可能设计得不利于正常任务,到 Phase 2 才发现就晚了",
+  但第 1、2 批都没写。**在同一个 PR 内补齐,不留到后面。**
+- **缺它会挡两件事:**
+  1. **阴性对照没有输入** —— `CALIBRATION.md` §2 要求"一组完全正常的客服请求必须零 Finding",
+     没有任务集就无从验证检测器会不会乱报,而误报率是 PRD §20 明确要求量化的指标;
+  2. **`Benign-task Success Rate` 没有数据源** —— 只降攻击成功率不算修好漏洞,
+     把 agent 改成一律拒绝也能让攻击成功率归零。
+- **成功判定刻意保持确定性:只看"该调的工具调了没有、有没有被拒",不判模型措辞。**
+  措辞判断需要语义理解,会把 LLM judge 拖进 Phase 0 的核心实验。
+- **证据匹配对准工具结果,而不是模型回复。** 回复措辞由模型自由发挥
+  ("30 days" 可能被说成 "about a month"),对它做子串匹配脆得没法用;
+  而工具结果是靶场自己产出的数据,完全可控。已加测试固定这一语义。
+- **任务集的三条设计约束(均已加测试):**
+  - 任务消息**不得包含 canary** —— 否则阴性对照会自己制造假阳性;
+  - 任务**不得提及其他客户** —— 阴性对照的前提是这批请求本身完全合法;
+  - **必须覆盖第二个 actor** —— 若全部用 customer_a,权限逻辑写成
+    "customer_b 一律拒绝"的黑名单也能通过,而那是错的:判定依据是归属,不是 ID 敏感与否。
+- **含一条会产生 side_effect 的正当写操作**(合规金额的退款),
+  用于验证检测器不会把合法副作用误判成违规。
+- **遇到的问题:** `benign.py` 的中文描述里混用了 ASCII 双引号,提前终止字符串,
+  三个测试文件同时 `SyntaxError` 收集失败。**解决:** 改用「」全角引号。
+- **验证证据:** 103 个测试全过(新增 18);`ruff check` 与 `black --check` 均通过。
+- **剩余状态:** DONE —— 靶场的 B 组六项决策至此全部落地。
+
+### OPEN / TODO
+
+- [ ] 阴性对照测试:输入已就位(`BENIGN_TASKS`),需等检测器落地才能断言"零 Finding"。
+- [ ] 阳性对照测试:**只能等接真模型**。用 `ScriptedProvider` 跑毫无意义 ——
+      回复是我们自己写的,证明不了模型会不会真的照做。
+- [ ] 检测器(Level-1)尚未实现 —— 下一批。
+- [ ] 原生 FC codec + `LLMResponse.tool_calls` 字段,W2 末接真 provider 时补。
+- [ ] B4 确认状态机是否实装 —— 决定 Confirmation Bypass 将来能否加入;
+      当前 `StrategyRequirements.needs_confirmation_tool` 已预留字段但无策略使用。
+
+---
+
 ## 2026-07-27 · C1 Strategy 协议与 Phase 0 策略库
 
 ### 2026-07-27 18:20 AEST · Step 01 · Strategy schema 六项决策定稿
@@ -49,13 +155,11 @@
 - **验证证据:** 59 个测试全过(新增 18 个);`ruff check` 与 `black --check` 均通过。
 - **剩余状态:** DONE
 
-### OPEN / TODO(承接自靶场设计轮)
+### OPEN / TODO(承接自靶场设计轮 · 记录写下时的状态)
 
-- [ ] 靶场第 1 批尚未开始:数据 + policy + 模拟工具 + 插桩(零 LLM,纯确定性逻辑)。
-- [ ] 靶场的工具调用入口需做成**可插拔**(原生 function calling / 文本解析两种实现),
-      以便 W2 末选型时若某低成本模型 FC 不稳,是换实现而非重写靶场。
-- [ ] B4 确认状态机是否实装 —— 决定 Confirmation Bypass 将来能否加入;
-      当前 `StrategyRequirements.needs_confirmation_tool` 已预留字段但无策略使用。
+- [x] 靶场第 1 批:数据 + policy + 模拟工具 + 插桩 —— 已于同日 18:40 完成。
+- [x] 工具调用入口可插拔 —— 已由 `ToolCallCodec` 于同日 19:05 落地。
+- [ ] B4 确认状态机是否实装 —— 仍未决,已上移至本文件顶部的 TODO 列表统一跟踪。
 
 ---
 
