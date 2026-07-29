@@ -368,6 +368,16 @@
 - **剩余状态:** 本批代码、测试和原理文档 `DONE`;Black 环境阻塞保持如实记录;
   commit/push `TODO`。
 
+### 2026-07-29 19:24 AEST · Step 15 · 修复提交状态同步
+
+- **进度:** 已在 `feat/executor-controller` 提交
+  `f5e6f5f fix: derive success metrics from violation semantics`;
+  commit 包含19个预期文件,新增共享指标 module 与专门回归测试。
+- **提交前证据:** 暂存区 `git diff --cached --check` 通过;没有包含内部
+  PRD/AGENTS、密钥或运行产物。
+- **剩余状态:** 修复 commit `DONE`;本步骤日志提交与远端 push `TODO`;
+  PR 仍未创建。
+
 ---
 
 ## 2026-07-27 · 补齐 CONCEPTS.md
