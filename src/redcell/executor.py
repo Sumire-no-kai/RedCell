@@ -140,8 +140,8 @@ class ConversationExecutor:
                     actor=request.actor,
                     strategy_id=request.strategy.id,
                 )
-                if scoring.has_confirmed_finding:
-                    stop_reason = AttemptStopReason.CONFIRMED_FINDING
+                if scoring.has_attempt_success:
+                    stop_reason = AttemptStopReason.ATTEMPT_SUCCESS
                     break
         except Exception as exc:
             raise AttemptExecutionError(
@@ -204,16 +204,10 @@ def _adapter_metadata(
 
 
 def _cost_of(turns: list[Turn]) -> CostRecord:
-    usd = 0.0
-    for turn in turns:
-        raw = turn.output.trace_metadata.extra.get("cost_usd", 0.0)
-        if isinstance(raw, int | float):
-            usd += float(raw)
-
     return CostRecord(
         prompt_tokens=sum(t.output.trace_metadata.prompt_tokens for t in turns),
         completion_tokens=sum(t.output.trace_metadata.completion_tokens for t in turns),
-        usd=usd,
+        usd=sum(t.output.trace_metadata.cost_usd for t in turns),
         wall_ms=sum(t.output.trace_metadata.latency_ms for t in turns),
     )
 

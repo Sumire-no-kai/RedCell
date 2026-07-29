@@ -2,6 +2,7 @@
 
 from redcell.search.base import (
     ControllerDecision,
+    ControllerDecisionOutcome,
     ControllerProtocolError,
     NoAvailableStrategiesError,
     SearchController,
@@ -11,6 +12,7 @@ from redcell.search.static import StaticController
 
 __all__ = [
     "ControllerDecision",
+    "ControllerDecisionOutcome",
     "ControllerProtocolError",
     "NoAvailableStrategiesError",
     "RandomController",

@@ -290,6 +290,84 @@
 - **剩余状态:** push `DONE`;PR 表单已准备,按外部提交安全检查在最终创建动作前
   等待作者确认,状态 `BLOCKED`。未声称 PR 已创建。
 
+### 2026-07-29 19:01 AEST · Step 11 · 确认修复 Attempt/Impact 指标语义
+
+- **发现的问题:** Store、Report 与 `queries_to_first_success` 目前都用
+  `reward >= 1.0` 定义“成功”。默认权限层会把已经生成的违规工具调用拦下,
+  形成 `attempted_action=True`、`realized_impact=NOT_REALIZED` 与 0.7 分;
+  因此工具线策略会被错误报告为 0% 成功,违背 CALIBRATION §4
+  “校准主要看 Attempt ASR”的既定协议。
+- **确认决策:** 头号指标不再依赖可调整的分档数字。Attempt 成功由任一 Finding 的
+  `triad.attempted_action` 推导;Impact 成功由任一 Finding 的
+  `triad.fully_compromised` 推导;同一 attempt 的多个 Finding 必须按
+  `attempt_id` 去重。
+- **接口设计:** 建立一个纯内存成功指标 module,由 Store 与 Report 共用;
+  同时拆分 Attempt/Impact ASR 与两类首次成功查询数,删除含义模糊的
+  `hits` / `success_rate` / `queries_to_first_success` 出口。分档均值仅保留为
+  诊断信号,不再冒充主要成功指标。
+- **相关一致性修复:** Executor 停止谓词明确为 Attempt 成功而非“任意 Finding”;
+  Controller 增加记录失败但不学习的显式释放路径,避免执行异常后 pending 卡死;
+  `cost_usd` 从 `extra` 魔法键提升为 TraceMetadata 显式字段。
+- **替代方案及否决理由:** 不采用 `threshold=0.7`,因为分档仍处于草案状态,
+  改权重会静默改变实验结论;不让基础设施错误调用 `update(..., 0)`,
+  因为这会把供应商/网络失败错误学习成某个策略弱;不复制 Store 与 Report
+  两套 triad 判断,避免后续语义再次漂移。
+- **剩余状态:** 设计经作者确认,实现与验证 `IN PROGRESS`;真实 LLM、Run
+  orchestrator、Bandit 算法与具体错误重试阈值仍不在本步骤内。
+
+### 2026-07-29 19:21 AEST · Step 12 · 实现语义指标与关联一致性修复
+
+- **实现:** 新增 `success_metrics.py` 纯计算 module,集中输出每个 Strategy 的
+  Attempt/Impact hits、两类 ASR 与两类首次成功位置。Finding 必须与输入
+  Attempt 的 run_id/strategy_id 一致;孤儿或错配直接报错;多个 Finding 通过
+  `attempt_id` 集合去重。
+- **Store/Report:** 删除基于数值 threshold 的 `attack_success_rate` 与含义模糊的
+  `queries_to_first_success`;替换为显式 Attempt/Impact 方法。Report 的
+  `hits` / `success_rate` / `mean_reward` 拆成两类 hits、两类 ASR 与
+  `mean_signal_score`;HTML/JSON 同时显示两类指标。
+- **执行一致性:** ScoringResult 的停止谓词改为 `has_attempt_success`,
+  只认 `triad.attempted_action`;停止原因改为 `ATTEMPT_SUCCESS`。未来
+  intent-only Finding 不会提前截断 Attempt。
+- **错误恢复:** ControllerDecision 增加 PENDING/COMPLETED/ABANDONED 状态;
+  `abandon(strategy_id, reason)` 记录失败并释放 pending,不调用学习逻辑,
+  从接口上消除执行异常后的卡死路径。Run 级重试次数和失效阈值仍为 OPEN。
+- **成本协议:** `TraceMetadata.cost_usd` 成为显式非负字段,Executor 直接汇总,
+  不再依赖没有 Adapter 写入的 `extra["cost_usd"]` 魔法键。真实攻击生成器成本
+  仍需在真实 LLM mutation 接入时纳入,未伪装成已完成。
+- **文档:** CALIBRATION §4 删除“满分才算成功”的矛盾说法,明确 triad 公式与去重;
+  CONCEPTS 同步指标 module、停止语义、abandon 路径、显式成本和代码地图。
+- **剩余状态:** 实现 `DONE`;验证见 Step 13。
+
+### 2026-07-29 19:21 AEST · Step 13 · 回归验证与本地环境漂移
+
+- **新增/改造测试:** 覆盖 0.7 blocked 仍是 Attempt 成功、1.0 无 triad 证据不是
+  成功、UNKNOWN 不算 Impact、同一 Attempt 多 Finding 去重、Finding 归属错配
+  拒绝、intent-only 不停止、Controller abandon 后可继续选择、显式美元成本汇总。
+- **验证证据:** 全量 209 个 pytest 通过;`ruff check .` 全仓通过;
+  本批 16 个 Python 文件 `ruff format --check` 通过;`git diff --check` 通过。
+- **遇到的问题:** 项目 `.venv` 的 pytest/Black 启动器仍指向已不存在的
+  `C:\Users\lee20\AppData\Local\Programs\Python\Python312\python.exe`。
+  直接启动会报 unable to create process。Pytest 改用工作区提供的 Python 3.12.13,
+  显式加载 `.venv` site-packages 与 `src`,成功跑完全量。
+- **格式检查处理:** `.venv` 中 Black 26.5.1 的编译模块在替代解释器下挂起;
+  因此本轮无法诚实声称 Black 通过。使用项目已有 Ruff formatter 对本批文件格式化
+  并检查通过;该语法与风格验证有效,但修复/重建 `.venv` 后仍应补跑正式
+  `black --check .`。未联网安装或擅自重建作者环境。
+- **剩余状态:** 功能与测试 `DONE`;Black 精确复核因失效虚拟环境 `BLOCKED`;
+  最终 diff 审阅、commit 与 push `TODO`。
+
+### 2026-07-29 19:23 AEST · Step 14 · JSON 指标出口复核
+
+- **发现的问题:** `StrategyStat` 的两类 ASR 最初实现为普通 Python property;
+  HTML 模板能够读取,但 Pydantic `model_dump()` 默认不会序列化普通 property,
+  因而 JSON 会只有 hits、缺少 ASR,违背“JSON/HTML 共用同一份数字”的设计。
+- **解决方式:** 两类 ASR 改为 Pydantic `computed_field`,继续由 hits/attempts
+  唯一推导;新增 JSON 断言并同时检查 HTML 表头。没有复制第二套计算公式。
+- **最终验证:** 全量 209 个 pytest 再次通过;`ruff check .` 全仓通过;
+  本批 16 个 Python 文件格式检查通过;`git diff --check` 通过。
+- **剩余状态:** 本批代码、测试和原理文档 `DONE`;Black 环境阻塞保持如实记录;
+  commit/push `TODO`。
+
 ---
 
 ## 2026-07-27 · 补齐 CONCEPTS.md

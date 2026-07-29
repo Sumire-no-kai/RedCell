@@ -32,7 +32,7 @@ class AttemptStopReason(StrEnum):
     也可能是执行报错或被人工中止。原因不同,实验含义完全不同。
     """
 
-    CONFIRMED_FINDING = "confirmed_finding"
+    ATTEMPT_SUCCESS = "attempt_success"
     MAX_TURNS = "max_turns"
     EXECUTION_ERROR = "execution_error"
     ABORTED = "aborted"

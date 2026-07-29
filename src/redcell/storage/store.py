@@ -15,6 +15,7 @@ from redcell.protocols.finding import Finding
 from redcell.protocols.run import Run
 from redcell.protocols.trace import Attempt
 from redcell.storage.models import AttemptRow, Base, FindingRow, RunRow
+from redcell.success_metrics import SuccessMetrics, derive_success_metrics
 
 DEFAULT_URL = "sqlite:///redcell.db"
 
@@ -143,36 +144,22 @@ class RunStore:
         with self._open() as session:
             return dict(session.execute(stmt).all())
 
-    def attack_success_rate(self, run_id: str, *, threshold: float = 1.0) -> dict[str, float]:
-        """按策略统计满分命中率。校准的主指标。"""
-        counts = self.attempts_per_strategy(run_id)
-        stmt = (
-            select(AttemptRow.strategy_id, func.count())
-            .where(AttemptRow.run_id == run_id, AttemptRow.reward >= threshold)
-            .group_by(AttemptRow.strategy_id)
-        )
-        with self._open() as session:
-            hits = dict(session.execute(stmt).all())
-        return {sid: hits.get(sid, 0) / total for sid, total in counts.items() if total}
+    def success_metrics(self, run_id: str) -> SuccessMetrics:
+        """按 triad 语义聚合,不依赖可调整的分档数字。"""
+        return derive_success_metrics(self.attempts_for(run_id), self.findings_for(run_id))
 
-    def queries_to_first_success(self, run_id: str, *, threshold: float = 1.0) -> int | None:
-        """首次成功用了第几次 attempt。**未成功时返回 None,不返回预算值。**
+    def attempt_success_rate(self, run_id: str) -> dict[str, float]:
+        """Agent 生成违规行为的比例。校准的主指标。"""
+        return self.success_metrics(run_id).attempt_success_rates()
 
-        用预算值顶替会把"从未成功"伪装成"刚好在最后一次成功",
-        把一个删失(censored)观测混进普通观测里,均值会被系统性拉低。
-        """
-        stmt = (
-            select(AttemptRow.id).where(AttemptRow.run_id == run_id).order_by(AttemptRow.created_at)
-        )
-        hit_stmt = (
-            select(AttemptRow.id)
-            .where(AttemptRow.run_id == run_id, AttemptRow.reward >= threshold)
-            .order_by(AttemptRow.created_at)
-            .limit(1)
-        )
-        with self._open() as session:
-            first_hit = session.scalars(hit_stmt).first()
-            if first_hit is None:
-                return None
-            ordered = list(session.scalars(stmt))
-        return ordered.index(first_hit) + 1
+    def impact_success_rate(self, run_id: str) -> dict[str, float]:
+        """违规行为实际产生影响的比例。纵深防御指标。"""
+        return self.success_metrics(run_id).impact_success_rates()
+
+    def queries_to_first_attempt_success(self, run_id: str) -> int | None:
+        """首次 Attempt 成功的位置;未成功返回 None。"""
+        return self.success_metrics(run_id).queries_to_first_attempt_success
+
+    def queries_to_first_impact_success(self, run_id: str) -> int | None:
+        """首次 Impact 成功的位置;未成功返回 None。"""
+        return self.success_metrics(run_id).queries_to_first_impact_success

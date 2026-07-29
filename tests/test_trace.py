@@ -104,7 +104,7 @@ def test_attempt_records_semantic_stop_reason(reproduction: ReproductionContext)
         attack_prompt="...",
         reproduction=reproduction,
         planned_max_turns=2,
-        stop_reason=AttemptStopReason.CONFIRMED_FINDING,
+        stop_reason=AttemptStopReason.ATTEMPT_SUCCESS,
         turns=[
             Turn(
                 index=0,
@@ -116,7 +116,7 @@ def test_attempt_records_semantic_stop_reason(reproduction: ReproductionContext)
 
     assert attempt.id == "attempt_fixed"
     assert attempt.stopped_early
-    assert attempt.stop_reason is AttemptStopReason.CONFIRMED_FINDING
+    assert attempt.stop_reason is AttemptStopReason.ATTEMPT_SUCCESS
 
 
 def test_reproduction_context_records_replay_inputs() -> None:

@@ -18,6 +18,9 @@ from redcell.executor import (
 from redcell.generation import ScriptedAttackGenerator
 from redcell.llm import ScriptedProvider
 from redcell.protocols import AttemptStopReason, ImpactStatus
+from redcell.protocols.adapter import AdapterOutput, TraceMetadata
+from redcell.protocols.common import ObservabilityLevel
+from redcell.protocols.trace import Turn
 from redcell.scoring import Level1Scorer
 from redcell.strategies import (
     CROSS_USER_RESOURCE_ACCESS,
@@ -26,7 +29,7 @@ from redcell.strategies import (
 
 
 def _tool_call(name: str, **arguments) -> str:
-    return f'<tool_call>{json.dumps({"name": name, "arguments": arguments})}</tool_call>'
+    return f"<tool_call>{json.dumps({'name': name, 'arguments': arguments})}</tool_call>"
 
 
 def _executor(
@@ -70,7 +73,7 @@ async def test_full_canary_finding_stops_after_first_turn() -> None:
     assert result.attempt.turn_count == 1
     assert result.attempt.planned_max_turns == 2
     assert result.attempt.stopped_early
-    assert result.attempt.stop_reason is AttemptStopReason.CONFIRMED_FINDING
+    assert result.attempt.stop_reason is AttemptStopReason.ATTEMPT_SUCCESS
     assert provider.call_count == 1
     assert result.findings[0].attempt_id == result.attempt.id
 
@@ -87,7 +90,7 @@ async def test_blocked_tool_violation_also_stops_without_waiting_for_score_one()
     result = await executor.execute(_request(CROSS_USER_RESOURCE_ACCESS))
 
     assert result.attempt.reward < 1.0
-    assert result.attempt.stop_reason is AttemptStopReason.CONFIRMED_FINDING
+    assert result.attempt.stop_reason is AttemptStopReason.ATTEMPT_SUCCESS
     assert result.attempt.turn_count == 1
     assert result.findings[0].triad.attempted_action
     assert result.findings[0].triad.realized_impact is ImpactStatus.NOT_REALIZED
@@ -107,7 +110,7 @@ async def test_partial_signal_continues_until_confirmed_finding() -> None:
 
     assert result.attempt.turn_count == 2
     assert not result.attempt.stopped_early
-    assert result.attempt.stop_reason is AttemptStopReason.CONFIRMED_FINDING
+    assert result.attempt.stop_reason is AttemptStopReason.ATTEMPT_SUCCESS
 
 
 async def test_no_finding_runs_to_max_turns() -> None:
@@ -176,3 +179,28 @@ async def test_each_attempt_resets_target_state() -> None:
     second = await executor.execute(_request(attempt_index=1))
 
     assert first.attempt.reproduction.seed != second.attempt.reproduction.seed
+
+
+def test_cost_uses_typed_trace_metadata_field() -> None:
+    from redcell.executor import _cost_of
+
+    turns = [
+        Turn(
+            index=0,
+            attacker_message="test",
+            output=AdapterOutput(
+                observability=ObservabilityLevel.FULL,
+                trace_metadata=TraceMetadata(cost_usd=0.0125),
+            ),
+        ),
+        Turn(
+            index=1,
+            attacker_message="test again",
+            output=AdapterOutput(
+                observability=ObservabilityLevel.FULL,
+                trace_metadata=TraceMetadata(cost_usd=0.0075),
+            ),
+        ),
+    ]
+
+    assert _cost_of(turns).usd == pytest.approx(0.02)
