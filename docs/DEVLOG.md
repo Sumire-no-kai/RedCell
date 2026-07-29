@@ -266,6 +266,17 @@
   未完成范围仍为:真实 LLM mutation、Run orchestrator、Bandit、CLI、
   错误重试/失效阈值和 reward 数值定稿。
 
+### 2026-07-29 18:35 AEST · Step 09 · 实现提交与交付状态同步
+
+- **进度:** 已在 `feat/executor-controller` 分支提交本批 18 个源码、测试和文档文件;
+  commit 为 `b731fc9 feat: add conversation executor and baseline controllers`。
+- **提交前验证:** 暂存区仅包含本批预期文件;`git diff --cached --check` 通过;
+  结合 Step 08 的 203 个 pytest、Ruff 与 Black 结果,实现提交具备可复核证据。
+- **边界确认:** commit 没有包含内部 `PRD.md` / `AGENTS.md`、密钥或 run/trace 产物;
+  未把真实 LLM mutation、Run orchestrator、Bandit、CLI、错误重试阈值或 reward
+  数值写成已完成。
+- **剩余状态:** 实现 commit `DONE`;本步骤日志提交、push 与 PR `TODO`。
+
 ---
 
 ## 2026-07-27 · 补齐 CONCEPTS.md
