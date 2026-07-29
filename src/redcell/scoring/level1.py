@@ -39,6 +39,14 @@ class ScoringResult(RedCellModel):
     def reward(self) -> float:
         return max((s.score for s in self.signals), default=0.0)
 
+    @property
+    def has_confirmed_finding(self) -> bool:
+        """是否已有能交给人的确定性漏洞证据。
+
+        Executor 用这个语义事实决定是否提前停止,而不是依赖可调整的 reward 数值。
+        """
+        return bool(self.findings)
+
 
 class Level1Scorer:
     """基于 policy 的确定性判定器。"""

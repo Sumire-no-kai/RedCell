@@ -4,8 +4,10 @@ import pytest
 from pydantic import ValidationError
 
 from redcell.protocols import (
+    REDCELL_PROTOCOL_VERSION,
     AdapterOutput,
     Attempt,
+    AttemptStopReason,
     ObservabilityLevel,
     ReproductionContext,
     SignalChannel,
@@ -93,6 +95,30 @@ def test_attempt_spans_multiple_turns(reproduction: ReproductionContext) -> None
     assert attempt.reward == 0.0
 
 
+def test_attempt_records_semantic_stop_reason(reproduction: ReproductionContext) -> None:
+    attempt = build_attempt(
+        attempt_id="attempt_fixed",
+        run_id="run_1",
+        strategy_id="s",
+        actor="customer_a",
+        attack_prompt="...",
+        reproduction=reproduction,
+        planned_max_turns=2,
+        stop_reason=AttemptStopReason.CONFIRMED_FINDING,
+        turns=[
+            Turn(
+                index=0,
+                attacker_message="...",
+                output=AdapterOutput(observability=ObservabilityLevel.FULL),
+            )
+        ],
+    )
+
+    assert attempt.id == "attempt_fixed"
+    assert attempt.stopped_early
+    assert attempt.stop_reason is AttemptStopReason.CONFIRMED_FINDING
+
+
 def test_reproduction_context_records_replay_inputs() -> None:
     ctx = ReproductionContext(
         policy_version="v1",
@@ -104,7 +130,7 @@ def test_reproduction_context_records_replay_inputs() -> None:
         target_temperature=0.0,
     )
     assert ctx.seed == 42
-    assert ctx.protocol_version
+    assert ctx.protocol_version == REDCELL_PROTOCOL_VERSION == "0.2.0"
     assert ctx.recorded_at.tzinfo is not None
 
 

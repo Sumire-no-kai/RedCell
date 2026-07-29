@@ -9,6 +9,7 @@ reward 的归属才清晰。多轮策略天然更费 token,这个差异由独立
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 from pydantic import Field, model_validator
@@ -22,6 +23,19 @@ from redcell.protocols.common import (
 )
 
 REWARD_TOLERANCE = 1e-9
+
+
+class AttemptStopReason(StrEnum):
+    """一场 Attempt 为什么停止。
+
+    不能只记 `stopped_early: bool`:同样是只跑了一轮,可能是已经确认漏洞,
+    也可能是执行报错或被人工中止。原因不同,实验含义完全不同。
+    """
+
+    CONFIRMED_FINDING = "confirmed_finding"
+    MAX_TURNS = "max_turns"
+    EXECUTION_ERROR = "execution_error"
+    ABORTED = "aborted"
 
 
 class Turn(RedCellModel):
@@ -74,7 +88,13 @@ class ReproductionContext(RedCellModel):
     strategy_id: str
     mutation_operators: list[str] = Field(default_factory=list)
     parent_attempt_id: str | None = None
+    run_seed: int | None = None
+    controller_seed: int | None = None
     seed: int | None = None
+    """本场 Attempt 的派生种子。保留字段名以兼容已有记录。"""
+    generator_seed: int | None = None
+    actor_seed: int | None = None
+    target_seed: int | None = None
     target_model: str | None = None
     target_temperature: float | None = None
     attacker_model: str | None = None
@@ -112,6 +132,8 @@ class Attempt(RedCellModel):
     reward: float = Field(default=0.0, ge=0.0, le=1.0)
     cost: CostRecord = Field(default_factory=CostRecord)
     reproduction: ReproductionContext
+    planned_max_turns: int | None = Field(default=None, ge=1)
+    stop_reason: AttemptStopReason | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @model_validator(mode="after")
@@ -122,6 +144,11 @@ class Attempt(RedCellModel):
                 f"reward({self.reward}) 与 signals 的 max({expected}) 不一致。"
                 "reward 必须由 compute_reward(signals) 得出,不可手工赋值。"
             )
+        if self.planned_max_turns is not None and self.turn_count > self.planned_max_turns:
+            raise ValueError(
+                f"实际轮数({self.turn_count})超过计划上限({self.planned_max_turns})。"
+                "Executor 不得在 max_turns 之后继续发送消息。"
+            )
         return self
 
     # ── 查询辅助 ──────────────────────────────────────────────────────────
@@ -129,6 +156,14 @@ class Attempt(RedCellModel):
     @property
     def turn_count(self) -> int:
         return len(self.turns)
+
+    @property
+    def stopped_early(self) -> bool:
+        """是否在计划轮数前结束。
+
+        该布尔值只作查询便利;解释原因必须看 `stop_reason`。
+        """
+        return self.planned_max_turns is not None and self.turn_count < self.planned_max_turns
 
     def signal(self, channel: SignalChannel) -> SignalScore | None:
         return next((s for s in self.signals if s.channel is channel), None)
@@ -146,6 +181,7 @@ class Attempt(RedCellModel):
 
 def build_attempt(
     *,
+    attempt_id: str | None = None,
     run_id: str,
     strategy_id: str,
     actor: str,
@@ -154,17 +190,26 @@ def build_attempt(
     turns: list[Turn] | None = None,
     signals: list[SignalScore] | None = None,
     cost: CostRecord | None = None,
+    planned_max_turns: int | None = None,
+    stop_reason: AttemptStopReason | None = None,
 ) -> Attempt:
     """构造 Attempt 的推荐入口:reward 由 signals 自动推导,杜绝手工赋值。"""
     signals = signals or []
+    payload: dict[str, Any] = {
+        "run_id": run_id,
+        "strategy_id": strategy_id,
+        "actor": actor,
+        "attack_prompt": attack_prompt,
+        "turns": turns or [],
+        "signals": signals,
+        "reward": compute_reward(signals),
+        "cost": cost or CostRecord(),
+        "reproduction": reproduction,
+        "planned_max_turns": planned_max_turns,
+        "stop_reason": stop_reason,
+    }
+    if attempt_id is not None:
+        payload["id"] = attempt_id
     return Attempt(
-        run_id=run_id,
-        strategy_id=strategy_id,
-        actor=actor,
-        attack_prompt=attack_prompt,
-        turns=turns or [],
-        signals=signals,
-        reward=compute_reward(signals),
-        cost=cost or CostRecord(),
-        reproduction=reproduction,
+        **payload,
     )
