@@ -277,6 +277,19 @@
   数值写成已完成。
 - **剩余状态:** 实现 commit `DONE`;本步骤日志提交、push 与 PR `TODO`。
 
+### 2026-07-29 18:39 AEST · Step 10 · 推送完成与 PR 权限阻塞
+
+- **进度:** 两个本批 commit 已推送至 `origin/feat/executor-controller`,本地分支已设置
+  upstream;远端比较页确认包含 3 个 commit、18 个文件。
+- **遇到的问题:** GitHub 集成创建 PR 时返回 HTTP 403
+  `Resource not accessible by integration`;本机也未安装 `gh` CLI。该问题是当前
+  集成写权限不足,不是分支、测试或 mergeability 失败。
+- **解决方式:** 已通过作者登录的 GitHub 页面准备好以 `master` 为 base、
+  `feat/executor-controller` 为 compare 的 PR 标题与完整说明;说明覆盖动机、范围、
+  核心取舍、203 个测试证据及明确排除项。
+- **剩余状态:** push `DONE`;PR 表单已准备,按外部提交安全检查在最终创建动作前
+  等待作者确认,状态 `BLOCKED`。未声称 PR 已创建。
+
 ---
 
 ## 2026-07-27 · 补齐 CONCEPTS.md
