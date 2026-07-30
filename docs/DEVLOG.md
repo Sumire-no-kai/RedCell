@@ -156,6 +156,18 @@
 - **剩余状态:** **DONE(代码审查、全量验证与文档核对)** /
   **TODO(提交并推送本轮修复)**。
 
+### 2026-07-31 09:25 AEST · Step 07 · 自审修复提交并推送
+
+- **进度:** 已创建提交
+  `447e41a fix: protect completed run history`,并推送到
+  `origin/feat/run-orchestrator`。
+- **提交内容:** 重复 Orchestrator / `run_id` 防覆盖、2 个回归测试、
+  最新代码边界与系统进度说明、对应开发日志。
+- **状态边界:** 本地与远端工作分支已同步;既有 GitHub PR 创建权限阻塞
+  仍未变化,因此该提交尚未进入 `master`。
+- **剩余状态:** **DONE(提交与远端分支交付)** /
+  **BLOCKED(PR only,沿用 Step 04 的权限原因)**。
+
 ---
 
 ## 2026-07-30 · Run Orchestrator 失败语义设计
