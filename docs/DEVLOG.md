@@ -96,6 +96,19 @@
   依赖顺序,避免把两块历史误写成彼此独立。
 - **剩余状态:** **DONE(分支交付)** / **TODO(PR 集成)**。
 
+### 2026-07-31 00:30 AEST · Step 04 · PR 创建受权限阻塞
+
+- **进度:** 先查询仓库开放 PR,结果为空。计划按 stacked 顺序创建:
+  `feat/executor-controller → master`,再创建
+  `feat/run-orchestrator → feat/executor-controller`。
+- **遇到的问题:** GitHub 创建 PR 接口返回 HTTP 403
+  `Resource not accessible by integration`;本机也没有可用的 `gh` CLI。
+- **解决方式:** 未绕过权限、未伪造 PR 状态。两个工作分支均已推送,
+  PR 标题、范围、核心设计取舍和验证说明已准备;等待有写权限的 GitHub
+  身份创建。不能因为 PR 受阻就直接 merge/master。
+- **剩余状态:** **BLOCKED(PR only)** — 代码、测试和远端分支均已完成;
+  PR 创建需要外部权限变化。
+
 ---
 
 ## 2026-07-30 · Run Orchestrator 失败语义设计
