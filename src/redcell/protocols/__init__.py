@@ -50,6 +50,7 @@ from redcell.protocols.strategy import (
 )
 from redcell.protocols.trace import (
     Attempt,
+    AttemptStopReason,
     CostRecord,
     ReproductionContext,
     SignalScore,
@@ -66,6 +67,7 @@ __all__ = [
     "AdapterInput",
     "AdapterOutput",
     "Attempt",
+    "AttemptStopReason",
     "ConstraintKind",
     "CostRecord",
     "Evidence",

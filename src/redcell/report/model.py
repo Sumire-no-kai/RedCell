@@ -10,12 +10,13 @@ from __future__ import annotations
 from collections import Counter
 from datetime import UTC, datetime
 
-from pydantic import Field
+from pydantic import Field, computed_field
 
 from redcell.protocols.common import ImpactStatus, RedCellModel, VulnerabilityCategory
 from redcell.protocols.finding import Finding
 from redcell.protocols.run import Run
 from redcell.protocols.trace import Attempt
+from redcell.success_metrics import derive_success_metrics
 
 DISCLAIMER = (
     "自动化扫描不能证明系统是安全的。未发现问题不等于不存在问题;"
@@ -31,18 +32,20 @@ DISCLAIMER = (
 class StrategyStat(RedCellModel):
     strategy_id: str
     attempts: int
-    hits: int
-    """满分命中次数。"""
+    attempt_hits: int
+    impact_hits: int
 
-    mean_reward: float
+    mean_signal_score: float
 
+    @computed_field
     @property
-    def success_rate(self) -> float:
-        return self.hits / self.attempts if self.attempts else 0.0
+    def attempt_success_rate(self) -> float:
+        return self.attempt_hits / self.attempts if self.attempts else 0.0
 
+    @computed_field
     @property
-    def budget_share(self) -> float:
-        return 0.0  # 由 ReportData 填充,见 build()
+    def impact_success_rate(self) -> float:
+        return self.impact_hits / self.attempts if self.attempts else 0.0
 
 
 class ImpactBreakdown(RedCellModel):
@@ -69,8 +72,9 @@ class ReportData(RedCellModel):
     budget_share: dict[str, float] = Field(default_factory=dict)
     impact: ImpactBreakdown = Field(default_factory=ImpactBreakdown)
     categories: dict[str, int] = Field(default_factory=dict)
-    queries_to_first_success: int | None = None
-    """**未成功时为 null,不填预算值。**
+    queries_to_first_attempt_success: int | None = None
+    queries_to_first_impact_success: int | None = None
+    """**未成功时均为 null,不填预算值。**
 
     用预算值顶替会把删失观测混进普通观测,均值被系统性拉低。
     """
@@ -86,21 +90,21 @@ class ReportData(RedCellModel):
     @classmethod
     def build(cls, run: Run, attempts: list[Attempt], findings: list[Finding]) -> ReportData:
         per_strategy: Counter[str] = Counter()
-        hits: Counter[str] = Counter()
         reward_sum: Counter[str] = Counter()
 
         for attempt in attempts:
             per_strategy[attempt.strategy_id] += 1
             reward_sum[attempt.strategy_id] += attempt.reward
-            if attempt.reward >= 1.0:
-                hits[attempt.strategy_id] += 1
+
+        success = derive_success_metrics(attempts, findings)
 
         stats = [
             StrategyStat(
                 strategy_id=sid,
                 attempts=count,
-                hits=hits[sid],
-                mean_reward=reward_sum[sid] / count if count else 0.0,
+                attempt_hits=success.by_strategy[sid].attempt_hits,
+                impact_hits=success.by_strategy[sid].impact_hits,
+                mean_signal_score=reward_sum[sid] / count if count else 0.0,
             )
             for sid, count in sorted(per_strategy.items())
         ]
@@ -120,8 +124,6 @@ class ReportData(RedCellModel):
 
         categories = Counter(f.category.value for f in findings)
 
-        first_hit = next((i for i, a in enumerate(attempts, start=1) if a.reward >= 1.0), None)
-
         return cls(
             run=run,
             findings=findings,
@@ -129,7 +131,8 @@ class ReportData(RedCellModel):
             budget_share=share,
             impact=impact,
             categories=dict(categories),
-            queries_to_first_success=first_hit,
+            queries_to_first_attempt_success=success.queries_to_first_attempt_success,
+            queries_to_first_impact_success=success.queries_to_first_impact_success,
             total_attempts=total,
         )
 

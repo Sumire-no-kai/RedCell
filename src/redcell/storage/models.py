@@ -9,11 +9,12 @@
 2. **协议还在演进。** 逐字段映射意味着每加一个字段就要写一次迁移,
    而 Phase 0 的协议几乎每批都在动。
 
-抽出来单独成列的,只有**实验聚合真正会用到的维度**:run / strategy / reward /
+抽出来单独成列的,只有**分配与筛选真正会用到的维度**:run / strategy / reward /
 category / 时间。其余留在 payload 里,读出来仍是完整的 Pydantic 对象,零信息损失。
 
-代价:没法对嵌套字段写任意 SQL。Phase 0 的聚合(按策略、按算法、按预算算 ASR)
-用抽出来的列就够;真需要时再补列即可,payload 里数据是全的。
+代价:没法对嵌套字段写任意 SQL。Attempt/Impact ASR 必须读取 Finding payload
+里的 triad,不能从 reward 列反推;Phase 0 每个 Run 约百次 Attempt,优先保证语义正确。
+规模扩大后可再把 attempted_action 单独成列,payload 里的原始数据不会丢。
 """
 
 from __future__ import annotations

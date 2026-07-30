@@ -48,8 +48,12 @@ _TEMPLATE = """<!doctype html>
   <dt>Attempted but blocked</dt><dd>{{ d.impact.not_realized }}</dd>
   <dt>Impact unverifiable</dt><dd class="{{ 'unknown' if d.impact.unknown else '' }}">
       {{ d.impact.unknown }}</dd>
-  <dt>Queries to first success</dt>
-  <dd>{{ d.queries_to_first_success if d.queries_to_first_success else 'never succeeded' }}</dd>
+  <dt>Queries to first Attempt success</dt>
+  <dd>{{ d.queries_to_first_attempt_success
+      if d.queries_to_first_attempt_success else 'never succeeded' }}</dd>
+  <dt>Queries to first Impact success</dt>
+  <dd>{{ d.queries_to_first_impact_success
+      if d.queries_to_first_impact_success else 'never succeeded' }}</dd>
   <dt>Stopped by</dt><dd>{{ d.run.stopped_by.value if d.run.stopped_by else '—' }}</dd>
 </dl>
 
@@ -82,13 +86,17 @@ _TEMPLATE = """<!doctype html>
 </dl>
 
 <h2>Budget allocation by strategy</h2>
-<table><tr><th>Strategy</th><th>Attempts</th><th>Share</th><th>Hits</th>
- <th>Success rate</th><th>Mean reward</th></tr>
+<table><tr><th>Strategy</th><th>Attempts</th><th>Share</th>
+ <th>Attempt hits</th><th>Attempt ASR</th>
+ <th>Impact hits</th><th>Impact ASR</th><th>Mean signal score</th></tr>
 {% for s in d.strategy_stats %}
  <tr><td><code>{{ s.strategy_id }}</code></td><td>{{ s.attempts }}</td>
   <td>{{ '%.0f%%'|format(100 * d.budget_share.get(s.strategy_id, 0)) }}</td>
-  <td>{{ s.hits }}</td><td>{{ '%.0f%%'|format(100 * s.success_rate) }}</td>
-  <td>{{ '%.2f'|format(s.mean_reward) }}</td></tr>
+  <td>{{ s.attempt_hits }}</td>
+  <td>{{ '%.0f%%'|format(100 * s.attempt_success_rate) }}</td>
+  <td>{{ s.impact_hits }}</td>
+  <td>{{ '%.0f%%'|format(100 * s.impact_success_rate) }}</td>
+  <td>{{ '%.2f'|format(s.mean_signal_score) }}</td></tr>
 {% endfor %}
 </table>
 

@@ -5,6 +5,412 @@
 
 ---
 
+## 2026-07-29 · Conversation Executor 与 Search Controller 核心设计
+
+### 2026-07-29 17:58 AEST · Step 01 · 目标澄清与第二批设计决策确认
+
+- **进度:** 从最新的 `docs/concepts-refresh` 提交 `c288003` 切出
+  `docs/executor-controller-decisions`,完整复核 `PRD.md`、`AGENTS.md`、
+  `docs/CONCEPTS.md`、现有 `Attempt` / `ScoringResult` / `Finding` / `BudgetManager`
+  协议及本轮与作者的讨论。以下决策已获作者确认;实现尚未开始。
+
+**先澄清最终产品目标与 Phase 0 实验目标:**
+
+- **最终产品目标:** 在授权范围和有限预算内,找出尽可能多的**不同、确认、可复现**
+  的 Agent 安全边界失效,并沉淀为证据、修复建议和回归测试。重复触发同一漏洞
+  100 次不能宣传成发现 100 个漏洞。
+- **Phase 0 的刻意简化:** Controller 先学习“哪类策略更容易触发确定性违规”;
+  Vulnerability Coverage 与去重 Finding **测量但不参与控制信号**。否则同一漏洞
+  被发现后价值下降会主动引入非平稳性,标准 Thompson/UCB 的实验含义随之改变。
+- **为什么两者不矛盾:** Phase 0 要先隔离并回答“自适应预算分配是否有效”;
+  最终产品价值仍由去重后的 Finding、覆盖度、复现率和回归测试衡量。报告必须同时
+  呈现成功效率与覆盖度,不得用重复成功次数冒充漏洞数量。
+
+**决策 1:Attack Generator 与 Conversation Executor 分离。**
+
+- `AttackGenerator` 只负责把 Strategy 变成具体攻击话术及轮内后续话术;
+  `ConversationExecutor` 只负责执行、保存 Turn/Trace/Cost、调用判定器并组装 Attempt。
+- **采用理由:** 生成方式会在固定模板、脚本化假实现、真实 attacker LLM、Finding 原样重放
+  之间切换;执行与计量路径必须保持稳定。分离后可以零成本测试执行器,也不会因更换攻击模型
+  而改动 trace、预算和判定逻辑。
+- **否掉的替代:** 一个大类同时生成、执行、评分。它短期文件少,但会把 LLM 随机性带进所有
+  执行器测试,且重放 Finding 时可能重新生成话术,破坏复现性。
+
+**决策 2:攻击方与目标方模型配置分离;轮内有记忆,跨 Attempt 无记忆。**
+
+- attacker provider 与 target provider 在协议和配置上分开,但允许底层复用同一个 Provider
+  实例或同一供应商。两边温度、模型版本、token/cost 必须分别记录。
+- 一场 Attempt 内允许下一轮读取本场前文;否则“多轮策略”只是连续发送几句固定文本。
+  新 Attempt 必须重新开始,不得读取前面 Attempt 的输赢来精炼话术。
+- **采用理由:** 出题者与考生是两个实验角色;混成一个全局配置会让成本和结果无法归因。
+  跨 Attempt 精炼还会让同一 Strategy 随时间变强,把“预算分配得好”与“被分配更多后
+  精炼得更多”混成一个变量,破坏 Phase 0 的平稳性假设。
+- **否掉的替代:** Phase 0 直接做带历史的迭代红队。攻击可能更强,但无法回答 Bandit 的
+  提升究竟来自策略分配还是下层变异器学习;保留到后续独立消融。
+
+**决策 3:每个完整外部 Turn 结束后判定;首次产生确定性 Finding 即停止 Attempt。**
+
+- 停止条件绑定**语义事实** `has_confirmed_finding`,不绑定 `reward == 1.0`。
+  Canary 前缀/指纹、合法触达敏感工具等只有中间证据而无 Finding,继续下一轮;
+  完整 canary 或已生成的 policy 违规工具调用产生 Finding,不再开始下一轮。
+- 停止只能发生在一轮回复及其内部工具循环全部完成、证据落盘之后,不能中途截断。
+- **为什么不是“只有 1.0 才停”:** 当前工具违规被后端拦下时仍会生成正式 Finding,
+  它已证明 Agent 的权限判断失效,只是纵深防御守住了。把它当作“差一口气”继续给工具类
+  策略额外轮数,会混淆 Attempt 成功与 Realized Impact;且档位数值仍是 OPEN,
+  控制流程不应随数值调整而静默改变。
+- **为什么不跑满 `max_turns`:** 已确认漏洞后继续只会消耗预算并制造额外副作用,
+  还会把首次成功查询数记晚。代价是可能少发现后续另一类漏洞;Phase 0 接受这一点,
+  因为 coverage 跨 Attempt 测量而不优化。同一个 Turn 同时产生两类证据时仍保留两条 Finding。
+- **记录方式:** 不只加 `stopped_early: bool`;实现时采用语义化 `stop_reason`,
+  并记录 `planned_max_turns` 与 `actual_turns`,区分确认命中、跑满、执行错误和人工中止。
+
+**决策 4:Search Controller 使用窄接口与推送式反馈。**
+
+- `select(available_strategy_ids)` 只看到 Budget Manager 过滤后的稳定顺序候选列表;
+  不读取全局 Attempt、Run 或预算内部状态。
+- `update(strategy_id, score)` 由执行管道在有效 Attempt 完成后推送;
+  Static/Random 明确不学习,可为空实现;Bandit 在自身内部维护历史。
+- **采用理由:** 四种实现必须走同一执行与计量路径,且获得同等级信息;差异只来自策略选择
+  方法。预算是否允许继续属于 Budget Manager,不是 Controller 的第二套职责。
+- **否掉的替代:** 把整个 Run/历史/剩余预算交给 Controller。它扩展灵活,
+  但会让某些实现偷偷利用额外上下文,消融不再只比较“如何分配策略”。
+- 所有需要随机性的 Controller 构造时注入私有 RNG,禁止使用全局 `random`;
+  基础设施错误不作为 0 分推给 Controller,但实际消耗仍计入预算。
+
+**决策 5:Phase 0 不单列 Round-robin;保留 Static + Random + Bandit。**
+
+- `StaticController` 定义为按冻结的 Strategy 顺序循环;`RandomController` 在可用策略中
+  均匀随机;Bandit 根据有效反馈学习。
+- **采用理由:** 在“一次只选一个 Strategy”的窄接口下,“固定顺序循环”本身就是
+  Round-robin。预算 100、策略 6 条时无论叫什么都只能有四条 17 次、两条 16 次;
+  不可能在不丢弃 4 次预算的情况下“严格均等”。把同一序列列成两组会制造虚假消融列。
+- **PRD 边界:** PRD §9 的长期算法清单仍保留 Round-robin 名称;
+  Phase 0 退出条件本来只要求 Static + Random。未来若需真正不同的 Static List,
+  应定义为一份冻结的**具体攻击用例**清单,而不是另一个同序的 Strategy 轮转器。
+
+**决策 6:一个 Run 主种子 + 稳定、分域的子种子。**
+
+- 从 `run_seed` 稳定派生 `controller_seed` 与每个 `attempt_seed`;
+  再从 `attempt_seed` 派生 generator / actor / target 等子种子。
+- 派生使用 SHA-256/BLAKE2 等跨进程稳定算法并带用途标签,禁止 Python 内置 `hash()`;
+  派生结果显式写入复现上下文,不能只依赖事后重新计算。
+- **采用理由:** 全局 RNG 会被无关代码的一次随机调用扰乱;分域种子让第 37 场的具体攻击
+  可直接重放,不会因别的组件多抽一次随机数而改变。
+- **边界说明:** 单独保存第 37 场种子可以重放它的攻击话术与目标交互,
+  但不能独自解释 Bandit 为什么在第 37 场选中该策略——后者依赖前 36 场反馈。
+  因此还需记录每次决策的 attempt index、可选集合、选中策略及必要的 Controller 决策摘要。
+  真实模型即使接受 seed 也未必逐字确定;“可复现”指相同冻结条件下重放并测复现率,
+  不是承诺输出字节完全相同。
+
+**遇到的问题与解决方式:**
+
+1. 原建议把停止条件写成“满分 1.0”,但现有 `Level1Scorer` 在越权调用被后端拦下时
+   已生成正式 Finding。改为语义化“首次确认 Finding”,避免把 Agent 判断失效误当中间信号。
+2. 原建议试图区分 Static 循环与 Round-robin 严格均分,但离散的 100/6 无法严格相等,
+   两者会生成同一序列。删除重复基线,不伪造算法差异。
+3. 原种子建议声称第 37 场可完全独立复现,遗漏了 Controller 选择依赖历史。
+   改为区分“重放具体 Attempt”与“重建策略选择原因”,后者另存决策轨迹。
+
+**仍然 OPEN / TODO:**
+
+- `tiers.py` 的具体数值仍是 `OPEN`,本次只确认停止条件不依赖这些数值;
+- 基础设施错误的重试次数、可接受错误率及 Run 何时判为不可用于结论仍是 `OPEN`;
+- Phase 0 最终选 Thompson 还是 UCB 仍需在 Controller 基础接口和校准证据具备后讨论;
+- 本次只确认设计并同步文档;Executor、Controller、分层 seed 与 stop reason 均尚未实现。
+
+- **验证证据:** 对照 `Level1Scorer` 的 Finding 生成规则、`Attempt` 的“一场完整会话”语义、
+  PRD Phase 0 的 Static/Random 退出条件和 `CONCEPTS.md` 的 coverage 决策逐项复核。
+- **剩余状态:** 设计决策 `DONE`;原理文档同步 `IN PROGRESS`;实现 `TODO`;
+  上述明确列出的实验参数继续 `OPEN`。
+
+### 2026-07-29 18:02 AEST · Step 02 · CONCEPTS 原理与面试材料同步
+
+- **进度:** 完整通读 `docs/CONCEPTS.md` 最新的 1004 行版本,确认它就是作者要求的
+  “从零讲懂项目、深入复习与面试准备”主文档。在 §13 与原代码地图之间新增
+  **§14 下一阶段设计:一次 Run 到底怎样执行**,并将代码地图/面试速查顺延为 §15/§16。
+- **新增内容:** 用侦探、上门测试、编剧/摄影师、出题老师/考生、谈判、消防员、
+  同菜单比赛和电影场记等类比,系统解释:
+  - 最终产品目标与 Phase 0 实验目标为何不同但不冲突;
+  - AttackGenerator / ConversationExecutor 的职责边界及大类方案为何被否;
+  - attacker / target 模型分离、轮内记忆与跨 Attempt 无记忆;
+  - 确认 Finding 后停止、为何不依赖 `1.0`、实际/计划轮数与 stop reason;
+  - 窄 Controller 接口、Budget/Controller/Executor/Scorer 的责任链;
+  - Static/Random/Bandit 的真实差异及 Round-robin 为何不单列;
+  - Run 主种子、分域子种子、Attempt 重放与 Controller 决策重建的区别;
+  - 执行错误不能冒充安全失败,以及仍待真实 Provider 证据决定的阈值。
+- **面试材料:** §16 新增 5 个追问与答法:生成/执行为何分离、为何提前停止、
+  为什么不单列 Round-robin、为何需要分层 seed、最终要 Coverage 为何 Phase 0 不直接优化。
+- **发现并更正的旧文档问题:**
+  1. 原“第 12 场”把越权命中一律写成 `1.0`,忽略后端拦截时
+     Attempt 已确认但 Impact 未发生;改为分别描述两种结果;
+  2. 原工具档位表缺少“违规已生成但被拦下 = 0.7”,与当前 `tiers.py` 不一致,已补;
+  3. 原 Baseline 把 Static 与 Round-robin 并列但未解释当前接口下两者相同,已按确认决策修正;
+  4. 原面试答案仍说 Phase 0 接受变异漂移,与已确认的“跨 Attempt 无记忆变异”冲突,
+     已改为 Phase 0 消除该混淆变量,只接受 rotting/coverage 简化。
+- **为什么不是只写一段结果摘要:** 这些决定会直接定义 ASR、首次成功查询数、
+  消融公平性和复现边界;若只写“采用 A/窄接口/分层种子”,半年后无法回答为什么
+  另一种不行。CONCEPTS 保留教学体系,DEVLOG 保留发生顺序与决策证据。
+- **验证证据:** `git diff --check` 通过;CONCEPTS 与 DEVLOG 合计新增约 500 行;
+  文档中的现有代码状态仍标为 ✅,上述未实现模块仍明确标为 ❌/“尚未实现”,
+  没有把设计决定写成已完成代码。
+- **剩余状态:** 文档同步 `DONE`;实现 `TODO`;异常重试次数/错误率阈值、
+  reward 档位数值及 Thompson/UCB 选型继续 `OPEN`。
+
+### 2026-07-29 18:03 AEST · Step 03 · 文档与回归验证
+
+- **进度:** 核对新增章节编号、Round-robin/停止条件/OPEN 状态关键词、工作区差异和行数;
+  运行全量测试确认文档分支未影响现有实现。
+- **遇到的问题:** `git diff` 提示当前工作树中的 LF 在 Git 后续处理时会按仓库配置转为 CRLF;
+  这是行尾规范提示,没有内容错误或 whitespace error,本轮不做无关的全文件换行重写。
+- **验证证据:** `git diff --check` 通过;173 个 pytest 全部通过;
+  `docs/CONCEPTS.md` 当前 1377 行;`docs/DEVLOG.md` 写入本步骤前 831 行、
+  计入本步骤后 843 行;
+  工作区只有这两份文档发生修改。未实现的 search/mutation/executor/CLI 仍明确标为 ❌。
+- **剩余状态:** `DONE`。文档改动尚未 commit/push/提 PR;代码实现仍为 `TODO`。
+
+### 2026-07-29 18:15 AEST · Step 04 · Executor / Controller 正式开工
+
+- **进度:** 作者确认可以开始实现,从已包含最新 CONCEPTS 与本轮决策的提交基线切出
+  `feat/executor-controller`。复核现有 Strategy、Attempt、ReproductionContext、
+  TargetAdapter、Level1Scorer、BudgetManager 及相关测试接口。
+- **本批实现范围:** AttackGenerator 抽象与确定性实现、ConversationExecutor、
+  Finding 语义停止与 stop reason、计划/实际轮数、稳定分层 seed、Controller 决策记录、
+  SearchController + Static/Random,以及上述模块的协议/单元/端到端测试。
+- **明确不在本批拍板:** Thompson/UCB 选型、reward 档位数值、真实 Provider、
+  异常重试次数与可接受错误率。它们继续 `OPEN`,不会为了“全写”而猜一个值塞进核心实验。
+- **接口取舍:** Executor 对调用方提供“一次执行完整 Attempt 并返回 Attempt +
+  Findings/决策所需结果”的小接口;Adapter、Generator、Scorer 从构造函数注入。
+  复杂的逐轮循环、累积计量、停止判断和种子派生藏在模块内部。
+- **采用理由:** 调用方和测试通过同一接口验证完整行为,既获得高杠杆,也让错误定位集中;
+  若删除 Executor 模块,这些状态机会散落到 CLI、Run orchestrator 和 Validator,
+  说明该模块确实承担了有价值的复杂度,不是传参壳。
+- **剩余状态:** `IN PROGRESS`。
+
+### 2026-07-29 18:21 AEST · Step 05 · 核心协议与模块首版落地
+
+- **进度:** 新增 `randomness.py`、`generation.py`、`executor.py` 与 `search/`;
+  扩展 `protocols/trace.py`、协议导出和 `ScoringResult.has_confirmed_finding`。
+- **种子实现:** BLAKE2b 稳定派生非负 63-bit seed,分出 controller / attempt /
+  generator / actor / target 域;禁止进程不稳定的 Python `hash()`。
+- **Generator seam:** `AttackGenerator.generate(request)` 是唯一外部方法,request 只含
+  本场 `prior_turns`,接口上无法读取跨 Attempt 历史。提供 Template 与 Scripted 两个
+  确定性 adapter,让执行器和重放无需真实 API 即可测试;真实 LLM mutation 仍未实现。
+- **Executor:** 单一 `execute(request)` 完成 reset、逐轮生成/发送、全历史判定、
+  Finding 语义停止、成本汇总、复现上下文与 Attempt 组装。Attempt ID 在第一轮前生成,
+  Scorer 产出的 Finding 与最终 Attempt 使用同一个 ID,避免“证据指向不存在记录”。
+- **错误边界:** 任一步异常抛 `AttemptExecutionError`,携带已完成 Turns;
+  不返回看似有效的零分 Attempt。重试与 Run 阈值仍交给后续明确策略。
+- **Controller:** 公共 `select/update` 由基类统一校验和记录决策;具体实现只提供选择逻辑。
+  Static 按冻结顺序循环并跳过 Budget 已屏蔽项;Random 使用注入的私有 RNG。
+  一次 select 必须对应一次有效 update,防止错误 Attempt 被静默丢弃后继续学习。
+- **自行发现并解决的协议问题:** Scorer 需要在 Attempt 构造前写 Finding,
+  而原 `build_attempt()` 无法接收预生成 ID,会导致 Finding.attempt_id 与实际 Attempt.id
+  不一致。为 builder 增加可选 `attempt_id`,旧调用保持兼容。
+- **剩余状态:** 实现首版 `DONE`;测试与质量检查 `IN PROGRESS`。
+
+### 2026-07-29 18:25 AEST · Step 06 · 新增 29 个测试并修正首轮问题
+
+- **进度:** 新增 `test_randomness.py`、`test_generation.py`、`test_executor.py`、
+  `test_search.py`,扩展 `test_trace.py`;测试总数从 173 增至 202。
+- **覆盖证据:**
+  - seed 稳定派生、分域隔离、63-bit 存储边界与不同 Attempt 独立;
+  - 模板槽位稳定填充、脚本化逐轮生成、历史长度不变量与显式耗尽错误;
+  - Canary 完整泄漏首轮停、**工具越权被拦下但分数未满仍首轮停**、
+    部分信号继续、无 Finding 跑满、对话历史传递、成本/种子记录、
+    异常携带 partial trace、不同 Attempt reset;
+  - Static 固定轮转/不可用策略跳过/100÷6 的 17/16 分配,
+    Random 私有 RNG 可复现,决策记录和 select/update 顺序约束。
+- **遇到的问题 1(Ruff):** `Sequence` 应从 `collections.abc` 导入;
+  ABC 中非抽象 `_learn` 只有 docstring 被判为空方法。按项目规则修正导入,
+  并显式 `return None`;Ruff 随后通过。
+- **遇到的问题 2(pytest):** 首轮全量测试 1 个失败。测试想验证固定追问,
+  却构造了 `turn_index=1` 且 `prior_turns=[]` 的不可能状态;
+  新 `AttackGenerationRequest` 校验正确拒绝。改为提供真实首轮 Turn,
+  没有放松实现不变量。定向 36 测试随后全过,全量 202 测试全过。
+- **为什么保留这个严格校验:** 如果 Generator 能声称自己在第 2 轮却看不到第 1 轮,
+  轮内记忆语义已经断裂;若历史条数比 index 多,则可能把未来或跨 Attempt 信息混入。
+  在 seam 处 fail-fast 比让生成结果悄悄失真更安全。
+- **剩余状态:** 功能与测试 `DONE`;Black、最终 diff/文档状态同步 `IN PROGRESS`。
+
+### 2026-07-29 18:28 AEST · Step 07 · 协议版本、原理文档与质量门收口
+
+- **协议版本:** `REDCELL_PROTOCOL_VERSION` 从 `0.1.0` 升为 `0.2.0`。
+  本批给 ReproductionContext 增加分层 seed,给 Attempt 增加计划轮数与停止原因,
+  并允许 builder 接收预生成 ID;虽然字段均保持向后兼容,但它们改变了跨模块契约和
+  复现语义。继续冒用 `0.1.0` 会让两种不同协议的记录看起来相同,违背版本字段的用途。
+- **原理同步:** `CONCEPTS.md` §14 从“已确认、尚未实现”更新为“基础实现完成”;
+  代码地图新增 randomness/generation/executor/search 的 ✅ 状态,
+  同时把真实 LLM mutation、Thompson、Run orchestrator、CLI 明确留为 ❌。
+- **格式问题:** Black 首次检查提示 9 个新增文件需机械格式化;仅格式化本批文件。
+  随后 Ruff 又发现两个测试导入顺序不符合规则,使用 Ruff 机械整理,未改逻辑。
+- **最终验证证据:** 202 个 pytest 全部通过;`ruff check .` 通过;
+  `black --check .` 通过(58 files unchanged)。下一步继续做 diff/状态与文档真实性复核。
+- **剩余状态:** 实现、测试、原理同步 `DONE`;最终工作区审阅 `IN PROGRESS`;
+  真实 LLM mutation / Run orchestrator / Bandit / CLI 仍为后续 `TODO`。
+
+### 2026-07-29 18:32 AEST · Step 08 · 最终语义审阅与验证
+
+- **发现的问题:** Template Generator 最初把“另一个 actor 的 ID”直接当作
+  `{target_resource}`。support-agent 中 actor ID 恰好等于资源 ID,测试会通过;
+  但通用 Policy 可能是登录身份 `bob_login` 对应资源 `account_B`,两者不是一回事。
+  这会让跨用户策略生成无效参数,且只在接第二个目标时暴露。
+- **解决方式:** 从其他 ActorPolicy 的 `allowed_resource_ids` 中选择当前 actor
+  无权访问的稳定排序资源,不再猜 actor ID 即资源 ID;新增专门测试用
+  `alice_login/account_A` 与 `bob_login/account_B` 锁住语义。
+- **复现加强:** 为 BLAKE2b 派生加入两个固定数值 fixture。只断言“同进程调用两次相同”
+  无法阻止未来误改成 Python `hash()`;固定值可以检测跨进程不稳定算法回退。
+- **最终验证证据:** 203 个 pytest 全部通过;`ruff check .` 通过;
+  `black --check .` 通过(58 files unchanged);`git diff --check` 通过。
+  工作区只包含本批源码、测试、CONCEPTS 与 DEVLOG 的预期改动。
+- **剩余状态:** 本批实现 `DONE`,尚未 commit/push/提 PR。
+  未完成范围仍为:真实 LLM mutation、Run orchestrator、Bandit、CLI、
+  错误重试/失效阈值和 reward 数值定稿。
+
+### 2026-07-29 18:35 AEST · Step 09 · 实现提交与交付状态同步
+
+- **进度:** 已在 `feat/executor-controller` 分支提交本批 18 个源码、测试和文档文件;
+  commit 为 `b731fc9 feat: add conversation executor and baseline controllers`。
+- **提交前验证:** 暂存区仅包含本批预期文件;`git diff --cached --check` 通过;
+  结合 Step 08 的 203 个 pytest、Ruff 与 Black 结果,实现提交具备可复核证据。
+- **边界确认:** commit 没有包含内部 `PRD.md` / `AGENTS.md`、密钥或 run/trace 产物;
+  未把真实 LLM mutation、Run orchestrator、Bandit、CLI、错误重试阈值或 reward
+  数值写成已完成。
+- **剩余状态:** 实现 commit `DONE`;本步骤日志提交、push 与 PR `TODO`。
+
+### 2026-07-29 18:39 AEST · Step 10 · 推送完成与 PR 权限阻塞
+
+- **进度:** 两个本批 commit 已推送至 `origin/feat/executor-controller`,本地分支已设置
+  upstream;远端比较页确认包含 3 个 commit、18 个文件。
+- **遇到的问题:** GitHub 集成创建 PR 时返回 HTTP 403
+  `Resource not accessible by integration`;本机也未安装 `gh` CLI。该问题是当前
+  集成写权限不足,不是分支、测试或 mergeability 失败。
+- **解决方式:** 已通过作者登录的 GitHub 页面准备好以 `master` 为 base、
+  `feat/executor-controller` 为 compare 的 PR 标题与完整说明;说明覆盖动机、范围、
+  核心取舍、203 个测试证据及明确排除项。
+- **剩余状态:** push `DONE`;PR 表单已准备,按外部提交安全检查在最终创建动作前
+  等待作者确认,状态 `BLOCKED`。未声称 PR 已创建。
+
+### 2026-07-29 19:01 AEST · Step 11 · 确认修复 Attempt/Impact 指标语义
+
+- **发现的问题:** Store、Report 与 `queries_to_first_success` 目前都用
+  `reward >= 1.0` 定义“成功”。默认权限层会把已经生成的违规工具调用拦下,
+  形成 `attempted_action=True`、`realized_impact=NOT_REALIZED` 与 0.7 分;
+  因此工具线策略会被错误报告为 0% 成功,违背 CALIBRATION §4
+  “校准主要看 Attempt ASR”的既定协议。
+- **确认决策:** 头号指标不再依赖可调整的分档数字。Attempt 成功由任一 Finding 的
+  `triad.attempted_action` 推导;Impact 成功由任一 Finding 的
+  `triad.fully_compromised` 推导;同一 attempt 的多个 Finding 必须按
+  `attempt_id` 去重。
+- **接口设计:** 建立一个纯内存成功指标 module,由 Store 与 Report 共用;
+  同时拆分 Attempt/Impact ASR 与两类首次成功查询数,删除含义模糊的
+  `hits` / `success_rate` / `queries_to_first_success` 出口。分档均值仅保留为
+  诊断信号,不再冒充主要成功指标。
+- **相关一致性修复:** Executor 停止谓词明确为 Attempt 成功而非“任意 Finding”;
+  Controller 增加记录失败但不学习的显式释放路径,避免执行异常后 pending 卡死;
+  `cost_usd` 从 `extra` 魔法键提升为 TraceMetadata 显式字段。
+- **替代方案及否决理由:** 不采用 `threshold=0.7`,因为分档仍处于草案状态,
+  改权重会静默改变实验结论;不让基础设施错误调用 `update(..., 0)`,
+  因为这会把供应商/网络失败错误学习成某个策略弱;不复制 Store 与 Report
+  两套 triad 判断,避免后续语义再次漂移。
+- **剩余状态:** 设计经作者确认,实现与验证 `IN PROGRESS`;真实 LLM、Run
+  orchestrator、Bandit 算法与具体错误重试阈值仍不在本步骤内。
+
+### 2026-07-29 19:21 AEST · Step 12 · 实现语义指标与关联一致性修复
+
+- **实现:** 新增 `success_metrics.py` 纯计算 module,集中输出每个 Strategy 的
+  Attempt/Impact hits、两类 ASR 与两类首次成功位置。Finding 必须与输入
+  Attempt 的 run_id/strategy_id 一致;孤儿或错配直接报错;多个 Finding 通过
+  `attempt_id` 集合去重。
+- **Store/Report:** 删除基于数值 threshold 的 `attack_success_rate` 与含义模糊的
+  `queries_to_first_success`;替换为显式 Attempt/Impact 方法。Report 的
+  `hits` / `success_rate` / `mean_reward` 拆成两类 hits、两类 ASR 与
+  `mean_signal_score`;HTML/JSON 同时显示两类指标。
+- **执行一致性:** ScoringResult 的停止谓词改为 `has_attempt_success`,
+  只认 `triad.attempted_action`;停止原因改为 `ATTEMPT_SUCCESS`。未来
+  intent-only Finding 不会提前截断 Attempt。
+- **错误恢复:** ControllerDecision 增加 PENDING/COMPLETED/ABANDONED 状态;
+  `abandon(strategy_id, reason)` 记录失败并释放 pending,不调用学习逻辑,
+  从接口上消除执行异常后的卡死路径。Run 级重试次数和失效阈值仍为 OPEN。
+- **成本协议:** `TraceMetadata.cost_usd` 成为显式非负字段,Executor 直接汇总,
+  不再依赖没有 Adapter 写入的 `extra["cost_usd"]` 魔法键。真实攻击生成器成本
+  仍需在真实 LLM mutation 接入时纳入,未伪装成已完成。
+- **文档:** CALIBRATION §4 删除“满分才算成功”的矛盾说法,明确 triad 公式与去重;
+  CONCEPTS 同步指标 module、停止语义、abandon 路径、显式成本和代码地图。
+- **剩余状态:** 实现 `DONE`;验证见 Step 13。
+
+### 2026-07-29 19:21 AEST · Step 13 · 回归验证与本地环境漂移
+
+- **新增/改造测试:** 覆盖 0.7 blocked 仍是 Attempt 成功、1.0 无 triad 证据不是
+  成功、UNKNOWN 不算 Impact、同一 Attempt 多 Finding 去重、Finding 归属错配
+  拒绝、intent-only 不停止、Controller abandon 后可继续选择、显式美元成本汇总。
+- **验证证据:** 全量 209 个 pytest 通过;`ruff check .` 全仓通过;
+  本批 16 个 Python 文件 `ruff format --check` 通过;`git diff --check` 通过。
+- **遇到的问题:** 项目 `.venv` 的 pytest/Black 启动器仍指向已不存在的
+  `C:\Users\lee20\AppData\Local\Programs\Python\Python312\python.exe`。
+  直接启动会报 unable to create process。Pytest 改用工作区提供的 Python 3.12.13,
+  显式加载 `.venv` site-packages 与 `src`,成功跑完全量。
+- **格式检查处理:** `.venv` 中 Black 26.5.1 的编译模块在替代解释器下挂起;
+  因此本轮无法诚实声称 Black 通过。使用项目已有 Ruff formatter 对本批文件格式化
+  并检查通过;该语法与风格验证有效,但修复/重建 `.venv` 后仍应补跑正式
+  `black --check .`。未联网安装或擅自重建作者环境。
+- **剩余状态:** 功能与测试 `DONE`;Black 精确复核因失效虚拟环境 `BLOCKED`;
+  最终 diff 审阅、commit 与 push `TODO`。
+
+### 2026-07-29 19:23 AEST · Step 14 · JSON 指标出口复核
+
+- **发现的问题:** `StrategyStat` 的两类 ASR 最初实现为普通 Python property;
+  HTML 模板能够读取,但 Pydantic `model_dump()` 默认不会序列化普通 property,
+  因而 JSON 会只有 hits、缺少 ASR,违背“JSON/HTML 共用同一份数字”的设计。
+- **解决方式:** 两类 ASR 改为 Pydantic `computed_field`,继续由 hits/attempts
+  唯一推导;新增 JSON 断言并同时检查 HTML 表头。没有复制第二套计算公式。
+- **最终验证:** 全量 209 个 pytest 再次通过;`ruff check .` 全仓通过;
+  本批 16 个 Python 文件格式检查通过;`git diff --check` 通过。
+- **剩余状态:** 本批代码、测试和原理文档 `DONE`;Black 环境阻塞保持如实记录;
+  commit/push `TODO`。
+
+### 2026-07-29 19:24 AEST · Step 15 · 修复提交状态同步
+
+- **进度:** 已在 `feat/executor-controller` 提交
+  `f5e6f5f fix: derive success metrics from violation semantics`;
+  commit 包含19个预期文件,新增共享指标 module 与专门回归测试。
+- **提交前证据:** 暂存区 `git diff --cached --check` 通过;没有包含内部
+  PRD/AGENTS、密钥或运行产物。
+- **剩余状态:** 修复 commit `DONE`;本步骤日志提交与远端 push `TODO`;
+  PR 仍未创建。
+
+---
+
+## 2026-07-27 · 补齐 CONCEPTS.md
+
+### 2026-07-27 21:15 AEST · Step 01 · 文档欠账清理
+
+- **⚠️ 承认一处持续性疏漏。** `docs/CONCEPTS.md` 自 bandit 那轮更新后就没再动过,
+  而此后建成的靶场、检测器、预算、存储、报告**一个都没写进去**。
+  核对结果:`ArenaAdapter` / `DefenseLevel` / `enforce_permissions` / `ToolCallCodec` /
+  `Level1Scorer` / `BudgetManager` / `RunStore` / 阴性对照 / `StrategyRequirements` /
+  `ProtectedDataLocation` —— 全部缺失,§12 的代码地图也仍停留在"靶场(下一步)"。
+- **为什么这算实质问题,不只是文档不整齐:** DEVLOG 是流水账,**CONCEPTS 才是成体系的那份**,
+  是作者温习与面试准备的主要材料。它描述的架构和实际代码对不上,
+  读它的人会形成**错误的项目认知** —— 而且越往后欠得越多。
+- **补充内容:**
+  - **新增 §12 靶场设计详解** —— 此前只在对话里讲过,从未落盘。含:为什么自造靶场、
+    工具集为何是 3 敏感 + 3 无害、4 条记录只有 2 个 actor 的理由、
+    两个 canary 的位置及其取舍(放 `customer_b` vs `customer_a` 的完整对比)、
+    单一来源为何不用 YAML、两个校准旋钮、policy 必须如实描述靶场、
+    `reset()` 的双重作用、以及**七条已知局限**;
+  - **新增 §13 已建成的运行时部件** —— 检测器档位表、阳性/阴性对照(烟雾报警器类比)、
+    误报为何对本项目格外致命的三条、预算的原子性、存储的 JSON payload 取舍、
+    `queries_to_first_success` 的删失观测问题、报告的三处硬性呈现;
+  - **§14 代码地图重写** —— 标注每个模块的完成状态,未建的四项显式标 ❌;
+  - **§15 面试速查新增 5 问** —— 阴性对照、误报 vs 漏报哪个更危险、
+    靶场是否为算法量身定做、canary 位置的取舍、存储为何不逐字段映射。
+- **决策:文档同步纳入常规交付项。** 此后凡新增组件,CONCEPTS 与 DEVLOG 同批更新,
+  不再累积欠账。
+- **验证证据:** 十个关键词逐一核对已覆盖;文档 730 → 1004 行;173 个测试不受影响。
+- **剩余状态:** DONE
+
+---
+
 ## 2026-07-27 · 运行时管道:预算、存储、报告
 
 ### 2026-07-27 20:45 AEST · Step 01 · Budget / Run / Storage / Report

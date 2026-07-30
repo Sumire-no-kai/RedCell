@@ -67,6 +67,9 @@ class TraceMetadata(RedCellModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     latency_ms: float = 0.0
+    cost_usd: float = Field(default=0.0, ge=0.0)
+    """本次目标调用的实际美元成本。真实 Provider 必须显式填充。"""
+
     model: str | None = None
     temperature: float | None = None
     extra: dict[str, Any] = Field(default_factory=dict)

@@ -70,7 +70,7 @@ def _attempt(run_id: str, strategy_id: str, reward: float, *, turns: int = 1):
     )
 
 
-def _finding(run_id: str, attempt_id: str, impact: ImpactStatus, **kwargs) -> Finding:
+def _finding(attempt, impact: ImpactStatus, **kwargs) -> Finding:
     observability = kwargs.pop(
         "observability",
         (
@@ -80,12 +80,12 @@ def _finding(run_id: str, attempt_id: str, impact: ImpactStatus, **kwargs) -> Fi
         ),
     )
     return Finding(
-        run_id=run_id,
-        attempt_id=attempt_id,
+        run_id=attempt.run_id,
+        attempt_id=attempt.id,
         category=VulnerabilityCategory.UNAUTHORIZED_TOOL_USE,
         title="跨用户读取",
         actor="customer_a",
-        strategy_id="cross_user_resource_access",
+        strategy_id=attempt.strategy_id,
         triad=ViolationTriad(attempted_action=True, realized_impact=impact),
         evidence=[
             Evidence(
@@ -123,7 +123,8 @@ def test_attempt_round_trips_with_nested_trace(store: RunStore, run: Run) -> Non
 
 def test_finding_round_trips(store: RunStore, run: Run) -> None:
     store.save_run(run)
-    finding = _finding(run.id, "a1", ImpactStatus.REALIZED)
+    attempt = _attempt(run.id, "s1", 1.0)
+    finding = _finding(attempt, ImpactStatus.REALIZED)
     store.save_finding(finding)
 
     loaded = store.findings_for(run.id)
@@ -154,21 +155,26 @@ def test_attempts_per_strategy_shows_allocation(store: RunStore, run: Run) -> No
     assert store.attempts_per_strategy(run.id) == {"s1": 3, "s2": 1}
 
 
-def test_attack_success_rate_by_strategy(store: RunStore, run: Run) -> None:
+def test_success_rates_come_from_triad_not_numeric_score(store: RunStore, run: Run) -> None:
     store.save_run(run)
-    store.save_attempts(
+    blocked = _attempt(run.id, "s1", 0.7)
+    realized = _attempt(run.id, "s1", 1.0)
+    numeric_only = _attempt(run.id, "s2", 1.0)
+    unknown = _attempt(run.id, "s2", 0.4)
+    store.save_attempts([blocked, realized, numeric_only, unknown])
+    store.save_findings(
         [
-            _attempt(run.id, "s1", 1.0),
-            _attempt(run.id, "s1", 0.0),
-            _attempt(run.id, "s2", 0.0),
+            _finding(blocked, ImpactStatus.NOT_REALIZED),
+            _finding(realized, ImpactStatus.REALIZED),
+            _finding(unknown, ImpactStatus.UNKNOWN),
         ]
     )
-    rates = store.attack_success_rate(run.id)
-    assert rates["s1"] == pytest.approx(0.5)
-    assert rates["s2"] == 0.0
+
+    assert store.attempt_success_rate(run.id) == {"s1": 1.0, "s2": 0.5}
+    assert store.impact_success_rate(run.id) == {"s1": 0.5, "s2": 0.0}
 
 
-def test_queries_to_first_success_returns_none_when_never_successful(
+def test_queries_to_first_successes_return_none_when_never_successful(
     store: RunStore, run: Run
 ) -> None:
     """⚠️ 未成功时返回 None,不返回预算值。
@@ -176,16 +182,27 @@ def test_queries_to_first_success_returns_none_when_never_successful(
     用预算值顶替会把删失观测混进普通观测,均值被系统性拉低。
     """
     store.save_run(run)
-    store.save_attempts([_attempt(run.id, "s1", 0.0) for _ in range(5)])
-    assert store.queries_to_first_success(run.id) is None
+    # 即使数字是 1.0,没有 triad 证据也不是成功。
+    store.save_attempts([_attempt(run.id, "s1", 1.0) for _ in range(5)])
+    assert store.queries_to_first_attempt_success(run.id) is None
+    assert store.queries_to_first_impact_success(run.id) is None
 
 
-def test_queries_to_first_success_counts_position(store: RunStore, run: Run) -> None:
+def test_queries_to_first_successes_have_explicit_semantics(store: RunStore, run: Run) -> None:
     store.save_run(run)
-    store.save_attempts(
-        [_attempt(run.id, "s1", 0.0), _attempt(run.id, "s1", 0.0), _attempt(run.id, "s1", 1.0)]
+    none = _attempt(run.id, "s1", 1.0)
+    blocked = _attempt(run.id, "s1", 0.7)
+    realized = _attempt(run.id, "s1", 0.2)
+    store.save_attempts([none, blocked, realized])
+    store.save_findings(
+        [
+            _finding(blocked, ImpactStatus.NOT_REALIZED),
+            _finding(realized, ImpactStatus.REALIZED),
+        ]
     )
-    assert store.queries_to_first_success(run.id) == 3
+
+    assert store.queries_to_first_attempt_success(run.id) == 2
+    assert store.queries_to_first_impact_success(run.id) == 3
 
 
 # ── 报告 ─────────────────────────────────────────────────────────────────
@@ -193,14 +210,15 @@ def test_queries_to_first_success_counts_position(store: RunStore, run: Run) -> 
 
 def _report(run: Run) -> ReportData:
     attempts = [
-        _attempt(run.id, "s1", 0.0),
         _attempt(run.id, "s1", 1.0),
-        _attempt(run.id, "s2", 0.5),
+        _attempt(run.id, "s1", 0.7),
+        _attempt(run.id, "s2", 0.4),
     ]
     findings = [
-        _finding(run.id, attempts[1].id, ImpactStatus.REALIZED),
-        _finding(run.id, attempts[1].id, ImpactStatus.NOT_REALIZED),
-        _finding(run.id, attempts[2].id, ImpactStatus.UNKNOWN),
+        _finding(attempts[1], ImpactStatus.REALIZED),
+        # 同一个 attempt 的多个 Finding 不能重复抬高 ASR。
+        _finding(attempts[1], ImpactStatus.NOT_REALIZED),
+        _finding(attempts[2], ImpactStatus.UNKNOWN),
     ]
     return ReportData.build(run, attempts, findings)
 
@@ -219,15 +237,21 @@ def test_report_computes_allocation_and_success(run: Run) -> None:
     by_id = {s.strategy_id: s for s in data.strategy_stats}
 
     assert by_id["s1"].attempts == 2
-    assert by_id["s1"].hits == 1
-    assert by_id["s1"].success_rate == pytest.approx(0.5)
+    assert by_id["s1"].attempt_hits == 1
+    assert by_id["s1"].impact_hits == 1
+    assert by_id["s1"].attempt_success_rate == pytest.approx(0.5)
+    assert by_id["s1"].impact_success_rate == pytest.approx(0.5)
+    assert by_id["s2"].attempt_success_rate == 1.0
+    assert by_id["s2"].impact_success_rate == 0.0
     assert data.budget_share["s1"] == pytest.approx(2 / 3)
-    assert data.queries_to_first_success == 2
+    assert data.queries_to_first_attempt_success == 2
+    assert data.queries_to_first_impact_success == 2
 
 
 def test_report_reports_never_succeeded_as_null(run: Run) -> None:
-    data = ReportData.build(run, [_attempt(run.id, "s1", 0.0)], [])
-    assert data.queries_to_first_success is None
+    data = ReportData.build(run, [_attempt(run.id, "s1", 1.0)], [])
+    assert data.queries_to_first_attempt_success is None
+    assert data.queries_to_first_impact_success is None
 
 
 def test_report_always_carries_the_disclaimer(run: Run) -> None:
@@ -258,6 +282,13 @@ def test_json_and_html_come_from_the_same_data(run: Run) -> None:
     payload = json.loads(to_json(data))
     assert payload["impact"]["unknown"] == data.impact.unknown
     assert payload["total_attempts"] == data.total_attempts
+    assert payload["strategy_stats"][0]["attempt_hits"] == 1
+    assert payload["strategy_stats"][0]["impact_hits"] == 1
+    assert payload["strategy_stats"][0]["attempt_success_rate"] == pytest.approx(0.5)
+    assert payload["strategy_stats"][0]["impact_success_rate"] == pytest.approx(0.5)
+    assert "hits" not in payload["strategy_stats"][0]
+    assert "Attempt ASR" in to_html(data)
+    assert "Impact ASR" in to_html(data)
 
 
 def test_write_report_emits_both_formats(run: Run, tmp_path) -> None:
