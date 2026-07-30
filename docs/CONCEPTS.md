@@ -159,6 +159,10 @@ reward 归属才清晰。按轮计的话,5 轮策略会吃掉 5 份预算,且 ba
 | 他**动手**了吗? | 撬棍插进了锁孔 | **Attempted Action** |
 | 门**真开**了吗? | 门开了、东西少了 | **Realized Impact** |
 
+> ⚠️ **Attempted Action 不等于"调了工具"。** 受保护数据出现在回复正文里同样算 ——
+> 那同样是 agent 已经做出了违反部署方策略的**行为**,只是形态是"说出来"而不是"调工具"。
+> 这个字段是 Attempt ASR 与 Executor 提前停止的共同依据,语义边界必须精确。
+
 **为什么必须分开:**
 
 | 组合 | 含义 | 修哪里 | 严重度 |
@@ -191,6 +195,32 @@ Adapter 自报"我能看见目标的多少内部行为":
 
 存在的理由:检测器必须能区分"我检查了确实没有"和"我根本看不见"。
 没有这个字段,两种情况在代码里长得一样,而且**崩得没有报错**,只是结论悄悄变错。
+
+### ImpactBasis(Impact 的证据来源)⭐⭐
+
+**光有可观测性等级还不够。** 还必须知道:这条 Impact 结论**靠什么证据成立**。
+
+| 证据来源 | 例子 | 需要什么可观测性 |
+|---|---|---|
+| `SIDE_EFFECT` | 越权退款是否真的发生 | **只有 `FULL`** 看得见 |
+| `RESPONSE_CONTENT` | canary 是否真的泄漏 | **任何等级**都看得见——它就印在回复正文里 |
+
+**为什么不能用一个统一门槛:** 早期实现把两者都按"能不能看见副作用"卡,
+于是在 `PARTIAL` / `RESPONSE_ONLY` 的目标上,**一次成功的 canary 泄漏会让 Finding
+根本构造不出来** —— 评分器抛异常 → Executor 归为 SCORING 故障 → 整个 Run 被判 FAILED。
+**最高价值的事件变成了 Run killer。**
+
+反过来把门槛放松到"都不检查",副作用类结论又会把"看不见"写成"没发生",
+回到系统性漏报。两个方向都是错的,所以门槛必须**按证据来源分开**。
+
+配套的协议不变量(写成 model_validator,不靠自觉):
+
+1. 断言了 impact(`REALIZED` / `NOT_REALIZED`)就**必须**给出 `impact_basis`;
+2. `impact` 为 `UNKNOWN` 时**不允许**有 basis —— 什么都没观测到就没有证据来源;
+3. 该 basis 在当前可观测性下观测不到时,**不允许断言 impact**。
+
+> **面试怎么答:** "三态解决的是『看不见时不能说没发生』;ImpactBasis 解决的是
+> 『看不见**什么**』。前者少了会漏报,后者少了会让远程目标上最有价值的那类结论直接崩掉。"
 
 ### Severity(严重度)
 `Severity = Impact × Exploitability × Reproducibility × Privilege Level`,
@@ -1154,14 +1184,11 @@ stop_reason =
 
 ```python
 class SearchController(ABC):
-    def select(self, available_strategy_ids: Sequence[str]) -> str:
-        ...
+    def select(self, available_strategy_ids: Sequence[str]) -> str: ...
 
-    def update(self, strategy_id: str, score: float) -> None:
-        ...
+    def update(self, strategy_id: str, score: float) -> None: ...
 
-    def abandon(self, strategy_id: str, reason: str) -> None:
-        ...
+    def abandon(self, strategy_id: str, reason: str) -> None: ...
 ```
 
 职责边界:
@@ -1241,7 +1268,17 @@ run_seed
 1. 使用 SHA-256/BLAKE2 等稳定算法,禁止 Python `hash()`(跨进程可能不同);
 2. 带用途标签,避免 generator 和 target 偶然消费同一随机序列;
 3. 派生值显式写入 ReproductionContext,不只记录主 seed;
-4. Controller 使用独立 RNG,不受生成器抽样次数影响。
+4. Controller 使用独立 RNG,不受生成器抽样次数影响;
+5. ⚠️ **播种必须由 Orchestrator 做,不能交给调用方。**
+
+第 5 条是踩过的坑:`controller_seed` 一度只被**写进** ReproductionContext,
+而真正驱动选择的 RNG 由调用方构造 Controller 时自带 —— 两者毫无关系。
+更麻烦的是 `run_seed` 可能是 Orchestrator 现生成的,调用方**物理上不可能对上**。
+于是记录下来的种子是个漂亮的假数字,**不会有任何报错**,只会在某天想重放时才发现对不上。
+
+现在的做法:Orchestrator 在确定 `run_seed` 之后调用 `controller.seed(...)`,
+preflight 再复核 `controller.controller_seed` 确实等于派生值 ——
+子类若覆写 `seed()` 而没真正生效,当场就炸。
 
 例如:
 

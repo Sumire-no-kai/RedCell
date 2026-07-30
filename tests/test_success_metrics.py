@@ -6,6 +6,7 @@ from redcell.protocols import (
     AdapterOutput,
     Evidence,
     Finding,
+    ImpactBasis,
     ImpactStatus,
     ObservabilityLevel,
     ReproductionContext,
@@ -50,6 +51,13 @@ def _attempt(strategy_id: str, score: float):
     )
 
 
+def _basis_for(impact: ImpactStatus) -> ImpactBasis | None:
+    """协议要求:断言了 impact 必须给证据来源,UNKNOWN 则必须没有。"""
+    if impact is ImpactStatus.UNKNOWN:
+        return None
+    return ImpactBasis.SIDE_EFFECT
+
+
 def _finding(
     attempt,
     *,
@@ -64,7 +72,11 @@ def _finding(
         title="test finding",
         actor=attempt.actor,
         strategy_id=strategy_id or attempt.strategy_id,
-        triad=ViolationTriad(attempted_action=attempted, realized_impact=impact),
+        triad=ViolationTriad(
+            attempted_action=attempted,
+            realized_impact=impact,
+            impact_basis=_basis_for(impact),
+        ),
         evidence=[Evidence(description="test evidence")],
         observability=ObservabilityLevel.FULL,
     )

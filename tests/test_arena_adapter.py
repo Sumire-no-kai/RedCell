@@ -249,3 +249,40 @@ async def test_forbidden_tool_call_is_recorded_even_though_blocked() -> None:
     assert [tc.name for tc in result.tool_calls] == [arena_tools.DELETE_CUSTOMER]
     assert result.tool_results[0].rejected
     assert result.side_effects == []
+
+
+async def test_adapter_sums_provider_reported_cost() -> None:
+    """成本知识属于 provider(它才知道用的是哪个模型、哪档价格)。"""
+
+    class PricedProvider(ScriptedProvider):
+        @property
+        def reports_cost(self) -> bool:
+            return True
+
+        async def complete(self, messages, **kwargs):
+            response = await super().complete(messages, **kwargs)
+            return response.model_copy(update={"cost_usd": 0.25})
+
+    adapter = ArenaAdapter(PricedProvider(default="hello"))
+    output = await adapter.send(
+        AdapterInput(messages=[Message(role=Role.USER, content="hi")], actor="customer_a")
+    )
+
+    assert output.trace_metadata.cost_usd == pytest.approx(0.25)
+    assert adapter.capabilities.reports_cost
+
+
+async def test_cost_reporting_is_off_by_default() -> None:
+    """默认保守:没有明确声明的 provider 一律按"成本不可观测"处理。
+
+    反过来默认 True 的话,一个忘了填成本的 provider 会让 max_cost_usd
+    变成永不触发、也永不报错的假上限。
+    """
+    adapter = ArenaAdapter(ScriptedProvider(default="hello"))
+    output = await adapter.send(
+        AdapterInput(messages=[Message(role=Role.USER, content="hi")], actor="customer_a")
+    )
+
+    assert not ScriptedProvider(default="x").reports_cost
+    assert not adapter.capabilities.reports_cost
+    assert output.trace_metadata.cost_usd == 0.0

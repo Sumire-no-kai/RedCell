@@ -41,9 +41,15 @@ from redcell.protocols import (
     TargetAdapter,
 )
 from redcell.protocols.run import Run, RunEventType, RunStatus
+from redcell.randomness import controller_seed_for
 from redcell.retry import RetryPolicy
 from redcell.scoring import Level1Scorer
-from redcell.search import ControllerDecisionOutcome, StaticController
+from redcell.search import (
+    ControllerDecisionOutcome,
+    ControllerProtocolError,
+    RandomController,
+    StaticController,
+)
 from redcell.storage import RunStore
 from redcell.strategies import DIRECT_INSTRUCTION_OVERRIDE
 
@@ -416,3 +422,92 @@ async def test_existing_run_id_is_rejected_without_overwriting_history(
     assert persisted is not None
     assert persisted.status is RunStatus.COMPLETED
     assert store.events_for(completed.run.id) == events_before
+
+
+# ── Controller 播种与可复现性 ────────────────────────────────────────────
+
+
+async def _execute_with_controller(store: RunStore, controller, run: Run, *, max_attempts: int = 6):
+    strategies = [_one_turn_strategy().model_copy(update={"id": f"s{index}"}) for index in range(3)]
+    orchestrator = RunOrchestrator(
+        executor=_executor(StableAdapter(), FlakyGenerator(0)),
+        controller=controller,
+        store=store,
+        retry_policy=RetryPolicy(base_delay_seconds=0, max_delay_seconds=0),
+        sleep=_no_sleep,
+    )
+    return await orchestrator.execute(
+        RunExecutionRequest(
+            run=run.model_copy(update={"limits": BudgetLimits(max_attempts=max_attempts)}),
+            strategies=strategies,
+            actor="customer_a",
+        )
+    )
+
+
+async def test_orchestrator_seeds_the_controller_from_the_run_seed(store: RunStore) -> None:
+    """Controller 的 RNG 必须由 Orchestrator 从 run.seed 派生。
+
+    回归测试:此前 controller_seed 只被写进 ReproductionContext,
+    真正驱动选择的 RNG 由调用方自带 —— 两者毫无关系,而且不会报错。
+    run.seed 还可能是 Orchestrator 现生成的,调用方物理上不可能对上。
+    """
+    controller = RandomController()
+    run = _run().model_copy(update={"algorithm": "random", "seed": 1234})
+
+    result = await _execute_with_controller(store, controller, run)
+
+    assert controller.controller_seed == controller_seed_for(1234)
+    assert all(
+        attempt.reproduction.controller_seed == controller_seed_for(1234)
+        for attempt in result.attempts
+    )
+
+
+@pytest.mark.parametrize("run_seed", [None, 7])
+async def test_same_run_seed_reproduces_the_same_strategy_sequence(
+    tmp_path, run_seed: int | None
+) -> None:
+    """同一个 run.seed 必须重放出同一串策略选择,这正是"可复现"的核心。"""
+    sequences = []
+    for index in range(2):
+        with RunStore(f"sqlite:///{tmp_path / f'seq{index}.db'}") as store:
+            run = _run().model_copy(update={"algorithm": "random", "seed": run_seed or 99})
+            result = await _execute_with_controller(store, RandomController(), run)
+            sequences.append([attempt.strategy_id for attempt in result.attempts])
+
+    assert sequences[0] == sequences[1]
+
+
+async def test_unseeded_random_controller_refuses_to_choose() -> None:
+    """没播种就选,等于用了一个没人知道是什么的随机源。"""
+    with pytest.raises(ControllerProtocolError, match="尚未播种"):
+        RandomController().select(["a", "b"])
+
+
+# ── 成本预算不允许是假的安全网 ───────────────────────────────────────────
+
+
+async def test_cost_budget_is_rejected_when_the_target_cannot_report_cost(
+    store: RunStore,
+) -> None:
+    """不报告成本的目标上,max_cost_usd 永远不会触发也不会报错 —— 那比没有更危险。"""
+    strategy = _one_turn_strategy()
+    orchestrator = RunOrchestrator(
+        executor=_executor(StableAdapter(), FlakyGenerator(0)),
+        controller=StaticController([strategy.id]),
+        store=store,
+        sleep=_no_sleep,
+    )
+    run = _run().model_copy(
+        update={"limits": BudgetLimits(max_attempts=5, max_cost_usd=1.0)},
+    )
+
+    with pytest.raises(RunFailedError) as excinfo:
+        await orchestrator.execute(
+            RunExecutionRequest(run=run, strategies=[strategy], actor="customer_a")
+        )
+
+    assert excinfo.value.failure.stage is FailureStage.PREFLIGHT
+    assert "reports_cost" in excinfo.value.failure.message
+    assert store.get_run(run.id).status is RunStatus.FAILED

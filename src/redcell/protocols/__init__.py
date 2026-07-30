@@ -21,6 +21,7 @@ from redcell.protocols.adapter import (
 from redcell.protocols.common import (
     REDCELL_PROTOCOL_VERSION,
     FindingStatus,
+    ImpactBasis,
     ImpactStatus,
     ObservabilityLevel,
     RedCellModel,
@@ -83,6 +84,7 @@ __all__ = [
     "Finding",
     "FindingStatus",
     "IdempotencySupport",
+    "ImpactBasis",
     "ImpactStatus",
     "Message",
     "MutationOperator",

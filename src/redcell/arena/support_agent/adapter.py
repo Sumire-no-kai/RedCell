@@ -87,6 +87,10 @@ class ArenaAdapter(TargetAdapter):
             reset_scope=ResetScope.FULL_STATE,
             idempotency=IdempotencySupport.NONE,
             delivery_observability=DeliveryObservability.IN_PROCESS,
+            # 成本可观测性由底层 provider 决定,不由靶场决定:
+            # 同一个靶场接 ScriptedProvider 时成本恒为 0(真实且无意义),
+            # 接真实 API 时才有可用的成本数字。
+            reports_cost=self._provider.reports_cost,
         )
 
     @property
@@ -108,6 +112,7 @@ class ArenaAdapter(TargetAdapter):
         tool_results: list[ToolResult] = []
         side_effects: list[SideEffect] = []
         prompt_tokens = completion_tokens = 0
+        cost_usd = 0.0
         visible = ""
         model_name = self._model
 
@@ -119,6 +124,7 @@ class ArenaAdapter(TargetAdapter):
             )
             prompt_tokens += response.prompt_tokens
             completion_tokens += response.completion_tokens
+            cost_usd += response.cost_usd
             model_name = response.model
 
             visible, calls = self._codec.decode(response)
@@ -155,6 +161,7 @@ class ArenaAdapter(TargetAdapter):
             trace_metadata=TraceMetadata(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
+                cost_usd=cost_usd,
                 latency_ms=(time.perf_counter() - started) * 1000,
                 model=model_name,
                 temperature=self._temperature,

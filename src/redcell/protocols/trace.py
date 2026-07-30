@@ -29,13 +29,19 @@ class AttemptStopReason(StrEnum):
     """一场 Attempt 为什么停止。
 
     不能只记 `stopped_early: bool`:同样是只跑了一轮,可能是已经确认漏洞,
-    也可能是执行报错或被人工中止。原因不同,实验含义完全不同。
+    也可能是跑满了计划轮数。原因不同,实验含义完全不同。
+
+    ⚠️ **只列举得到的两种。** 这里刻意没有 `execution_error` / `aborted` ——
+    因为 Attempt 对象只为**完整执行完的会话**而存在:执行失败或被取消时,
+    Executor 抛 AttemptExecutionError,Orchestrator 走 abandon 路径,
+    事实记在 FailureRecord 与 RunEvent 里,**不会构造出一个 Attempt**。
+    列一个永远取不到的值,会让读代码的人以为存在一条根本不存在的分支。
+
+    将来若 resume 需要持久化部分执行的 Attempt,再随那次改动一起加回。
     """
 
     ATTEMPT_SUCCESS = "attempt_success"
     MAX_TURNS = "max_turns"
-    EXECUTION_ERROR = "execution_error"
-    ABORTED = "aborted"
 
 
 class Turn(RedCellModel):

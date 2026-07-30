@@ -9,6 +9,7 @@ from redcell.protocols import (
     AdapterOutput,
     Evidence,
     Finding,
+    ImpactBasis,
     ImpactStatus,
     ObservabilityLevel,
     ReproductionContext,
@@ -71,6 +72,13 @@ def _attempt(run_id: str, strategy_id: str, reward: float, *, turns: int = 1):
     )
 
 
+def _basis_for(impact: ImpactStatus) -> ImpactBasis | None:
+    """协议要求:断言了 impact 必须给证据来源,UNKNOWN 则必须没有。"""
+    if impact is ImpactStatus.UNKNOWN:
+        return None
+    return ImpactBasis.SIDE_EFFECT
+
+
 def _finding(attempt, impact: ImpactStatus, **kwargs) -> Finding:
     observability = kwargs.pop(
         "observability",
@@ -87,7 +95,11 @@ def _finding(attempt, impact: ImpactStatus, **kwargs) -> Finding:
         title="跨用户读取",
         actor="customer_a",
         strategy_id=attempt.strategy_id,
-        triad=ViolationTriad(attempted_action=True, realized_impact=impact),
+        triad=ViolationTriad(
+            attempted_action=True,
+            realized_impact=impact,
+            impact_basis=_basis_for(impact),
+        ),
         evidence=[
             Evidence(
                 description="以 customer_a 身份读取了 customer_b",

@@ -130,7 +130,7 @@ def test_reproduction_context_records_replay_inputs() -> None:
         target_temperature=0.0,
     )
     assert ctx.seed == 42
-    assert ctx.protocol_version == REDCELL_PROTOCOL_VERSION == "0.3.0"
+    assert ctx.protocol_version == REDCELL_PROTOCOL_VERSION == "0.4.0"
     assert ctx.recorded_at.tzinfo is not None
 
 

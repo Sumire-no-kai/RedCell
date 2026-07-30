@@ -5,6 +5,112 @@
 
 ---
 
+## 2026-07-31 · 代码审查修复:ImpactBasis、Controller 播种、Finding 身份
+
+### 2026-07-31 21:40 AEST · Step 01 · 六项审查发现的修复与验证
+
+- **进度:** 在 `feat/run-orchestrator` 上完成一轮完整代码审查并修复全部发现。
+  协议版本 `0.3.0` → `0.4.0`(含不兼容变更)。**未新开分支**:这些是对
+  本分支尚未合并的交付本身的审查修复,另开分支会把 stacked PR 叠到第三层。
+
+- **P1-① Canary 泄漏在非 FULL 目标上会杀掉整个 Run(真实缺陷,已复现):**
+  - **现象:** `Level1Scorer._score_canary` 把 canary Finding 的 impact 硬编码为
+    `REALIZED`,而 `Finding._enforce_impact_semantics` 统一按
+    `observability.can_observe_side_effects` 卡。在 `PARTIAL` / `RESPONSE_ONLY`
+    上构造 Finding 直接抛 ValidationError。
+  - **故障链:** 评分器抛异常 → Executor 归入 `FailureStage.SCORING` →
+    `RetrySafety.UNSAFE` → `failure.serious` → Run 判 `FAILED`。
+    **最高价值的事件(第一次成功偷到 canary)变成了 Run killer。**
+  - **为什么此前没暴露:** ArenaAdapter 是 `FULL`。但通用 HTTP Adapter 在 MVP 范围内,
+    而三态设计本来就是为它准备的 —— bug 正埋在它要落地的位置。
+  - **根因:** 不变量写宽了。`can_observe_side_effects` 表达的是"能不能看见副作用",
+    但 canary 泄漏的证据是**回复正文里的字符串**,`RESPONSE_ONLY` 就已经看得见。
+    一个门槛混了两种证据来源。
+  - **方案选择(与作者确认走 B):**
+    - A(最小):`_score_canary` 特判 + 放宽不变量为带条件的规则。
+      **否掉的理由:** 不变量变成条件规则后更容易被下一次改动写错。
+    - **B(采用):** 新增 `ImpactBasis { RESPONSE_CONTENT, SIDE_EFFECT }`,
+      `ViolationTriad.impact_basis` 显式记录"这条 impact 凭什么成立",
+      校验按 basis 分别判定。协议再动一次,但把判定依据显式化,
+      正好是 Intent/Attempt/Impact 三分的延伸。
+  - **配套不变量(全部写成 model_validator,不靠自觉):**
+    ①断言 impact 必须给 basis;②UNKNOWN 不允许有 basis;
+    ③basis 在当前可观测性下观测不到时不允许断言 impact。
+  - **验证:** 新增 scorer 级回归测试(`PARTIAL` / `RESPONSE_ONLY` 两档参数化)
+    与协议级正反测试;修复前用同一输入可稳定复现 ValidationError。
+
+- **P1-② Controller 的 RNG 从未与 `run_seed` 绑定(可复现性缺口):**
+  - **现象:** `controller_seed_for()` 的结果只被**写进** ReproductionContext,
+    而 `RandomController` 的 RNG 由调用方构造时自带,两者毫无关系。
+    更根本的是 `run.seed` 可能是 `_prepare_run` 现生成的,调用方物理上不可能对上。
+  - **后果:** 持久化的 `controller_seed` 是个假数字。generator / target 随机域能重放,
+    **策略选择序列不能** —— 而那对 Random 基线是唯一重要的随机性。
+    与 2026-07-29 决策 6 "从 run_seed 稳定派生 controller_seed" 不符。
+  - **修复:** `SearchController` 增加 `seed()` / `_on_seeded()` / `requires_seed` /
+    `controller_seed`;Orchestrator 在 `_prepare_run` 之后统一播种;
+    preflight 复核实际种子等于派生值(子类覆写 `seed()` 却没生效时当场炸)。
+    `RandomController` 未播种即 `_choose` 时抛 `ControllerProtocolError`,
+    不再静默使用一个来历不明的随机源。
+  - **边界:** 历史数据不受影响 —— `controller_decisions` 表一直存着完整决策轨迹。
+
+- **P2-③ `attempted_action` 文档与语义漂移:** docstring 写"是否生成了违规的工具调用",
+  但 canary Finding 也置 True(且这是对的:CALIBRATION §4 定义的是"违规**行为**")。
+  该字段同时承载提前停止、Attempt ASR 与报告三个用途,一行过时注释足以让人得出错误结论。
+  已改写 docstring 并同步 `CONCEPTS.md`。
+
+- **P2-④ Finding id 在重复评分下漂移:** Executor 每轮对完整 turns 重新评分,
+  而 `Finding.id` 是随机 uuid7,于是同一条违规在每一轮的 `TURN_COMPLETED`
+  事件里各带一个新 id 出现,任何基于事件流的重建都会重复计数。
+  - **修复:** id 由 `(attempt_id, category, 结构指纹)` 经 BLAKE2b 确定性派生。
+    指纹取**违规的结构**而非文本(工具名 + 参数名 + 约束种类,**不含参数值**),
+    因此它同时是 Phase 1 Finding 去重的天然键 —— 一举两得。
+  - **顺带的语义修正:** 同一场 Attempt 内结构相同的违规现在合并成**一条** Finding
+    的多份证据,不再各算一条。理由与 CONCEPTS 的 coverage 论述一致:
+    "发现数量"是虚荣指标。组内只要有任何一次真的执行成功,整条 Finding 即
+    `REALIZED` —— "被拦 3 次成功 1 次"的整体事实是纵深防御失守。
+  - **安全边界:** canary 值只进哈希输入,不进 id 本身,避免机密出现在 id、日志和报告里。
+
+- **P2-⑤ `max_cost_usd` 是一个假的安全网:** `TraceMetadata.cost_usd` 从未被填充
+  (ArenaAdapter 不写),所以成本上限**永远不会触发、也永远不会报错**。
+  - **修复(按层归位):** 定价知识属于 provider → `LLMResponse.cost_usd` +
+    `LLMProvider.reports_cost`(默认 **False**,保守);Adapter 汇总进
+    `TraceMetadata.cost_usd` 并经 `AdapterCapabilities.reports_cost` 上报;
+    Orchestrator preflight 在目标不报告成本时**拒绝** `max_cost_usd` 配置。
+  - **为什么默认 False:** 默认 True 的话,一个忘了填成本的 provider 会让上限
+    静默失效 —— 那正是本条要消灭的失败模式。
+
+- **P3 清理:** ①`SearchController.latest_decision` / `has_pending_decision`,
+  避免 Orchestrator 每轮多次深拷贝整段决策历史;②`_Selection` → `Selection`
+  并导出(私有名跨模块 import);③删除 `AttemptStopReason.EXECUTION_ERROR` /
+  `ABORTED` —— Attempt 对象只为完整执行完的会话存在,失败走 abandon 路径、
+  事实记在 FailureRecord/RunEvent 里,这两个值**永远取不到**;
+  列一个取不到的值会让人以为存在一条不存在的分支(resume 需要时随那次改动加回);
+  ④`level1.py` 同一表达式重复调用 `policy.tool()`;⑤`_score_canary` 命中第一个
+  canary 就 return,多 canary 时会低估 coverage,改为逐条生成 Finding。
+
+- **遇到的问题与解决:**
+  1. 首次 `pytest` 出现 5 个 ERROR,均为 `PermissionError [WinError 5]`
+     无法在系统 temp 建 `pytest-of-*` 目录。**不是代码问题** ——
+     改用 `--basetemp` 指向可写目录后全部通过。未因报错去改动代码。
+  2. 重构 `_violation_of` 返回值为 `(description, fingerprint)` 后,
+     漏改一处把整个对象赋给了 `best_evidence`,`SignalScore.evidence` 的
+     字符串校验当场拦下。协议层 `extra="forbid"` + 类型校验再次兑现价值。
+
+- **验证证据:**
+  - pytest: **245 passed**(修复前 223,新增 22 条针对本轮每个发现的测试);
+  - Ruff lint: **All checks passed**;Ruff format: 无变更;
+  - Black `--check`: **65 files unchanged**(此前记录为 BLOCKED/ENVIRONMENT,
+    本轮 `.venv` 可用,已补跑并通过);
+  - P1-① 修复前的复现证据:同一输入在修复前抛 ValidationError,修复后产出
+    带 `RESPONSE_CONTENT` basis 的正常 Finding。
+
+- **剩余状态:** 本轮六项修复 `DONE`。尚未变更、也未伪装完成:
+  Bandit、真实 Provider / LLM mutation、CLI、Finding Validator、靶场校准。
+  `feat/executor-controller` 与 `feat/run-orchestrator` 的 PR 仍 `BLOCKED`
+  (GitHub 403,见 07-31 Step 04),master 尚未包含本实现。
+
+---
+
 ## 2026-07-31 · Run Orchestrator、结构化故障与原子持久化实现
 
 ### 2026-07-31 00:24 AEST · Step 01 · 完整运行状态机实现与验证

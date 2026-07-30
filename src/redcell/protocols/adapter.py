@@ -57,6 +57,14 @@ class AdapterCapabilities(RedCellModel):
     idempotency: IdempotencySupport = IdempotencySupport.NONE
     delivery_observability: DeliveryObservability = DeliveryObservability.UNKNOWN
 
+    reports_cost: bool = False
+    """目标是否会真实填充 `TraceMetadata.cost_usd`。
+
+    存在的意义是让 `max_cost_usd` 预算**要么真的生效,要么当场报错**:
+    不报告成本的目标上,成本上限永远不会触发,也永远不会报错 ——
+    那是一个假的安全网,比没有安全网更危险。Orchestrator 在 preflight 据此拒绝配置。
+    """
+
 
 class ToolCall(RedCellModel):
     """目标 agent 生成的一次工具调用。

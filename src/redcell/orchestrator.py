@@ -39,9 +39,10 @@ from redcell.protocols.finding import Finding
 from redcell.protocols.run import Run, RunEvent, RunEventType, RunStatus
 from redcell.protocols.strategy import Strategy
 from redcell.protocols.trace import Attempt, CostRecord
-from redcell.randomness import derive_seed
+from redcell.randomness import controller_seed_for, derive_seed
 from redcell.retry import ReliabilityPolicy, RetryPolicy
 from redcell.search.base import (
+    ControllerDecision,
     ControllerDecisionOutcome,
     ControllerProtocolError,
     SearchController,
@@ -119,6 +120,9 @@ class RunOrchestrator:
         run = request.run.model_copy(deep=True)
         strategies = list(request.strategies)
         run = self._prepare_run(run, strategies)
+        # 必须在这里播种,不能交给调用方:run.seed 可能刚在 _prepare_run 里生成,
+        # 调用方构造 Controller 时还不知道它。preflight 会复核这一条真的生效了。
+        self._controller.seed(controller_seed_for(run.seed or 0))
         retry_rng = random.Random(derive_seed(run.seed or 0, "retry-backoff"))
         existing = await self._persist(lambda: self._store.get_run(run.id), retry_rng)
         if existing is not None:
@@ -184,8 +188,8 @@ class RunOrchestrator:
                 budget.reserve_attempt(strategy_id)
                 run = run.model_copy(update={"usage": budget.usage()})
 
-                pending_decision = self._controller.decisions[-1]
-                if pending_decision.attempt_index != attempt_index:
+                pending_decision = self._controller.latest_decision
+                if pending_decision is None or pending_decision.attempt_index != attempt_index:
                     raise RuntimeError("Controller decision index 与逻辑 Attempt index 不一致")
                 selected_event = self._event(
                     run,
@@ -272,7 +276,7 @@ class RunOrchestrator:
                             self._store.commit_abandonment,
                             run=run,
                             attempt_id=attempt_id,
-                            decision=self._controller.decisions[-1],
+                            decision=self._require_latest_decision(),
                             run_events=events,
                         ),
                         retry_rng,
@@ -308,7 +312,7 @@ class RunOrchestrator:
                         run=run,
                         attempt=result.attempt,
                         findings=result.findings,
-                        decision=self._controller.decisions[-1],
+                        decision=self._require_latest_decision(),
                         run_event=committed_event,
                     ),
                     retry_rng,
@@ -376,8 +380,8 @@ class RunOrchestrator:
                 run.model_copy(update={"usage": budget.usage()}),
                 failure,
             )
-            if _has_pending_decision(self._controller):
-                strategy_id = self._controller.decisions[-1].selected_strategy_id
+            if self._controller.has_pending_decision:
+                strategy_id = self._require_latest_decision().selected_strategy_id
                 self._controller.abandon(strategy_id, _failure_reason(failure))
                 budget.abandon_attempt()
                 failed = failed.model_copy(update={"usage": budget.usage()})
@@ -387,7 +391,7 @@ class RunOrchestrator:
                 attempt_id=(current_attempt_id if current_result is not None else None),
                 payload={"failure": failure.model_dump(mode="json")},
             )
-            latest_decision = self._controller.decisions[-1] if self._controller.decisions else None
+            latest_decision = self._controller.latest_decision
             if (
                 current_attempt_id is not None
                 and current_result is not None
@@ -516,8 +520,8 @@ class RunOrchestrator:
         current_attempt_id: str | None,
         current_result: ExecutionResult | None,
     ) -> None:
-        if _has_pending_decision(self._controller):
-            selected = self._controller.decisions[-1].selected_strategy_id
+        if self._controller.has_pending_decision:
+            selected = self._require_latest_decision().selected_strategy_id
             self._controller.abandon(selected, "user cancelled")
             budget.abandon_attempt()
         aborted = run.model_copy(
@@ -528,7 +532,7 @@ class RunOrchestrator:
             }
         )
         event = self._event(aborted, RunEventType.RUN_ABORTED)
-        latest_decision = self._controller.decisions[-1] if self._controller.decisions else None
+        latest_decision = self._controller.latest_decision
         if (
             current_attempt_id is not None
             and current_result is not None
@@ -621,6 +625,21 @@ class RunOrchestrator:
             raise ValueError(
                 f"Run.algorithm='{run.algorithm}' 与 Controller '{self._controller.name}' 不一致"
             )
+        expected_seed = controller_seed_for(run.seed or 0)
+        if self._controller.controller_seed != expected_seed:
+            # 子类若覆写 seed() 而没有真正生效,这里当场炸;否则记录下来的
+            # controller_seed 会是一个假数字,而重放失败要到很久以后才发现。
+            raise ValueError(
+                f"Controller 的种子({self._controller.controller_seed})与从 run.seed "
+                f"派生的值({expected_seed})不一致;记录下来的 controller_seed 将无法重放"
+            )
+        reports_cost = self._executor.adapter_capabilities.reports_cost
+        if run.limits.max_cost_usd is not None and not reports_cost:
+            raise ValueError(
+                "目标不报告成本(AdapterCapabilities.reports_cost=False),"
+                "max_cost_usd 将永远不会触发也不会报错 —— 那是一个假的安全网。"
+                "请移除该上限,或换用能填充 cost_usd 的 provider"
+            )
         if run.target_name != self._executor.target_name:
             raise ValueError("Run.target_name 与 Executor Policy 不一致")
         if run.policy_version != self._executor.policy_version:
@@ -639,6 +658,13 @@ class RunOrchestrator:
                     attempt_index=0,
                 )
             )
+
+    def _require_latest_decision(self) -> ControllerDecision:
+        """取最近一次决策;不存在即为内部不变量被破坏,不静默兜底。"""
+        decision = self._controller.latest_decision
+        if decision is None:
+            raise RuntimeError("Controller 没有任何决策,但流程已经进入需要决策的分支")
+        return decision
 
     def _event(
         self,
@@ -683,13 +709,6 @@ class RunOrchestrator:
                 "failure": failure,
             }
         )
-
-
-def _has_pending_decision(controller: SearchController) -> bool:
-    return bool(
-        controller.decisions
-        and controller.decisions[-1].outcome is ControllerDecisionOutcome.PENDING
-    )
 
 
 def _failure_reason(failure: FailureRecord) -> str:

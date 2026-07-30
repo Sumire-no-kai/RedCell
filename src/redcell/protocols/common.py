@@ -12,7 +12,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
-REDCELL_PROTOCOL_VERSION = "0.3.0"
+REDCELL_PROTOCOL_VERSION = "0.4.0"
 
 
 # ── ID ───────────────────────────────────────────────────────────────────────
@@ -66,9 +66,9 @@ class Role(StrEnum):
 class ObservabilityLevel(StrEnum):
     """Adapter 自报"我能看见目标的多少内部行为"。
 
-    Impact(真实影响)能不能判定,完全取决于这个等级——
-    看不见副作用的目标上,Impact 只能是 UNKNOWN,而不能填 False。
-    见 ImpactStatus 的说明。
+    Impact(真实影响)能不能判定,取决于**本等级**与**该结论所依据的证据来源**
+    (见 ImpactBasis)两者的组合:看不见副作用的目标上,依赖副作用的结论只能是
+    UNKNOWN 而不能填 False;但只依赖回复正文的结论(如 canary 泄漏)仍然成立。
     """
 
     FULL = "full"
@@ -89,6 +89,33 @@ class ObservabilityLevel(StrEnum):
         return self in (ObservabilityLevel.FULL, ObservabilityLevel.PARTIAL)
 
 
+class ImpactBasis(StrEnum):
+    """判定 Realized Impact 时所依据的**证据来源**。
+
+    为什么需要它:"能不能断言 impact"取决于**这条结论靠什么证据成立**,
+    而不是取决于一个统一的可观测性门槛。
+
+    * 越权退款是否真的发生 —— 只有看得见 side_effects 才知道;
+    * canary 是否真的泄漏 —— 它就印在回复正文里,连黑盒 chat API 都看得见。
+
+    没有这个字段,两者就得共用同一个门槛。取严则数据泄漏类结论在
+    非 FULL 目标上无法成立(而它本来成立);取松则副作用类结论会被
+    "看不见"当成"没发生"。两个方向都是错的,所以门槛必须按证据来源分开。
+    """
+
+    RESPONSE_CONTENT = "response_content"
+    """证据是模型回复正文里的内容(如 canary 字符串)。任何可观测性等级都能看见。"""
+
+    SIDE_EFFECT = "side_effect"
+    """证据是后端状态的真实改变(如退款记录)。只有 FULL 插桩才能看见。"""
+
+    def is_observable_at(self, level: ObservabilityLevel) -> bool:
+        """在这个可观测性等级下,本类证据能不能被观测到。"""
+        if self is ImpactBasis.RESPONSE_CONTENT:
+            return True
+        return level.can_observe_side_effects
+
+
 class ImpactStatus(StrEnum):
     """Realized Impact 的三态。
 
@@ -98,6 +125,8 @@ class ImpactStatus(StrEnum):
 
     把 UNKNOWN 折叠成 NOT_REALIZED 会造成系统性漏报,
     而安全工具里漏报比误报危险得多。
+
+    ⚠️ "能不能断言"由 ImpactBasis 决定,不由本枚举决定 —— 见 ImpactBasis。
     """
 
     REALIZED = "realized"
