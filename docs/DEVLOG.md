@@ -87,6 +87,15 @@
 - **剩余状态:** **TODO** — 推送 `origin/feat/run-orchestrator`;当前尚未创建 PR,
   且该分支依赖尚未合并的 `feat/executor-controller`,不得误报为已进入 master。
 
+### 2026-07-31 00:28 AEST · Step 03 · 工作分支推送
+
+- **进度:** `feat/run-orchestrator` 已首次推送并设置跟踪
+  `origin/feat/run-orchestrator`。
+- **状态边界:** 远端分支可审查;尚未创建或合并 PR,master 未包含本实现。
+  因本分支建立在 `feat/executor-controller` 上,PR 应采用明确的 stacked
+  依赖顺序,避免把两块历史误写成彼此独立。
+- **剩余状态:** **DONE(分支交付)** / **TODO(PR 集成)**。
+
 ---
 
 ## 2026-07-30 · Run Orchestrator 失败语义设计
