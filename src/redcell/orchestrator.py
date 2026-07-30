@@ -12,6 +12,7 @@ import secrets
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from functools import partial
+from typing import TypeVar
 
 from sqlalchemy.exc import OperationalError
 
@@ -49,6 +50,7 @@ from redcell.storage.store import RunStore
 
 Sleep = Callable[[float], Awaitable[None]]
 UtcNow = Callable[[], datetime]
+T = TypeVar("T")
 
 
 class RunExecutionRequest(RedCellModel):
@@ -72,8 +74,20 @@ class RunFailedError(RuntimeError):
         self.failure = failure
 
 
+class OrchestratorReuseError(RuntimeError):
+    """同一个有状态 Orchestrator 实例被用于第二个 execute 调用。"""
+
+
+class RunAlreadyExistsError(RuntimeError):
+    """Store 中已经存在同一 run_id;拒绝覆盖既有运行历史。"""
+
+
 class RunOrchestrator:
-    """一条窄接口背后的完整串行运行状态机。"""
+    """一条窄接口背后的完整串行运行状态机。
+
+    实例是一次性的:Controller 决策历史与事件序号都属于一个 Run。
+    新 Run 必须创建新的 Controller 和 RunOrchestrator。
+    """
 
     def __init__(
         self,
@@ -94,13 +108,24 @@ class RunOrchestrator:
         self._sleep = sleep
         self._utcnow = utcnow or (lambda: datetime.now(UTC))
         self._event_sequence = 0
+        self._claimed = False
 
     async def execute(self, request: RunExecutionRequest) -> RunExecutionResult:
         """执行到预算终点;严重错误会持久化 FAILED 后抛 RunFailedError。"""
+        if self._claimed:
+            raise OrchestratorReuseError("RunOrchestrator 是一次性状态机;新 Run 必须创建新实例")
+        self._claimed = True
+
         run = request.run.model_copy(deep=True)
         strategies = list(request.strategies)
         run = self._prepare_run(run, strategies)
         retry_rng = random.Random(derive_seed(run.seed or 0, "retry-backoff"))
+        existing = await self._persist(lambda: self._store.get_run(run.id), retry_rng)
+        if existing is not None:
+            raise RunAlreadyExistsError(
+                f"Run '{run.id}' 已存在;拒绝覆盖既有状态与事件。"
+                "断点恢复必须使用未来独立的 resume interface"
+            )
 
         try:
             self._preflight(run, strategies, request.actor)
@@ -550,14 +575,14 @@ class RunOrchestrator:
 
     async def _persist(
         self,
-        operation: Callable[[], None],
+        operation: Callable[[], T],
         retry_rng: random.Random,
-    ) -> None:
+    ) -> T:
+        """执行一次有界重试的 Store 操作;写入只重放同一组稳定 ID。"""
         retry_number = 0
         while True:
             try:
-                operation()
-                return
+                return operation()
             except OperationalError as exc:
                 transient = _persistence_failure(exc, fatal=False)
                 max_retries = self._retry_policy.max_retries_for(transient)

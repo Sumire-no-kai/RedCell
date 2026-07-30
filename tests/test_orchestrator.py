@@ -24,6 +24,8 @@ from redcell.generation import (
     ScriptedAttackGenerator,
 )
 from redcell.orchestrator import (
+    OrchestratorReuseError,
+    RunAlreadyExistsError,
     RunExecutionRequest,
     RunFailedError,
     RunOrchestrator,
@@ -339,3 +341,78 @@ async def test_persistence_retry_never_reexecutes_target(
     assert result.run.status is RunStatus.COMPLETED
     assert commit_calls == 3
     assert adapter.send_calls == 1
+
+
+async def test_orchestrator_instance_is_single_use_and_preserves_completed_run(
+    store: RunStore,
+) -> None:
+    strategy = _one_turn_strategy()
+    request = RunExecutionRequest(
+        run=_run(),
+        strategies=[strategy],
+        actor="customer_a",
+    )
+    orchestrator = RunOrchestrator(
+        executor=_executor(
+            StableAdapter(),
+            ScriptedAttackGenerator({strategy.id: ["attack"]}),
+        ),
+        controller=StaticController([strategy.id]),
+        store=store,
+        retry_policy=RetryPolicy(base_delay_seconds=0, max_delay_seconds=0),
+        sleep=_no_sleep,
+    )
+
+    completed = await orchestrator.execute(request)
+    events_before = store.events_for(completed.run.id)
+
+    with pytest.raises(OrchestratorReuseError):
+        await orchestrator.execute(request)
+
+    persisted = store.get_run(completed.run.id)
+    assert persisted is not None
+    assert persisted.status is RunStatus.COMPLETED
+    assert store.events_for(completed.run.id) == events_before
+
+
+async def test_existing_run_id_is_rejected_without_overwriting_history(
+    store: RunStore,
+) -> None:
+    strategy = _one_turn_strategy()
+    request = RunExecutionRequest(
+        run=_run(),
+        strategies=[strategy],
+        actor="customer_a",
+    )
+
+    first = RunOrchestrator(
+        executor=_executor(
+            StableAdapter(),
+            ScriptedAttackGenerator({strategy.id: ["attack"]}),
+        ),
+        controller=StaticController([strategy.id]),
+        store=store,
+        retry_policy=RetryPolicy(base_delay_seconds=0, max_delay_seconds=0),
+        sleep=_no_sleep,
+    )
+    completed = await first.execute(request)
+    events_before = store.events_for(completed.run.id)
+
+    second = RunOrchestrator(
+        executor=_executor(
+            StableAdapter(),
+            ScriptedAttackGenerator({strategy.id: ["different attack"]}),
+        ),
+        controller=StaticController([strategy.id]),
+        store=store,
+        retry_policy=RetryPolicy(base_delay_seconds=0, max_delay_seconds=0),
+        sleep=_no_sleep,
+    )
+
+    with pytest.raises(RunAlreadyExistsError):
+        await second.execute(request)
+
+    persisted = store.get_run(completed.run.id)
+    assert persisted is not None
+    assert persisted.status is RunStatus.COMPLETED
+    assert store.events_for(completed.run.id) == events_before

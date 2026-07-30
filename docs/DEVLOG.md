@@ -109,6 +109,53 @@
 - **剩余状态:** **BLOCKED(PR only)** — 代码、测试和远端分支均已完成;
   PR 创建需要外部权限变化。
 
+### 2026-07-31 09:21 AEST · Step 05 · 交付前自审与重复运行防覆盖修复
+
+- **进度:** 按作者要求重新从代码而非既有结论复核 Orchestrator、
+  Controller、Budget、Executor、Retry 与 RunStore 的关键不变量。
+  重点检查每次选择是否必有终态、失败是否会伪装成零分、存储失败是否会
+  重新攻击、取消时是否释放 pending、重复调用是否可能改写历史。
+- **发现的问题:** `RunOrchestrator` 实际携带 Controller 历史与事件序号,
+  只能服务一个 Run,但此前 interface 没有显式禁止复用。更严重的是:
+  使用新 Orchestrator 但重复 `run_id` 时,`session.merge` 可能把已完成 Run
+  改回 `RUNNING/FAILED`,破坏既有实验事实。
+- **解决方式:**
+  - 增加一次性实例保护;第二次 `execute()` 抛 `OrchestratorReuseError`,
+    且不产生任何写入;
+  - 启动前通过带有界存储重试的查询检查 `run_id`;已存在则抛
+    `RunAlreadyExistsError`,不覆盖 Run、Decision 或 Event;
+  - 没有把重复启动伪装成断点恢复。真正 resume 需要从事件重建 Budget、
+    Controller 与未决外部副作用,继续列为后续独立协议。
+- **文档同步:** `docs/CONCEPTS.md` 新增一次性状态机解释、重复 ID 与 resume
+  的区别、Adapter 请求级重试与 Tool 声明的代码真实边界,并补充截至
+  2026-07-31 的已实现/未实现矩阵及 CLI → Provider/Mutation → Bandit 讨论
+  → Validator/消融的下一步顺序。
+- **验证证据:** 新增 2 个回归测试,分别验证实例复用和重复 `run_id`
+  均被拒绝,且原 COMPLETED Run 与完整 Event 历史保持不变;
+  `tests/test_orchestrator.py`: **8 passed**;针对改动文件 Ruff lint 通过,
+  Ruff formatter 已统一格式。
+- **剩余状态:** **DONE(问题修复与针对性验证)** /
+  **TODO(全量 pytest、Ruff、diff 与 Git 提交/推送检查)**。
+
+### 2026-07-31 09:23 AEST · Step 06 · 全量质量门与文档真实性复核
+
+- **进度:** 在修复和文档补全后重跑整个项目质量门,并逐项对照
+  `docs/CONCEPTS.md` 的完成矩阵与实际文件。确认 CLI、真实 Provider /
+  LLM mutation、Bandit、Finding Validator、resume 与多 seed 消融仍明确为
+  未实现,没有把 Python 内核闭环误写成完整 Phase 0 产品。
+- **验证证据:**
+  - pytest: **223 passed in 2.93s**;
+  - Ruff lint: **All checks passed**;
+  - Ruff format: **65 files already formatted**;
+  - `git diff --check`:通过;
+  - 分支仍为 `feat/run-orchestrator`,改动仅含本轮自审修复、2 个回归测试、
+    `CONCEPTS` 与本日志。
+- **环境边界:** 既有 `.venv` 的 Python 入口仍指向已删除解释器,
+  因此沿用已记录的 Codex bundled Python + 项目 site-packages 执行 pytest。
+  Black 的环境阻塞没有被伪装成通过;本轮格式权威证据仍为项目 Ruff formatter。
+- **剩余状态:** **DONE(代码审查、全量验证与文档核对)** /
+  **TODO(提交并推送本轮修复)**。
+
 ---
 
 ## 2026-07-30 · Run Orchestrator 失败语义设计

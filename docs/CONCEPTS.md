@@ -1377,6 +1377,18 @@ retry_semantics =
 只声明“这个 Adapter 可以重试”太粗;只声明工具也不够,因为网络层还要知道
 请求有没有送达、是否支持 key 和 reset。
 
+当前通用重试分类器在**请求超时的那一刻**只能依据 Adapter 的请求级能力做决定。
+原因很简单:响应都没有回来时,RedCell 可能还不知道目标 Agent 最终选择了哪个工具。
+`ToolPolicy.effect_kind/retry_semantics` 目前承担两件事:
+
+1. 作为靶场与报告的 ground truth,如实说明工具本身是否有副作用;
+2. 约束具体 Adapter 的能力声明——只有当 Adapter 确实能对整次请求去重,
+   或能完整 reset 所有工具副作用时,它才可以声明请求级可安全重试。
+
+因此它们**不是**当前 Orchestrator 里一个事后猜测工具名的开关。未来若某种 Adapter
+能在断线后查询服务器端执行状态,可以把这项事实包装成结构化
+`FailureRecord` 再细化判断;未知仍然不得自动重试。
+
 默认全部取最保守的 `NONE/UNKNOWN`:**没声明不等于安全,而是禁止自动重试。**
 内置客服靶场声明 `FULL_STATE + IN_PROCESS`;它每次重试前能把模拟副作用彻底清掉。
 
@@ -1469,6 +1481,28 @@ select → execute → score → atomic commit → update/abandon → next selec
 一个 Run 默认固定 Actor,避免 Strategy 强弱与不同身份/数据难度混在一起。
 未来 CLI / Dashboard 可以显式选择 Actor;多 Actor 实验也应作为独立维度,
 不能在 Attempt 之间暗中随机切换。
+
+### 14.18 为什么一个 Orchestrator 实例只能跑一个 Run
+
+`RunOrchestrator` 不是无状态工具函数。它里面有两段只属于当前 Run 的状态:
+
+- Controller 已经做过哪些选择、学到了哪些反馈;
+- `RunEvent.sequence` 已经排到第几号。
+
+类比一本有连续页码的实验记录本:做新实验应该换一本新记录本,
+不能在旧实验后面继续编号,更不能把封面上的旧实验编号改成新的。
+
+因此当前 interface 明确执行两道拒绝:
+
+1. 同一个 `RunOrchestrator` 实例第二次调用 `execute()` →
+   `OrchestratorReuseError`,不写数据库;
+2. SQLite 中已经存在相同 `run_id` → `RunAlreadyExistsError`,
+   原有 Run、Decision 和 Event 一行不改。
+
+为什么不“发现重复就自动继续”?因为**重复启动**和**断点恢复**不是同一件事。
+真正的 resume 必须先从事件中重建预算、Controller 学习状态和未决 Decision,
+还要判断最后一次外部请求是否可能产生副作用。当前尚未实现这套恢复协议,
+所以假装 resume 比明确拒绝更危险。
 
 ---
 
@@ -1649,3 +1683,96 @@ src/redcell/
 > 标准 Thompson/UCB 的实验含义不再干净。Phase 0 先隔离验证预算分配,
 > 同时测量去重 Coverage;若 Adaptive 更快但覆盖更窄,那也是诚实且有价值的结论。
 > Phase 1 再把新颖性折扣与非平稳 Bandit 作为独立改进,避免一次实验同时改五个变量。
+
+---
+
+## 17. 截至 2026-07-31:系统现在到哪一步,下一步是什么
+
+### 17.1 一句话状态
+
+**Phase 0 的“可验证运行内核”已经闭环,但 Phase 0 产品里程碑还没有完成。**
+
+现在可以在 Python 测试或调用代码中,用自带客服靶场和确定性假 LLM 完整跑通:
+
+```text
+Run 配置
+  → Static / Random 选 Strategy
+  → Generator 产生攻击消息
+  → Executor 与靶场多轮对话
+  → Level-1 读取插桩证据
+  → Attempt / Impact 分层
+  → 安全重试或明确 abandon
+  → SQLite 原子落盘
+  → JSON / HTML 报告模型
+```
+
+这证明“骨头接得上”:协议、执行、判定、预算、审计和存储采用同一套语义。
+但普通用户还没有 `redcell run` 命令,也没有接入真实模型,
+所以不能把它说成“已经能对真实 Agent 自动红队的完整产品”。
+
+### 17.2 已实现与未实现边界
+
+| 层 | 当前状态 | 已经能证明什么 | 还不能声称什么 |
+|---|---|---|---|
+| 协议与靶场 | ✅ 已实现 | Actor、Policy、工具权限、canary、模拟副作用可确定判定 | 还不是 3–5 个异构靶场 |
+| Strategy | ✅ 6 个预注册策略 | 有冻结的攻击类别和预期强弱 | 真实 LLM 还不会自动改写话术 |
+| Executor | ✅ 已实现 | 单/多轮、语义早停、稳定 seed/ID、完整 trace | 未接真实 Provider |
+| Scoring | ✅ Level-1 | Attempt 与 Impact 不靠分数猜,阴性对照可测误报 | LLM Judge 与 Phase 1 模糊类别未做 |
+| Controller | ✅ Static/Random | 有公平、可审计的非学习基线 | Bandit 选型仍 `OPEN`,尚无自适应学习 |
+| Orchestrator | ✅ 已实现 | 预算、重试、abandon、可靠性、事务和终态能闭环 | 崩溃后的 resume 尚未实现 |
+| Storage/Report | ✅ 内核已实现 | SQLite 留完整证据,JSON/HTML 共用同一聚合 | 还没有 CLI 把报告交到用户手里 |
+| Validator/Experiment | ❌ 未实现 | — | 还没有复现率和多 seed 消融数字 |
+| Web/Dashboard | ❌ Phase 2 | — | 当前没有可视化操作台 |
+
+代码在 stacked 工作分支上完成并推送,但尚未进入 `master`:
+
+```text
+feat/executor-controller
+        ↓ 作为依赖
+feat/run-orchestrator
+```
+
+PR 创建权限当前受阻。因此“分支实现完成”与“主干已集成”必须分开表述。
+
+### 17.3 下一步的严格顺序
+
+**第一步:补 CLI composition root。**
+
+CLI 不重新实现业务逻辑,只负责把现有深模块接起来:
+
+```text
+读取冻结配置
+→ 创建 Policy / Adapter / Generator / Controller / Store
+→ 组装 RunOrchestrator
+→ 调用 execute()
+→ 输出 run_id、终态与报告路径
+```
+
+首批建议只做 `redcell run`、`redcell report` 和明确的退出码。
+这样能先让 ScriptedProvider 的零成本端到端 smoke test 成为真实用户入口,
+也能验证异常、取消和文件路径在人机接口上的表现。
+
+**第二步:接真实 Provider 与无记忆 LLM mutation。**
+
+真实 Provider 必须回填 token、美元成本、模型和 temperature;
+mutation 每个 Attempt 只从 Strategy + seed 独立生成,不能偷看前序 Finding,
+否则 Bandit 与 Mutator 同时学习,实验无法归因。
+
+**第三步:在写 Bandit 前完成一次核心设计讨论。**
+
+必须定稿:
+
+1. 选 UCB、Thompson 还是其他一种;
+2. 当前 `[0,1]` 分档信号如何更新算法——不能把连续值硬塞给只接受二元成败的
+   Beta-Bernoulli Thompson 却不解释统计含义;
+3. 冷启动每个 Strategy 至少试几次;
+4. 决策审计要保存哪些内部状态。
+
+这一步属于算法核心,仍是 `OPEN`,不能在 CLI 批次里顺手猜一个实现。
+
+**第四步:校准、Finding Validator 与第一组消融。**
+
+先按 `CALIBRATION.md` 冻结规则校准整体难度,再对确认 Finding 重放 N 次算复现率,
+最后在 2–3 个预算点、至少 10 个 seed 下比较 Adaptive / Static / Random。
+到这里才有资格说 **Phase 0 完成**:有可演示入口、可复现 Finding,
+以及一条带实验条件和不确定性的硬数字。
