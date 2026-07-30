@@ -78,6 +78,15 @@
   Black 精确检查为 **BLOCKED/ENVIRONMENT**,不影响已通过的 Ruff 格式证据,
   但修复 `.venv` 后应补跑。
 
+### 2026-07-31 00:27 AEST · Step 02 · 本地提交完成
+
+- **进度:** 已在 `feat/run-orchestrator` 创建提交
+  `9c0b293 feat: add reliable run orchestrator`。
+- **提交前证据:** 221 tests passed;Ruff lint/format 与 `git diff --check`
+  通过;暂存区检查无 whitespace error。
+- **剩余状态:** **TODO** — 推送 `origin/feat/run-orchestrator`;当前尚未创建 PR,
+  且该分支依赖尚未合并的 `feat/executor-controller`,不得误报为已进入 master。
+
 ---
 
 ## 2026-07-30 · Run Orchestrator 失败语义设计
