@@ -30,25 +30,27 @@
 ```
 Policy ─────────────┐
                     ▼
-Strategy Library ─► Search Controller ─► Attack Generator (LLM 变异)
-   (手册)              (大脑 / bandit)          │
-                        ▲                       ▼
-                        │ reward         Conversation Executor
-                        │                       │
-                        │                 ┌─────▼──────┐
-                        │                 │  Adapter   │ ←→ Target (Arena)
-                        │                 └─────┬──────┘
-                        │                       │ Trace
-                        └──── Scoring Engine ◄──┘
-                                    │ Finding
-                                    ▼
-                          Finding Validator(重放 N 次)
+Run Orchestrator ─► Budget Manager ─► Search Controller ─► Attack Generator (LLM 变异)
+      │                                      │                       │
+      │                                      ▲                       ▼
+      │                                  学习反馈             Conversation Executor
+      │                                                              │
+      │                                                        ┌─────▼──────┐
+      │                                                        │  Adapter   │ ←→ Target (Arena)
+      │                                                        └─────┬──────┘
+      │                                                              │ Trace
+      │                                      ┌──── Scoring Engine ◄──┘
+      │                                      │             │ Finding
+      └─► Run Events / Atomic Store ◄────────┘             ▼
+                                                 Finding Validator(重放 N 次)
                                     │
                                     ▼
                           Regression Test Generator
 ```
 
-Budget Manager 横跨全程计数,任一上限触顶即停。
+Run Orchestrator 是总导演:保证每次选择有且只有一个结局、所有真实成本都记账、
+错误不会伪装成攻击失败、最终证据以原子事务落盘。Budget Manager 横跨全程计数,
+任一整体上限触顶即停。
 
 ---
 
@@ -867,6 +869,16 @@ bandit 学到的就是噪声。
 既判不了也复现不了,比略微超支糟糕得多。所以实际消耗可能越过 token 上限,
 幅度不超过一场 attempt —— 有意为之。
 
+从 Orchestrator 开始,预算账本进一步拆开:
+
+| 计数 | 含义 | 为什么不能混 |
+|---|---|---|
+| `attempts` | Controller 已经分配的逻辑机会 | 临时故障也真实占用了实验位置 |
+| `completed_attempts` | 正常完成、可进入 ASR 的样本 | 只有它们能回答攻击强弱 |
+| `abandoned_attempts` | 系统故障后没有有效结论 | 不能伪装成目标防守成功 |
+| `retries` | 同一逻辑 Attempt 内的系统恢复次数 | 用来审计稳定性与额外成本 |
+| token / cost / time | 所有实际请求的真实消耗 | 失败请求也不免费 |
+
 **`max_share_per_strategy` 的真实作用:** 不是省钱,是防止一个早期运气好的臂
 吸走几乎全部预算 —— 那会让 run 实质退化成单策略测试,coverage 归零,
 而我们还以为在做自适应搜索。
@@ -901,6 +913,24 @@ Impact ASR  = 有 Finding.triad.fully_compromised 的唯一 Attempt 数 / 总 At
 一次 Attempt 可以产生多个 Finding,分子必须按 `attempt_id` 去重。
 `success_metrics.py` 集中完成这套纯计算,Store 与 Report 共用,避免两套定义漂移。
 
+**事务原子性已经落实。** 一场有效结果通过一个存储接口同时提交:
+
+```text
+Run 最新 usage
++ Attempt 完整 trace
++ Findings
++ ControllerDecision
++ ATTEMPT_COMMITTED 事件
+```
+
+要么全部成功,要么全部回滚。SQLite 开启 foreign keys 和 WAL;
+相同稳定 ID 重复提交使用 upsert,因此数据库暂时锁住时只需重试同一事务,
+绝不能重新调用目标。
+
+**运行事件是追加式恢复账本。** 目前记录 Run 启动、策略选择、完整 Turn、
+重试、Attempt 完成/放弃和 Run 终态。它既让进程崩溃后能判断停在哪一步,
+也为未来 Dashboard 的实时进度提供同一来源,无需另造一套状态。
+
 ### 报告(`report/`)
 
 **聚合与渲染分离** —— 同一份 `ReportData` 输出 JSON 与 HTML,免得改了模板漏了 JSON,
@@ -911,14 +941,19 @@ Impact ASR  = 有 Finding.triad.fully_compromised 的唯一 Attempt 数 / 总 At
 Impact 三态分开计数(合并会把"我们不知道"伪装成前两者);未完成的 run 顶部警告
 (中断的 run 系统性低估发现数)。
 
+报告还把 logical attempts、valid attempts、abandoned attempts 与 execution retries
+分开显示。abandon 不进入 ASR,但绝不会从报告里消失;否则一个经常跑不成的
+RedCell 看起来可能比稳定系统更“安全”。
+
 ---
 
 ## 14. 执行与搜索设计:一次 Run 到底怎样执行 ⭐⭐
 
-这一节记录的是 **2026-07-29 已确认并完成基础实现** 的执行器与搜索接口设计。
+这一节记录的是 **截至 2026-07-30 已确认并实现** 的执行与搜索主干。
 已建成:确定性 AttackGenerator adapters、ConversationExecutor、语义停止原因、
-稳定分层 seed、SearchController、Static/Random 与 Controller 决策记录。
-尚未建成:真实 LLM mutation、Run orchestrator、Bandit、错误重试策略和 CLI。
+稳定分层 seed、SearchController、Static/Random、串行 Run Orchestrator、
+结构化错误、安全重试、运行事件与原子落盘。
+尚未建成:真实 LLM mutation、真实 Provider、Bandit、Finding Validator 和 CLI。
 
 ### 14.1 最终想找什么,Phase 0 又在测什么
 
@@ -1233,27 +1268,207 @@ controller_type
 RedCell 的“可复现”是冻结模型版本、配置、prompt、工具和 seed 后重复运行,
 报告成功比例;不是承诺每个 token 完全相同。
 
-### 14.10 执行错误:原则已定,阈值仍 OPEN
+### 14.10 失败不是一个 bool:先问“谁失败了” ⭐⭐
 
-**已经确定:** API 超时、限流或 Provider 崩溃不等于攻击失败,不能偷偷记成 0。
+**类比:学生考试答错,和考场停电不是同一件事。**
 
-当前实现已经区分:
+- 学生认真答完但答案错了 → 有效考试结果;
+- 学生试图作弊但监考拦住 → 仍是确认的作弊 Attempt;
+- 试卷没印出来 → 考试系统故障;
+- 学生可能已经交卷,但收卷袋丢了 → 结果不确定。
 
-```text
-正常返回                 → 有效 Attempt,进入检测与 Controller 反馈
-AttemptExecutionError    → 携带 partial_turns,不冒充安全失败
-ABORTED                  → 协议已预留 stop reason,由后续 Run orchestrator 使用
+若四种情况都写成 `failure = True`,Controller 会把 Provider 超时学习成
+“这条攻击策略很弱”,ASR 也会把没跑成的样本算成目标防守成功。
+
+当前运行语义:
+
+| 情况 | 是否有效 Attempt | Controller | ASR | Run |
+|---|---:|---|---|---|
+| 正常完成但没找到违规 | 是 | `update` | 进入分母 | 继续 |
+| 生成违规动作但权限层拦住 | 是,Attempt 成功 | `update` | Attempt 命中 | 继续 |
+| 可安全恢复的系统临时故障 | 否 | 暂不反馈 | 不进入 | 有界重试 |
+| 重试耗尽 | 否 | `abandon` | 不进入 | 可靠性允许时继续 |
+| 配置/协议/评分/副作用不确定 | 否 | `abandon` | 不进入 | 立即 `FAILED` |
+| 用户中止 | 当前未完成的不进入 | 释放 pending | Run 不可比较 | `ABORTED` |
+
+`AttemptExecutionError` 保存 `partial_turns` 和结构化 `FailureRecord`;
+调用者不得把它变成一条 `score=0` 的假 Attempt。
+
+### 14.11 结构化 FailureRecord:不解析错误字符串
+
+错误处理不能写成:
+
+```python
+if "timeout" in str(error):
+    retry()
 ```
 
-Controller 的单次失败释放已经建成;暂时没有拍板的是 Run 级策略:
+同样是 timeout,生成攻击文本时通常没有副作用;退款请求发出后的 timeout
+却可能已经扣了钱。现在每条故障明确记录:
 
-- 哪些错误可重试;
-- 最多重试几次;
-- 重试是否在 attempt 内部呈现为独立事件;
-- 错误率达到多少时整个 Run 不可用于实验结论。
+```text
+kind              agent/network/persistence/configuration/protocol/scoring/ambiguous
+stage             preflight/reset/generation/target_send/tool/scoring/persistence
+delivery_status   NOT_SENT / SENT / UNKNOWN
+side_effect       NONE / REALIZED / UNKNOWN
+retry_safety      SAFE / REQUIRES_KEY / REQUIRES_RESET / UNSAFE / UNKNOWN
+usage             已知 token / cost / latency
+```
 
-这些数值必须在接真实 Provider、看到实际故障分布后预先冻结,
-不能看到实验结果后再挑一个让数字好看的阈值。
+异常用于 **throw/catch 打断流程**,`FailureRecord` 用于**保存事实和做决策**。
+严重错误先由 Executor 抛,Orchestrator catch 后必须:
+
+1. 释放 Controller pending,但不学习零分;
+2. 保存部分 Trace 与失败事件;
+3. 把 Run 标为 `FAILED`;
+4. 再向 CLI / Web 层抛 `RunFailedError`;
+5. 绝不吞掉异常或把 Run 留在假的 `RUNNING`。
+
+错误消息写入前会做长度限制和常见凭据脱敏,日志与事件不保存密钥。
+
+### 14.12 幂等性:为什么 timeout 不能一律再来一次 ⭐⭐
+
+**幂等**指同一操作执行多次,最终业务效果与执行一次相同。
+
+| 操作 | 通常语义 |
+|---|---|
+| 查询资料 | 幂等:查三次不会生成三份客户 |
+| 把状态设为 CLOSED | 通常幂等:重复设置仍是 CLOSED |
+| 余额增加 100 | 非幂等:执行两次会增加 200 |
+| 退款、发邮件 | 非幂等:可能重复退款或重复发送 |
+
+`idempotency_key` 是请求的唯一收据号。目标第一次见到它就执行并保存结果;
+相同 key 再来时返回第一次结果,不重复产生副作用。
+
+Orchestrator 在调用 Executor **之前**生成稳定 `attempt_id`;
+每轮派生:
+
+```text
+request_id      = attempt_id + ":turn:" + turn_index
+idempotency_key = 同一个稳定值
+```
+
+同一逻辑 Attempt 的网络重试保持 ID、Strategy、attempt index 和 seed 不变。
+以前由 Executor 每次临时生成 Attempt ID,重试一次就换身份证,
+目标无法识别重复请求;现在这个缺口已修复。
+
+### 14.13 Adapter 与 Tool 各自声明什么
+
+Adapter 的静态能力:
+
+| 字段 | 含义 |
+|---|---|
+| `reset_scope` | 不支持 / 只清对话 / 对话和目标状态全部恢复 |
+| `idempotency` | 不支持 / 支持 / 强制要求幂等键 |
+| `delivery_observability` | 断线时能否知道请求是否送达 |
+| `observability` | 能否看见工具调用、结果和副作用(原有 Impact 语义) |
+
+工具还要声明:
+
+```text
+effect_kind =
+  READ_ONLY | STATE_CHANGING | EXTERNAL_SIDE_EFFECT | UNKNOWN
+
+retry_semantics =
+  IDEMPOTENT | IDEMPOTENT_WITH_KEY | NON_IDEMPOTENT | UNKNOWN
+```
+
+为什么两层都要有:同一个 HTTP Adapter 下面可能既有只读查询,也有退款。
+只声明“这个 Adapter 可以重试”太粗;只声明工具也不够,因为网络层还要知道
+请求有没有送达、是否支持 key 和 reset。
+
+默认全部取最保守的 `NONE/UNKNOWN`:**没声明不等于安全,而是禁止自动重试。**
+内置客服靶场声明 `FULL_STATE + IN_PROCESS`;它每次重试前能把模拟副作用彻底清掉。
+
+### 14.14 重试策略:Agent 两次,网络四次,存储四次
+
+这里的“重试”只处理系统执行故障。一次正常完成但攻击没命中,
+仍是有效负样本,不会免费再攻两遍。
+
+默认配置:
+
+| 故障 | 初次之后最多重试 | 处理 |
+|---|---:|---|
+| Agent/Generator 明确可恢复故障 | 2 | 同一逻辑 Attempt |
+| 网络临时故障 | 4 | 指数退避 + full jitter |
+| SQLite/持久化临时故障 | 4 | 只重试同一事务 |
+| 严重/副作用不确定 | 0 | 立即抛出 |
+
+所以“重试 2 次”=初次 1 次 + 最多再试 2 次,总执行最多 3 次。
+
+网络放宽到 4 次,因为 429/502/短暂断线比生成逻辑错误更常见;
+但仍必须有上限,否则 Provider 长时间故障会耗尽时间预算。
+指数退避大致是越失败等得越久;**full jitter** 再在等待上限内随机取值,
+避免大量 Run 在服务恢复的同一毫秒一起冲回去。
+
+所有次数与延迟都集中在 `RetryPolicy`,是可冻结、可测试的工程配置,
+不散落成多个 `except` 里的魔法数字。
+
+### 14.15 Run 可靠性预算:程序跑完不等于结论可用
+
+少量偶发故障可在记录后继续;故障过多时即使程序没崩,
+有效样本也不足以公平比较 Controller。
+
+当前可配置默认:
+
+- 连续 3 个逻辑 Attempt 都 abandon → `FAILED`;
+- 至少进行 10 个逻辑 Attempt 后,abandon 比例超过 10% → `FAILED`;
+- 到预算终点时没有任何有效 Attempt,或最终 abandon 比例超过 10% → `FAILED`。
+
+这不是攻击成功阈值,而是**实验可靠性阈值**。达到后 Run 的状态是
+`FAILED`,报告不能把它混入完成 Run 的均值和置信区间。
+
+### 14.16 原子落盘:多记检查点,但不制造半条真相 ⭐⭐
+
+**类比:银行转账不能只写“甲扣了 100”,却没写“乙加了 100”。**
+
+运行按语义检查点追加:
+
+```text
+RUN_STARTED
+DECISION_SELECTED(PENDING)
+TURN_COMPLETED                # 每个完整外部 Turn
+RETRY_SCHEDULED               # 如发生
+ATTEMPT_COMMITTED / ABANDONED
+RUN_COMPLETED / FAILED / ABORTED
+```
+
+`TURN_COMPLETED` 必须在攻击消息、目标回复、工具调用、工具结果、副作用和评分
+全部形成后才写。更早的半截数据可以作为错误诊断,不能伪装成完整证据。
+
+有效 Attempt 的最终事务同时写:
+
+```text
+Run usage
++ Attempt
++ Findings
++ resolved ControllerDecision
++ RunEvent
+```
+
+任一步报错,SQLite 回滚整批。重试使用同一 stable ID 的 upsert;
+测试已模拟“Attempt 已 merge、Finding 写入时磁盘报错”,确认所有行都会回滚。
+
+最重要的不变量:
+
+> 目标已经执行成功但数据库提交失败时,只能重试数据库事务;
+> 绝不能重新生成话术、重新调用目标或重新执行工具。
+
+### 14.17 为什么 Phase 0 串行,Actor 为什么默认固定
+
+串行顺序:
+
+```text
+select → execute → score → atomic commit → update/abandon → next select
+```
+
+它保证第 N 次自适应选择只看到前 N−1 次已经完成的事实。
+若同时放出 10 个 Attempt,后九次选择看不到第一批反馈,结果还会被响应到达顺序影响。
+并发以后可以做,但那属于 batched/delayed-feedback bandit,不是简单开十个协程。
+
+一个 Run 默认固定 Actor,避免 Strategy 强弱与不同身份/数据难度混在一起。
+未来 CLI / Dashboard 可以显式选择 Actor;多 Actor 实验也应作为独立维度,
+不能在 Attempt 之间暗中随机切换。
 
 ---
 
@@ -1264,11 +1479,11 @@ src/redcell/
 ├── protocols/              # 所有组件的契约 ✅
 │   ├── common.py           #   ID、基类、枚举:ObservabilityLevel / ImpactStatus / SignalChannel
 │   ├── policy.py           #   Policy / ToolPolicy / ParameterConstraint / ProtectedDatum(+location)
-│   ├── adapter.py          #   AdapterInput/Output / ToolCall / SideEffect / TargetAdapter(ABC)
+│   ├── adapter.py          #   TargetAdapter + reset/idempotency/delivery 能力
 │   ├── strategy.py         #   Strategy / MutationOperator / PredictedStrength / StrategyRequirements
 │   ├── trace.py            #   Turn / SignalScore / Attempt / ReproductionContext / compute_reward
 │   ├── finding.py          #   Finding / ViolationTriad / Evidence
-│   └── run.py              #   Run / RunStatus —— 把目标、policy、算法、预算、seed 绑在一起
+│   └── run.py              #   Run / RunStatus / RunEvent —— 配置、终态与追加事件
 │
 ├── llm/                    # LLM 抽象 ✅
 │   ├── base.py             #   LLMProvider(ABC)
@@ -1289,20 +1504,22 @@ src/redcell/
 │   └── level1.py           #   检测规则(由 policy 唯一决定)
 ├── budget.py               # 预算管理 ✅
 ├── randomness.py           # 稳定分层 seed ✅
+├── failures.py             # FailureRecord + 类型化严重/临时/不确定错误 ✅
+├── retry.py                # 分类型次数、退避抖动、实验可靠性阈值 ✅
 ├── generation.py           # AttackGenerator + Template/Scripted adapters ✅
-├── executor.py             # 一场完整 Attempt 的逐轮执行与语义停止 ✅
+├── executor.py             # 稳定 ID、逐轮执行、检查点、结构化错误与语义停止 ✅
+├── orchestrator.py         # 串行 Run 状态机 + 安全重试 + 原子提交 ✅
 ├── success_metrics.py      # triad → Attempt/Impact ASR 与首次成功 ✅
 ├── search/                 # Controller seam + 决策审计 ✅
 │   ├── base.py             #   select/update/abandon + ControllerDecision
 │   ├── static.py           #   冻结顺序循环
 │   └── random.py           #   注入私有 RNG 的均匀随机
-├── storage/                # SQLite 落盘 + 消融聚合 ✅
+├── storage/                # SQLite WAL + 事务落盘 + 决策/事件 + 消融聚合 ✅
 ├── report/                 # JSON + 自包含 HTML ✅
 │
 ├── mutation/               # ❌ 未建:真实 LLM 变异器
 ├── search/thompson.py      # ❌ 未建:选型仍 OPEN
-├── orchestrator.py         # ❌ 未建:把 Controller/Budget/Store 串成完整 Run
-└── cli.py                  # ❌ 未建:等 Run orchestrator 就位
+└── cli.py                  # ❌ 未建:把现有 Orchestrator 暴露为命令行入口
 ```
 
 ---
@@ -1385,6 +1602,23 @@ src/redcell/
 > 逐字段映射只会买来一堆迁移而换不到查询能力。只把消融要分组的维度抽成列,
 > 其余留在 JSON payload 里,零信息损失。代价是不能对嵌套字段写任意 SQL ——
 > 真需要时补一列即可,数据是全的。
+
+**Q: 为什么网络超时不能一律重试?**
+> 因为 timeout 只说明“我没拿到响应”,不说明目标没执行。查询通常可重试,
+> 退款可能已经成功;盲重试会造成双重副作用。Adapter 要声明 reset、投递可观测性
+> 和幂等键能力,工具要声明读写与幂等语义。只有明确安全、可 reset 或有稳定
+> idempotency key 才自动重试;未知默认不重试并把 Impact 记为 UNKNOWN。
+
+**Q: 一次攻击没成功,为什么不自动重试两次?**
+> 正常完成但未命中是有效负样本,正是 Controller 需要学习的事实;免费重试会给弱策略
+> 额外预算。两次重试只处理 Agent/Generator 的临时运行故障。网络默认四次,
+> 存储默认四次,所有真实成本都记账;重试耗尽则 abandon,不向 Controller 伪造零分。
+
+**Q: 怎么保证数据库失败不会把攻击执行两遍?**
+> Attempt ID 在调用目标前由 Orchestrator 生成,Turn 的 request/idempotency key 也稳定。
+> 每个完整 Turn 先记检查点;最终 Run usage、Attempt、Finding、ControllerDecision 和事件
+> 在一个事务里提交。失败只用相同 ID 重试这个事务,不再调用 Generator/Target/Tool。
+> 测试还故意在 Finding 写入时抛错,确认前面已 merge 的 Attempt 会一起回滚。
 
 **Q: 为什么把 AttackGenerator 和 ConversationExecutor 分开?**
 > 因为前者是“编剧”,后者是“摄影师”。生成方式会在固定模板、真实 attacker LLM

@@ -16,8 +16,12 @@ from redcell.arena.support_agent.prompts import DefenseLevel, build_system_promp
 from redcell.arena.support_agent.tools import SupportAgentTools, ToolExecution
 from redcell.llm.base import LLMMessage, LLMProvider
 from redcell.protocols.adapter import (
+    AdapterCapabilities,
     AdapterInput,
     AdapterOutput,
+    DeliveryObservability,
+    IdempotencySupport,
+    ResetScope,
     SideEffect,
     TargetAdapter,
     ToolCall,
@@ -75,6 +79,15 @@ class ArenaAdapter(TargetAdapter):
         因此 Impact 在这里是可判定的 —— 不必退化成 UNKNOWN。
         """
         return ObservabilityLevel.FULL
+
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """进程内靶场可完整复位,请求投递也不存在远程不确定窗口。"""
+        return AdapterCapabilities(
+            reset_scope=ResetScope.FULL_STATE,
+            idempotency=IdempotencySupport.NONE,
+            delivery_observability=DeliveryObservability.IN_PROCESS,
+        )
 
     @property
     def tools(self) -> SupportAgentTools:

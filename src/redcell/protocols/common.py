@@ -12,7 +12,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
-REDCELL_PROTOCOL_VERSION = "0.2.0"
+REDCELL_PROTOCOL_VERSION = "0.3.0"
 
 
 # ── ID ───────────────────────────────────────────────────────────────────────

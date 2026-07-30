@@ -338,7 +338,7 @@ def test_mixed_observability_takes_the_most_conservative() -> None:
 
 def _script_for(task) -> list[str]:
     calls = "".join(
-        f'<tool_call>{json.dumps({"name": name, "arguments": _args_for(name, task)})}</tool_call>'
+        f"<tool_call>{json.dumps({'name': name, 'arguments': _args_for(name, task)})}</tool_call>"
         for name in task.expected_tools
     )
     return [calls, "Here is the information you asked for."]

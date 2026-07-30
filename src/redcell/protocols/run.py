@@ -14,6 +14,7 @@ from enum import StrEnum
 from pydantic import Field
 
 from redcell.budget import BudgetLimit, BudgetLimits, BudgetUsage
+from redcell.failures import FailureRecord
 from redcell.protocols.common import REDCELL_PROTOCOL_VERSION, RedCellModel, new_id
 
 
@@ -28,6 +29,30 @@ class RunStatus(StrEnum):
 
     ABORTED = "aborted"
     """人工中止。同样不可用于结论。"""
+
+
+class RunEventType(StrEnum):
+    RUN_STARTED = "run_started"
+    DECISION_SELECTED = "decision_selected"
+    TURN_COMPLETED = "turn_completed"
+    RETRY_SCHEDULED = "retry_scheduled"
+    ATTEMPT_COMMITTED = "attempt_committed"
+    ATTEMPT_ABANDONED = "attempt_abandoned"
+    RUN_COMPLETED = "run_completed"
+    RUN_FAILED = "run_failed"
+    RUN_ABORTED = "run_aborted"
+
+
+class RunEvent(RedCellModel):
+    """追加式运行事件,用于恢复、审计和未来 Dashboard 实时进度。"""
+
+    id: str = Field(default_factory=new_id)
+    run_id: str
+    event_type: RunEventType
+    attempt_id: str | None = None
+    sequence: int = Field(ge=0)
+    payload: dict = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class Run(RedCellModel):
@@ -53,6 +78,7 @@ class Run(RedCellModel):
     strategy_ids: list[str] = Field(default_factory=list)
     protocol_version: str = REDCELL_PROTOCOL_VERSION
     notes: str | None = None
+    failure: FailureRecord | None = None
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     started_at: datetime | None = None

@@ -162,7 +162,7 @@ class Strategy(RedCellModel):
         unknown = used - valid
         if unknown:
             raise ValueError(
-                f"策略 '{self.id}' 的模板含未知槽位 {sorted(unknown)};" f"可用槽位:{sorted(valid)}"
+                f"策略 '{self.id}' 的模板含未知槽位 {sorted(unknown)};可用槽位:{sorted(valid)}"
             )
         return self
 

@@ -37,12 +37,16 @@ _TEMPLATE = """<!doctype html>
 </style></head><body>
 
 <h1>RedCell — {{ d.run.target_name }}</h1>
-<p class="sub">{{ d.run.algorithm }} · {{ d.total_attempts }} attempts ·
+<p class="sub">{{ d.run.algorithm }} · {{ d.total_attempts }} valid attempts ·
    generated {{ d.generated_at.strftime('%Y-%m-%d %H:%M UTC') }}</p>
 
 <h2>Summary</h2>
 <dl class="kv">
   <dt>Findings</dt><dd>{{ d.findings|length }}</dd>
+  <dt>Logical attempts</dt><dd>{{ d.logical_attempts }}</dd>
+  <dt>Valid attempts</dt><dd>{{ d.total_attempts }}</dd>
+  <dt>Abandoned attempts</dt><dd>{{ d.abandoned_attempts }}</dd>
+  <dt>Execution retries</dt><dd>{{ d.execution_retries }}</dd>
   <dt>Impact realized</dt><dd class="{{ 'bad' if d.impact.realized else 'ok' }}">
       {{ d.impact.realized }}</dd>
   <dt>Attempted but blocked</dt><dd>{{ d.impact.not_realized }}</dd>
@@ -61,6 +65,13 @@ _TEMPLATE = """<!doctype html>
 <div class="note"><strong>This run did not complete ({{ d.run.status.value }}).</strong>
  An interrupted run under-counts findings, so these numbers must not be compared
  against completed runs.</div>
+{% endif %}
+
+{% if d.abandoned_attempts %}
+<div class="note"><strong>{{ d.abandoned_attempts }} attempt(s) were abandoned
+ because RedCell could not obtain a valid result.</strong>
+ They are excluded from ASR rather than counted as target defenses. Review the
+ run events and operational failure rate before using this run in an experiment.</div>
 {% endif %}
 
 {% if d.impact.unknown %}

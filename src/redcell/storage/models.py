@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, Integer, String
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -87,5 +87,43 @@ class FindingRow(Base):
     payload: Mapped[dict] = mapped_column(JSON)
 
 
+class ControllerDecisionRow(Base):
+    __tablename__ = "controller_decisions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    run_id: Mapped[str] = mapped_column(String, ForeignKey("runs.id"), index=True)
+    attempt_id: Mapped[str] = mapped_column(String, index=True)
+    attempt_index: Mapped[int] = mapped_column(Integer)
+    controller: Mapped[str] = mapped_column(String, index=True)
+    selected_strategy_id: Mapped[str] = mapped_column(String, index=True)
+    outcome: Mapped[str] = mapped_column(String, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "attempt_index", name="uq_decision_run_attempt_index"),
+    )
+
+
+class RunEventRow(Base):
+    __tablename__ = "run_events"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    run_id: Mapped[str] = mapped_column(String, ForeignKey("runs.id"), index=True)
+    attempt_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    sequence: Mapped[int] = mapped_column(Integer)
+    event_type: Mapped[str] = mapped_column(String, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+
+    __table_args__ = (UniqueConstraint("run_id", "sequence", name="uq_run_event_sequence"),)
+
+
 Index("ix_attempts_run_strategy", AttemptRow.run_id, AttemptRow.strategy_id)
 Index("ix_findings_run_category", FindingRow.run_id, FindingRow.category)
+Index(
+    "ix_controller_decisions_run_strategy",
+    ControllerDecisionRow.run_id,
+    ControllerDecisionRow.selected_strategy_id,
+)
+Index("ix_run_events_run_type", RunEventRow.run_id, RunEventRow.event_type)

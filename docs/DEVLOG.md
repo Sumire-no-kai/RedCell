@@ -5,6 +5,185 @@
 
 ---
 
+## 2026-07-31 · Run Orchestrator、结构化故障与原子持久化实现
+
+### 2026-07-31 00:24 AEST · Step 01 · 完整运行状态机实现与验证
+
+- **进度:** 在 `feat/run-orchestrator` 完成 Phase 0 串行 Run 主干:
+  `RunOrchestrator` 现在把 Controller、BudgetManager、ConversationExecutor、
+  RunStore 与运行事件串成端到端闭环。同步更新 `docs/CONCEPTS.md` 的数据流、
+  失败分类、幂等、Adapter/Tool 能力、重试、可靠性阈值、事务与面试问答。
+- **协议与领域模型:**
+  - 协议版本从 `0.2.0` 升为 `0.3.0`;support-agent Policy 版本升为
+    `support-agent/2026-07-30.1`;
+  - Adapter 新增保守的 `reset_scope`、`idempotency`、
+    `delivery_observability`;`AdapterInput` 新增稳定 `request_id` /
+    `idempotency_key`;
+  - ToolPolicy 新增 `effect_kind` 与 `retry_semantics`;内置 6 个工具均按真实
+    读写/副作用语义声明,未知默认不得自动重试;
+  - 新增结构化 `FailureRecord`:故障 kind/stage、投递状态、副作用状态、
+    重试安全性、已知用量与脱敏错误摘要;
+  - 新增 `RunEvent` 及 Run 失败详情;BudgetUsage 分开记录逻辑、有效、
+    abandoned Attempt 与执行重试。
+- **Orchestrator 实现:**
+  - 每个 Run 强制 `max_attempts`,串行执行
+    `select → execute → score → commit → update/abandon`;
+  - `attempt_id` 改为 Orchestrator 在调用目标前生成,同一逻辑 Attempt 的重试
+    保持 attempt/request/idempotency ID、Strategy、index 与 seed 稳定;
+  - Agent 临时故障默认最多重试 2 次;网络 4 次;持久化 4 次;
+    指数退避使用 full jitter,次数与延迟集中在 `RetryPolicy`;
+  - 网络普通异常只有在 full reset 或幂等键能消除重复副作用时才可重试;
+    否则转为 `AMBIGUOUS_SIDE_EFFECT`,立即失败;
+  - 配置、协议、评分、内部不变量与不可恢复存储错误通过类型化异常中断。
+    Orchestrator catch 后释放 pending、保存失败事件、标记 `FAILED`,
+    再向调用层抛 `RunFailedError`;
+  - 连续 3 次 abandon,至少 10 次后 abandon 比例超过 10%,或预算结束时
+    无有效 Attempt / 最终比例超过 10%,Run 判为实验无效。
+- **原子持久化:**
+  - 新增 controller decision 与 run event 表;SQLite 开启 foreign keys、
+    WAL、30 秒 busy timeout 与 connection pre-ping;
+  - Run 启动、选择、每个完整 Turn、重试、Attempt 完成/放弃和终态均有
+    追加式事件;
+  - `commit_attempt_outcome()` 在一个事务内 upsert Run usage、Attempt、
+    Findings、resolved ControllerDecision 与 Event;
+  - 存储重试只重复同一稳定 ID 的事务,不会重新调用 Generator/Target/Tool;
+    报告新增 logical/valid/abandoned attempts 与 execution retries。
+- **为什么采用深模块:** 没有 Orchestrator/事务接口时,未来 CLI、Web 和测试
+  都要各自记住十几个调用顺序和 catch 分支,迟早出现一次漏记预算、一次重复攻击
+  或一条 pending 决策。现在调用方只需提交 Run 配置、Strategy 和 Actor;
+  复杂恢复集中在一个实现中,修改和验证保持局部。
+- **遇到的问题与解决:**
+  1. 首次创建 `feat/run-orchestrator` 时 `.git` ref lock 被沙箱拒绝;
+     在明确目标分支后使用受控权限创建成功,未改全局 Git 配置。
+  2. 旧 `.venv` 的 `python.exe` 仍指向已删除的本机 Python 3.12。
+     使用 Codex 桌面提供的 Python 3.12.13,并只把项目 `.venv/Lib/site-packages`
+     加入 `PYTHONPATH`,成功运行同一 pytest 依赖集。
+  3. Black 通过上述替代解释器对全项目检查 120 秒超时,单文件检查 30 秒仍超时。
+     此项不能声称通过;Ruff formatter 是本轮可执行的格式证据。
+  4. 测试最初仍断言协议 `0.2.0`,与新增不可兼容字段冲突;
+     更新为 `0.3.0`,明确反映协议升级,没有为了过测试退回旧版本号。
+  5. 复核发现“小预算 Run 一个 Attempt 全部 abandon”会因早期比例阈值尚未
+     启用而错误标成 `COMPLETED`;增加预算终点可靠性检查,确保无有效样本
+     或最终 abandon 比例过高时必为 `FAILED`。
+- **验证证据:**
+  - pytest: **221 passed**;
+  - Ruff lint: **All checks passed**;
+  - Ruff format: **65 files already formatted**;
+  - `git diff --check`:通过;
+  - 新测试覆盖网络放宽重试和稳定 ID、Agent 仅两次重试、重试耗尽不冒充
+    有效负样本、副作用不确定立即失败、存储临时失败不重新攻击、原子事务
+    中途异常全回滚、预算分账、报告运行故障与错误摘要凭据脱敏。
+- **剩余状态:** **DONE(本实现范围)**。尚未实现且未伪装完成:
+  CLI、真实 Provider / LLM mutation、Bandit、Finding Validator。
+  Black 精确检查为 **BLOCKED/ENVIRONMENT**,不影响已通过的 Ruff 格式证据,
+  但修复 `.venv` 后应补跑。
+
+---
+
+## 2026-07-30 · Run Orchestrator 失败语义设计
+
+### 2026-07-30 13:14 AEST · Step 01 · 串行执行、Actor 默认值与失败分类范围确认
+
+- **进度:** 在进入 Run Orchestrator 实现前,结合当前
+  `ConversationExecutor`、`SearchController`、`BudgetManager`、`RunStore`
+  和 `RunStatus` 接口,与作者重新确认运行方式,并开始按失败发生的层次整理
+  错误分类。当前只确认设计方向,尚未实现重试或总调度循环。
+- **已确认决策 1 — Phase 0 串行执行:** 一次只允许一个 Attempt 在执行:
+  Controller 选择 Strategy → Executor 完成并产生有效结果或明确放弃 →
+  Controller 收到 `update` / `abandon` → 才选择下一次。
+  - **理由:** RedCell 首先要成为目标明确、结论可信的安全评测 Agent。
+    串行顺序使每次自适应选择都只依赖已经完成的证据,避免并发中的
+    反馈到达顺序改变策略分配和实验结果;也便于精确归因预算、错误与
+    Finding。并发是后续产品吞吐优化,不应先于 Phase 0 的正确性。
+- **已确认决策 2 — Actor 默认固定、接口保留可配置:** Phase 0 每个 Run
+  默认使用固定 Actor,不在 Attempt 之间随机切换。未来 CLI / Dashboard
+  可提供显式选择或覆盖,但默认仍保持不变。
+  - **理由:** 固定 Actor 能避免把身份权限和数据差异混入 Strategy 强弱;
+    保留配置入口则满足后续真实评测中选择不同测试身份的需要。Dashboard
+    已在 PRD §13 规划,但不提前为 Phase 0 引入 Web 依赖。
+- **失败分类的当前发现:** “攻击没有命中”“目标权限层正常拒绝违规动作”
+  和“Generator / Provider / Adapter / Scorer / Store 基础设施异常”语义不同,
+  不能统一记成零分。还需分别覆盖配置预检、攻击生成、目标通信、工具副作用
+  不确定、评分、持久化、报告、人工中止、进程崩溃及实验有效性失败。
+- **遇到的问题:** 当前 `AttemptExecutionError` 会把执行器内部任意异常统一
+  包装并保留 `partial_turns`,但没有暴露错误是否可重试、请求是否可能已经
+  产生副作用、实际成本是否已知等语义;`RunStore` 也分别保存 Run、Attempt
+  与 Finding,尚未定义 Orchestrator 的原子落盘顺序。
+- **解决方式:** 暂不根据异常类名直接拍板重试。下一步先建立失败分类矩阵,
+  每类明确:是否属于有效攻击结果、是否可重试、重试哪个步骤、是否计入
+  Attempt/查询/token/cost 预算、是否更新 Controller、是否终止或判废 Run。
+  对“请求可能已执行但响应丢失”的情况单列为副作用不确定,禁止默认盲重试。
+- **验证证据:** 当前代码已有 `Controller.abandon()` 防止把基础设施错误作为
+  零分学习;`RunStatus` 已区分 `COMPLETED`、`FAILED` 与 `ABORTED`;
+  `AttemptExecutionError.partial_turns` 可保留诊断证据。上述接口能够承载
+  一部分语义,但完整错误分类和预算记账仍未实现。
+- **剩余状态:** **OPEN** — 与作者逐类确认失败矩阵、重试上限、预算记账、
+  Run 失效阈值和持久化原子性后,才能实现 Orchestrator。
+
+### 2026-07-30 23:26 AEST · Step 02 · 重试含义、预算语义与落盘原则确认
+
+- **进度:** 作者接受“逻辑 Attempt 与真实资源分别记账”的方案,并确认
+  执行成功后的持久化必须保证不触发重复攻击;同时讨论“最多重试 2 次”
+  的准确含义以及 Adapter 需要声明的安全重试能力。
+- **已确认决策 3 — 逻辑 Attempt 与资源预算分开记录:** Controller 的一次
+  Strategy 选择占用一个逻辑 Attempt 位置;同一位置内只允许对可安全恢复的
+  系统执行故障做有限重试。每次真实 Provider / Target 请求实际消耗的
+  query、token、cost 和时间均记账;只有正常完成并可判定的 Attempt 进入
+  Attempt/Impact ASR。
+  - **理由:** 网络故障不能伪装成攻击零分,但失败请求也不能获得“免费成本”。
+    分开记录逻辑机会、有效样本和实际资源,才能同时保持实验公平和成本真实。
+- **已确认决策 4 — 执行与落盘恢复严格分离:** 一旦目标交互已经成功完成,
+  后续存储失败只能重试持久化,绝不能重新调用 Generator、Target 或工具。
+  持久化采用语义检查点,至少覆盖 Run 启动、Controller 选择、完整 Turn、
+  Attempt 完成/放弃、Finding 与 Run 终态;Attempt 最终结果、Findings、
+  Controller 决策和预算用量需要原子提交或具备相同效果的幂等恢复。
+  - **理由:** “攻击成功但数据库提交失败”若从头重跑,可能重复退款/删除等
+    副作用,也会生成重复 Attempt/Finding。多落盘的目标是缩小故障恢复窗口,
+    但不能把相互依赖的数据拆成不可识别的半状态。
+- **澄清 — 重试不是攻击没命中后免费再攻击:** 一次正常完成但没有说服
+  目标的攻击是有效负样本,正常占用 Attempt 并更新 Controller,不触发系统重试。
+  候选规则“最多重试 2 次”仅针对网络超时、429/5xx、临时 Provider 不可用、
+  可安全恢复的生成/存储故障等运行问题;准确含义为初次执行失败后最多再试
+  2 次,总执行次数最多 3 次。
+- **幂等与 Adapter 声明方向:** 幂等指同一操作重复执行多次,最终业务效果
+  与执行一次相同。静态能力应至少说明 reset 能清理到什么范围、是否支持
+  idempotency key、请求投递状态是否可知;每次实际错误还需报告失败阶段、
+  是否已投递、可能的副作用、已知成本和建议的重试安全性。现有
+  `observability` 继续负责 Impact 可观测性,不重复造字段。
+- **剩余状态:** **OPEN** — 等作者在澄清后最终确认“最多重试 2 次”;Adapter
+  能力字段的最小 schema、工具级读写属性、落盘事件表/事务接口以及 Run
+  失效阈值仍需在实现前确认。
+
+### 2026-07-30 23:49 AEST · Step 03 · Orchestrator 实现开工与重试默认值定稿
+
+- **进度:** 作者确认可以按完整、现代且保守的工程标准开始实现,并要求严重
+  错误走类型化 throw/catch、融合 Adapter 能力声明、重试、检查点与原子落盘。
+  已从 `feat/executor-controller` 切出 `feat/run-orchestrator`;实现开始。
+- **已确认决策 5 — 分类型重试而非统一次数:**
+  - Agent / Generator 的可恢复临时故障:初次失败后最多重试 2 次;
+  - 网络临时故障:默认最多重试 4 次,采用有上限的指数退避与抖动;
+  - 持久化临时故障:默认最多重试 4 次,始终重试同一稳定 ID 的事务,
+    绝不重新执行攻击;
+  - 所有次数均为可配置工程默认值,实际 query/token/cost/time 全部记账。
+- **已确认决策 6 — 严重错误立即向上抛:** 配置/协议不变量破坏、评分失真、
+  不可恢复存储错误、副作用状态不确定且无法幂等恢复等,使用结构化严重异常
+  终止正常 Attempt 流程。Orchestrator 必须 catch,原子记录失败原因,
+  释放 Controller pending,把 Run 标为 `FAILED` 后再向调用层报告;
+  不能吞异常、伪造零分或留下 `RUNNING` 假状态。
+- **已确认决策 7 — 原子性必须落实:** Orchestrator 预先生成稳定
+  `attempt_id`;每个外部 Turn 使用稳定 request/idempotency key;
+  运行事件按语义检查点追加。最终 Attempt、Findings、ControllerDecision、
+  BudgetUsage 与 Run 进度由一个存储事务提交,重复提交为幂等 upsert。
+- **工程默认(可配置,非产品常量):** 为避免少量偶发故障立刻毁掉长 Run,
+  可恢复错误重试耗尽后先 `abandon`;连续 3 次 abandon,或在至少 10 个逻辑
+  Attempt 后 abandon 比例超过 10%,则判定 Run 的实验可靠性不足并 `FAILED`。
+- **验证证据:** 分支创建成功;当前协议的 `AttemptExecutionError`、
+  `Controller.abandon()`、`RunStatus.FAILED`、SQLite JSON payload 基础可复用。
+- **剩余状态:** **IN PROGRESS** — 正在实现 schema、Orchestrator、事务存储、
+  测试与 `docs/CONCEPTS.md` 原理讲解。
+
+---
+
 ## 2026-07-29 · Conversation Executor 与 Search Controller 核心设计
 
 ### 2026-07-29 17:58 AEST · Step 01 · 目标澄清与第二批设计决策确认

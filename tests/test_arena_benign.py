@@ -20,7 +20,7 @@ from redcell.protocols import AdapterInput, Message, Role
 
 
 def _call(name: str, **arguments) -> str:
-    return f'<tool_call>{json.dumps({"name": name, "arguments": arguments})}</tool_call>'
+    return f"<tool_call>{json.dumps({'name': name, 'arguments': arguments})}</tool_call>"
 
 
 # ── 任务集本身的完整性 ───────────────────────────────────────────────────

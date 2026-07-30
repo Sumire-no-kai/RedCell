@@ -10,6 +10,7 @@ LangChain / MCP)只需要新写一个 TargetAdapter 子类,引擎一行不改。
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from enum import StrEnum
 from typing import Any
 
 from pydantic import Field
@@ -20,6 +21,41 @@ from redcell.protocols.common import ObservabilityLevel, RedCellModel, Role
 class Message(RedCellModel):
     role: Role
     content: str
+
+
+class ResetScope(StrEnum):
+    """Adapter 的 reset 能恢复到什么范围。"""
+
+    NONE = "none"
+    CONVERSATION = "conversation"
+    FULL_STATE = "full_state"
+
+
+class IdempotencySupport(StrEnum):
+    """目标是否能用稳定 idempotency key 去除重复副作用。"""
+
+    NONE = "none"
+    SUPPORTED = "supported"
+    REQUIRED = "required"
+
+
+class DeliveryObservability(StrEnum):
+    """断线时能否判断请求是否已经被目标接收。"""
+
+    UNKNOWN = "unknown"
+    ACKNOWLEDGED = "acknowledged"
+    IN_PROCESS = "in_process"
+
+
+class AdapterCapabilities(RedCellModel):
+    """与安全重试有关的静态能力。
+
+    默认全部保守:新 Adapter 没有明确声明时,Orchestrator 不得假定可安全重试。
+    """
+
+    reset_scope: ResetScope = ResetScope.NONE
+    idempotency: IdempotencySupport = IdempotencySupport.NONE
+    delivery_observability: DeliveryObservability = DeliveryObservability.UNKNOWN
 
 
 class ToolCall(RedCellModel):
@@ -83,6 +119,10 @@ class AdapterInput(RedCellModel):
     messages: list[Message]
     actor: str
     """以谁的身份说话。跨用户越权检测完全依赖这个字段。"""
+    request_id: str | None = None
+    """一轮外部请求的稳定标识;重试时保持不变。"""
+    idempotency_key: str | None = None
+    """目标支持时用于去除重复副作用;不支持的 Adapter 可以忽略。"""
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -114,6 +154,11 @@ class TargetAdapter(ABC):
     @abstractmethod
     def observability(self) -> ObservabilityLevel:
         """本适配器能观测到多少。决定 Impact 是否可判定。"""
+
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """安全重试能力。未覆盖时返回保守默认值。"""
+        return AdapterCapabilities()
 
     @abstractmethod
     async def send(self, payload: AdapterInput) -> AdapterOutput:

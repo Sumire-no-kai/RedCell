@@ -107,3 +107,24 @@ def test_remaining_attempts() -> None:
     manager.record(strategy_id="s1")
     assert manager.remaining_attempts() == 2
     assert _manager(max_cost_usd=1.0).remaining_attempts() is None
+
+
+def test_logical_attempt_completion_abandonment_and_retries_are_distinct() -> None:
+    manager = _manager(max_attempts=3)
+
+    manager.reserve_attempt("s1")
+    manager.record_retry()
+    manager.record_usage(prompt_tokens=10, cost_usd=0.01)
+    manager.abandon_attempt()
+
+    manager.reserve_attempt("s2")
+    manager.record_usage(prompt_tokens=20, completion_tokens=5, cost_usd=0.02)
+    manager.complete_attempt()
+
+    usage = manager.usage()
+    assert usage.attempts == 2
+    assert usage.completed_attempts == 1
+    assert usage.abandoned_attempts == 1
+    assert usage.retries == 1
+    assert usage.total_tokens == 35
+    assert usage.cost_usd == pytest.approx(0.03)

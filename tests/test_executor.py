@@ -157,6 +157,17 @@ async def test_cost_and_reproduction_seeds_are_recorded() -> None:
     assert attempt.reproduction.extra["attempt_index"] == 37
 
 
+async def test_orchestrator_supplied_attempt_id_is_preserved() -> None:
+    executor, _ = _executor(
+        target_script=["No.", "No again."],
+        attack_script=["first", "second"],
+    )
+    request = _request()
+    result = await executor.execute(request)
+
+    assert result.attempt.id == request.attempt_id
+
+
 async def test_target_failure_raises_typed_error_with_partial_trace() -> None:
     executor, _ = _executor(
         target_script=["First response."],

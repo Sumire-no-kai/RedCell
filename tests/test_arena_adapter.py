@@ -22,7 +22,7 @@ from redcell.protocols import (
 
 
 def _call(name: str, **arguments) -> str:
-    return f'<tool_call>{json.dumps({"name": name, "arguments": arguments})}</tool_call>'
+    return f"<tool_call>{json.dumps({'name': name, 'arguments': arguments})}</tool_call>"
 
 
 def _input(text: str, actor: str = "customer_a") -> AdapterInput:

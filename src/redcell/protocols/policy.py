@@ -76,11 +76,29 @@ class ParameterConstraint(RedCellModel):
         return False
 
 
+class ToolEffectKind(StrEnum):
+    READ_ONLY = "read_only"
+    STATE_CHANGING = "state_changing"
+    EXTERNAL_SIDE_EFFECT = "external_side_effect"
+    UNKNOWN = "unknown"
+
+
+class ToolRetrySemantics(StrEnum):
+    IDEMPOTENT = "idempotent"
+    IDEMPOTENT_WITH_KEY = "idempotent_with_key"
+    NON_IDEMPOTENT = "non_idempotent"
+    UNKNOWN = "unknown"
+
+
 class ToolPolicy(RedCellModel):
+    """单个工具的规则与副作用语义。"""
+
     name: str
     allowed: bool = True
     requires_confirmation: bool = False
     constraints: list[ParameterConstraint] = Field(default_factory=list)
+    effect_kind: ToolEffectKind = ToolEffectKind.UNKNOWN
+    retry_semantics: ToolRetrySemantics = ToolRetrySemantics.UNKNOWN
     description: str | None = None
 
     def constraint_for(self, parameter: str) -> ParameterConstraint | None:

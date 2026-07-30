@@ -64,7 +64,12 @@ class BudgetLimits(RedCellModel):
 
 
 class BudgetUsage(RedCellModel):
+    """逻辑机会、有效样本与运行故障分开计数。"""
+
     attempts: int = 0
+    completed_attempts: int = 0
+    abandoned_attempts: int = 0
+    retries: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cost_usd: float = 0.0
@@ -165,16 +170,52 @@ class BudgetManager:
         completion_tokens: int = 0,
         cost_usd: float = 0.0,
     ) -> None:
-        """一场 attempt 结束后调用。"""
+        """兼容入口:预留、记资源并完成一场有效 Attempt。"""
+        self.reserve_attempt(strategy_id)
+        self.record_usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cost_usd=cost_usd,
+        )
+        self.complete_attempt()
+
+    def reserve_attempt(self, strategy_id: str) -> None:
+        """Controller 选中 Strategy 后立即占用一个逻辑 Attempt 位置。"""
         self._usage = self._usage.model_copy(
             update={
                 "attempts": self._usage.attempts + 1,
+            }
+        )
+        self._per_strategy[strategy_id] += 1
+
+    def record_usage(
+        self,
+        *,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        cost_usd: float = 0.0,
+    ) -> None:
+        """追加真实资源消耗;失败请求也必须调用。"""
+        self._usage = self._usage.model_copy(
+            update={
                 "prompt_tokens": self._usage.prompt_tokens + prompt_tokens,
                 "completion_tokens": self._usage.completion_tokens + completion_tokens,
                 "cost_usd": self._usage.cost_usd + cost_usd,
             }
         )
-        self._per_strategy[strategy_id] += 1
+
+    def complete_attempt(self) -> None:
+        self._usage = self._usage.model_copy(
+            update={"completed_attempts": self._usage.completed_attempts + 1}
+        )
+
+    def abandon_attempt(self) -> None:
+        self._usage = self._usage.model_copy(
+            update={"abandoned_attempts": self._usage.abandoned_attempts + 1}
+        )
+
+    def record_retry(self) -> None:
+        self._usage = self._usage.model_copy(update={"retries": self._usage.retries + 1})
 
     # ── 观测 ─────────────────────────────────────────────────────────────
 
