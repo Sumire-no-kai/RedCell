@@ -72,21 +72,30 @@ uses scoring feedback to decide which attack strategy to try next.
 
 ## Quick Start
 
-> Not yet available — the Phase 0 spine is under construction.
-> The intended flow (subject to change, finalized in Phase 0 / 2):
+> ⚠️ **This runs against a scripted offline provider.** No model participates in
+> the target's decisions yet, so a run proves the pipeline works — it is **not a
+> security assessment of anything**. Real-provider support lands in Phase 0 / W2.
 
 ```bash
-# 1. Install dependencies (Python control-plane + web)
+git clone https://github.com/Sumire-no-kai/RedCell.git
+cd RedCell
+python -m venv .venv && .venv/Scripts/activate   # Linux/macOS: source .venv/bin/activate
+pip install -e ".[dev]"
 
-# 2. Start the bundled benchmark arena (a deliberately vulnerable agent)
-#    docker compose up arena
+# Run against the bundled arena (a deliberately vulnerable support agent)
+redcell run --budget 20 --seed 0
 
-# 3. Run an evaluation against the arena with a fixed budget
-#    redcell run --target arena/support-agent --budget 100
-
-# 4. View the trace + findings report
-#    redcell report --last
+# Re-export the report for any stored run
+redcell report <run-id>
 ```
+
+`run` writes a self-contained HTML report plus machine-readable JSON under
+`runs/<run-id>/`, and stores the full trace in SQLite so any attempt can be
+replayed later.
+
+Exit codes are CI-friendly — `0` clean, `1` findings, `3` run failed, `4` bad
+config. `2` is deliberately left to the CLI framework's usage errors so that a
+mistyped flag never looks like a failed scan.
 
 ## Core Concepts
 

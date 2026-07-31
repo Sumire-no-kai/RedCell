@@ -5,6 +5,69 @@
 
 ---
 
+## 2026-07-31 · CLI composition root + 两处文档欠账
+
+### 2026-07-31 20:50 AEST · Step 01 · 补齐概念文档的两个缺口
+
+- **进度:** `CONCEPTS.md` §7 新增两个词条。核对发现其余模块均已覆盖,
+  代码地图也是最新的 —— 只有这两个**概念**有词条缺失(模块在地图里,但没解释)。
+- **新增「种子派生」** —— 含分层结构图(run → controller / attempt → generator/actor/target)、
+  "能单独重放第 37 场而不用重跑前 36 场"的收益,以及**为什么不能用 Python `hash()`**:
+  字符串哈希默认带**进程级随机盐**,换个进程结果就变,而且**不会有任何报错** ——
+  只会看到"数字对不上"。这是可复现性最隐蔽的杀手。
+- **新增「能力声明」** —— 把 `ObservabilityLevel` / `reports_cost` / `ResetScope` /
+  `IdempotencySupport` / `DeliveryObservability` 归纳成同一个模式:
+  **把"我做不到"变成显式声明,而不是让它静默失效**;全部默认取最保守值。
+  以 `reports_cost` 为例说明"**假的安全网比没有安全网更危险**,因为你会依赖它"。
+- **⚠️ 更正一处我自己的误判:** 我先前报告"代码地图缺 orchestrator/success_metrics/
+  failures/retry 等新模块"。**那是我 grep 的 awk 段落边界写错了** —— 地图其实是最新的。
+- **剩余状态:** DONE
+
+### 2026-07-31 20:55 AEST · Step 02 · CLI composition root(§17.3 第一步)
+
+- **进度:** 新增 `src/redcell/cli.py` 与 `tests/test_cli.py`(10 个测试);
+  `pyproject.toml` 注册 `redcell` 入口点。**258 个测试全过**,ruff / black 干净。
+- **端到端已实测跑通**(非仅单测):`redcell run --budget 3` 完整走完
+  选策略 → 生成 → 多轮对话 → Level-1 判定 → 预算 → SQLite 原子落盘 → JSON+HTML 报告,
+  退出码 0;`redcell report <id>` 从存储重建报告,数字与首次导出一致。
+
+**决策与理由:**
+
+- **CLI 内不放任何业务逻辑,只做组装。** CLI 是最容易被随手加特例的地方;
+  一旦判定或预算规则漏进来,同一件事就会有"库里一套、CLI 里一套"两个版本,
+  而它们迟早不一致 —— 那时哪一套是对的没人说得清。
+- **⚠️ 退出码刻意跳过 2。** 首版我定的是 `2=RUN_FAILED`,实测发现
+  **Click/Typer 用 2 表示命令行用法错误**,两者撞车 ——
+  CI 将无法区分"参数拼错了"和"run 真的失败了",而这两种情况的处置完全不同
+  (前者改命令,后者查目标或环境)。改为 `0/1/3/4`,并加测试锁住不与 2 冲突。
+- **离线运行必须强制标注。** 脚本化 provider 下目标模型根本没参与决策,
+  而一份 0 Finding 的报告**极易被读成"扫过了,是安全的"**。
+  标注同时进 stderr、`Run.notes` 和落盘报告,不设开关。
+  这是安全工具最不该制造的误解。
+- **刻意不实现"让离线 agent 假装被攻破"。** 曾考虑给 ScriptedProvider 配规则,
+  让它在收到越权请求时真的调工具,好让冒烟测试产出 Finding。**否决** ——
+  那样报告里的"发现"来自我手写的脚本而非模型决策,等于伪造结果。
+  现在的离线 run 诚实地产出 0 Finding:它证明的是管道,不是靶场的安全性。
+- **不暴露 `--max-cost`。** 当前 provider 不报成本,该上限永不触发也永不报错;
+  假的安全网比没有更危险,因为你会依赖它。已加测试锁定该选项当前不存在。
+- **有发现即非零退出**,与主流扫描器一致,CI 可直接拿它当门禁。
+
+- **遇到的问题:** `test_run_is_reproducible_under_the_same_seed` 首次失败,
+  报 `sqlite3.OperationalError: unable to open database file`。
+  **定位:测试自身的 bug** —— 用了 `tmp_path/"a"`、`tmp_path/"b"` 两个子目录但没创建。
+  **解决:** 测试内先 `mkdir`。非产品代码问题。
+- **同步更新:** `README.md` 的 Quick Start 从"Not yet available"占位换成**真实可复制命令**,
+  并置顶离线警告与退出码说明;`CONCEPTS.md` §17.3 第一步标记为已完成并记录实现要点。
+- **剩余状态:** DONE
+
+**仍然 OPEN(需作者决策,未擅自实现):**
+
+- `tiers.py` 的档位数值(PRD §2.4)—— 停止条件已改为语义判定不依赖它,但 reward 仍在用;
+- Bandit 选型与连续 reward 的统计处理(§17.3 第三步,明确标注"不能在 CLI 批次里顺手猜一个");
+- 真实 Provider 接入(需 API key),以及随之而来的靶场校准与阳性对照。
+
+---
+
 ## 2026-07-31 · 代码审查修复:ImpactBasis、Controller 播种、Finding 身份
 
 ### 2026-07-31 21:40 AEST · Step 01 · 六项审查发现的修复与验证
