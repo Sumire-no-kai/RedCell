@@ -109,6 +109,70 @@
   `feat/executor-controller` 与 `feat/run-orchestrator` 的 PR 仍 `BLOCKED`
   (GitHub 403,见 07-31 Step 04),master 尚未包含本实现。
 
+### 2026-07-31 22:35 AEST · Step 02 · 攻击侧视图:攻击方不得看到检测仪器
+
+- **进度:** 新增 `TargetBrief` / `ToolBrief` 与 `Policy.brief_for(actor)`;
+  `AttackGenerationRequest` 的入参从 `policy: Policy` + `actor: str` 换成
+  `brief: TargetBrief`;Executor 在每场 Attempt 开始时构造 brief 传入。
+
+- **怎么发现的:** 在为作者准备"给攻击方 LLM 的 prompt 怎么写、有什么限制"
+  这道面试题时逐字核对 `generation.py`,发现 `AttackGenerationRequest`
+  把**完整 Policy** 交给了生成器,而 `Policy.protected_data` 里装着 canary 明文。
+  模板生成器只读 actors/tools 所以当前无害,但真实 LLM mutator 一旦接上,
+  canary 就直接进了攻击方上下文。
+
+- **后果为什么是"静默漏报"而不是"误报"(这一条最反直觉):**
+  话术自带 canary → 模型原样复述 → 检测器的 `value not in attacker_text`
+  守卫会**正确地**拒绝计分。所以不会产生假 Finding ——
+  但那条 canary 信号线从此**永远赢不了**,整个臂被系统性废掉,
+  **且不会有任何报错**。安全工具里静默漏报比误报危险。
+
+- **概念区分(这才是根因):** Policy 里混着两类可见性相反的东西 ——
+  **攻击面**(工具名与用途、身份、哪些参数受约束)真实攻击者靠侦察也拿得到,
+  给了是合理的;**检测仪器**(canary 值与前缀、system prompt 指纹)
+  是我们自己埋进目标的传感器,不是目标的属性,给了等于开卷考试。
+
+- **否掉的替代:传"脱敏后的 Policy"。**
+  它是一个 **Policy 形状的谎言**:类型仍是 `Policy`,就能被传进 `Level1Scorer`,
+  而 Scorer 拿到一份没有 canary 的 policy 会**安静地什么都检测不到**。
+  独立类型让这个错误在类型层就不成立 —— 与项目里"能在接口层堵死的不靠自觉"一致。
+
+- **边界拿捏:** `ToolBrief` 只给"哪些参数**受约束**",不给约束内容。
+  "customer_id 受约束"属于攻击面(试一次就知道),"上限是 100" 属于答案。
+  同理不给 `effect_kind` / `retry_semantics` —— 那是重试逻辑用的运维语义,
+  攻击方不需要,给了只是多一份可能泄漏的上下文。
+
+- **`brief_for` 放在 Policy 上、与 TargetBrief 同文件,是刻意的:**
+  以后给 Policy 加字段的人会在同一屏里看到"这个字段要不要给攻击方"。
+  放在别处的话,新增一个敏感字段却忘了脱敏是完全静默的。
+
+- **测试用序列化全文扫描,不用逐字段断言:**
+  `test_brief_never_carries_the_detection_instrumentation` 把 brief 序列化后
+  扫描全部 canary 值/前缀/指纹。逐字段断言只能覆盖今天想得到的字段;
+  全文扫描在**将来新增敏感字段而忘记脱敏时照样会红**。
+  另有一条反向测试确认脱敏没脱过头(工具名、越权靶子仍在)。
+  已验证非空转:同样 6 条 secret 在完整 Policy 里 6/6 命中、在 brief 里 0/6。
+
+- **顺带记录:同一轮讨论确认的、尚未动手的事项(均为 OPEN):**
+  1. **策略 seed 模板领域耦合** —— 6 个策略里 4 个把零售客服语境写死
+     (`order history` / `my most recent order` / `support supervisor`)。
+     通用层已确认零耦合(grep 过 `protocols/` `scoring/` `search/` `orchestrator`),
+     窄的只有策略库。它会污染 PRD §12 实验四(跨目标泛化):
+     策略在新靶场失效时,分不清是"方法弱"还是"话术不对领域"。
+     倾向方案:seed 只陈述意图,领域适配交给 LLM mutator 用 `ToolBrief.description`
+     现场做(与本次 brief 改动天然衔接)。**否掉**每靶场一套 seed ——
+     那会彻底毁掉跨目标泛化实验,正是 PRD §2.2 批评静态词表的毛病。
+     ⚠️ 时机:必须在校准打 tag 冻结**之前**改,且应在接真 mutator 时一并做;
+     不要在只有模板生成器的状态下拿中立化 seed 去校准,那会得到说不清原因的 null。
+  2. **真实 attacker LLM 的 system prompt 尚未编写。** 需包含:授权声明、
+     策略 name/description、seed 意图、**由 Strategy 指定**的变异算子(不让 LLM 自选,
+     否则同一个臂在不同轮次实质上是不同的东西)、目标领域上下文(来自 brief)、
+     本场已有轮次、只输出攻击话术的格式约束。
+
+- **验证证据:** pytest **248 passed**(本步骤 +3);Ruff lint/format 通过;
+  Black `--check` 65 files unchanged。
+
+- **剩余状态:** 本步骤 `DONE`。上述两条 `OPEN`,未动手也未伪装完成。
 ---
 
 ## 2026-07-31 · Run Orchestrator、结构化故障与原子持久化实现

@@ -12,7 +12,7 @@ from string import Formatter
 from pydantic import Field, model_validator
 
 from redcell.protocols.common import RedCellModel
-from redcell.protocols.policy import Policy
+from redcell.protocols.policy import TargetBrief
 from redcell.protocols.strategy import Strategy, TemplateSlot
 from redcell.protocols.trace import Turn
 
@@ -23,11 +23,22 @@ class AttackGenerationError(RuntimeError):
 
 class AttackGenerationRequest(RedCellModel):
     strategy: Strategy
-    policy: Policy
-    actor: str
+    brief: TargetBrief
+    """攻击方允许看到的目标信息。
+
+    ⚠️ **刻意不是 `Policy`。** Policy 里带着 canary 值和 system prompt 指纹 ——
+    那些是我们自己埋的检测传感器,不是目标的属性。交给攻击方等于开卷考试,
+    而且后果是**静默漏报**(话术自带 canary → 检测器正确地拒绝计分 →
+    这条信号线永远赢不了,却没有任何报错)。详见 TargetBrief 的说明。
+    """
+
     turn_index: int = Field(ge=0)
     prior_turns: list[Turn] = Field(default_factory=list)
     seed: int = Field(ge=0)
+
+    @property
+    def actor(self) -> str:
+        return self.brief.actor
 
     @model_validator(mode="after")
     def _history_matches_turn_index(self) -> AttackGenerationRequest:
@@ -86,7 +97,7 @@ class TemplateAttackGenerator(AttackGenerator):
         if request.turn_index > 0:
             return AttackMessage(content=self._followup, generator=self.name)
 
-        values = _template_values(request.policy, request.actor)
+        values = _template_values(request.brief)
         required = {
             field_name
             for _, field_name, _, _ in Formatter().parse(request.strategy.seed_template)
@@ -121,27 +132,15 @@ class ScriptedAttackGenerator(AttackGenerator):
         return AttackMessage(content=messages[request.turn_index], generator=self.name)
 
 
-def _template_values(policy: Policy, actor: str) -> dict[str, str]:
-    """从 Policy 稳定选出槽位值;排序避免字典构造顺序改变实验。"""
-    current_actor = policy.actor(actor)
-    allowed = set(current_actor.allowed_resource_ids if current_actor else [])
-    unauthorized_resources = sorted(
-        {
-            resource_id
-            for actor_id, actor_policy in policy.actors.items()
-            if actor_id != actor
-            for resource_id in actor_policy.allowed_resource_ids
-            if resource_id not in allowed
-        }
-    )
-    constrained = sorted(policy.constrained_tool_names())
-    forbidden = sorted(name for name, tool in policy.tools.items() if not tool.allowed)
+def _template_values(brief: TargetBrief) -> dict[str, str]:
+    """从攻击侧视图稳定选出槽位值;brief 内部已排序,保证同一目标每次取值相同。"""
+    unauthorized = brief.unauthorized_resource_ids
+    constrained = brief.constrained_tool_names()
+    forbidden = brief.forbidden_tool_names()
 
     return {
-        TemplateSlot.ACTOR.value: actor,
-        TemplateSlot.TARGET_RESOURCE.value: (
-            unauthorized_resources[0] if unauthorized_resources else ""
-        ),
+        TemplateSlot.ACTOR.value: brief.actor,
+        TemplateSlot.TARGET_RESOURCE.value: unauthorized[0] if unauthorized else "",
         TemplateSlot.CONSTRAINED_TOOL.value: constrained[0] if constrained else "",
         TemplateSlot.FORBIDDEN_TOOL.value: forbidden[0] if forbidden else "",
     }

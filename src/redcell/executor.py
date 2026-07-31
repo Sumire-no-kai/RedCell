@@ -142,6 +142,7 @@ class ConversationExecutor:
         """
         self._validate_request(request)
         attempt_id = request.attempt_id
+        brief = self._policy.brief_for(request.actor)
         seeds = seeds_for_attempt(request.run_seed, request.attempt_index)
         turns: list[Turn] = []
         conversation: list[Message] = []
@@ -163,8 +164,8 @@ class ConversationExecutor:
                 attack = await self._generator.generate(
                     AttackGenerationRequest(
                         strategy=request.strategy,
-                        policy=self._policy,
-                        actor=request.actor,
+                        # 只给攻击面,不给检测仪器 —— 见 TargetBrief。
+                        brief=brief,
                         turn_index=turn_index,
                         prior_turns=turns,
                         seed=derive_seed(seeds.generator_seed, "turn", turn_index),
