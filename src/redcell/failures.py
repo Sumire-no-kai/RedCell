@@ -3,6 +3,26 @@
 异常负责打断控制流,FailureRecord 负责保存可判定、可持久化的事实。
 Orchestrator 不解析异常字符串;它只依据这里的 kind / stage / retry_safety
 决定重试、放弃 Attempt 或终止 Run。
+
+## 为什么 `RATE_LIMITED` 要从 `NETWORK_TRANSIENT` 里独立出来
+
+一开始 429 和 5xx 都归在 `NETWORK_TRANSIENT`。分开有两个理由,
+**第二个是正确性问题,不只是参数调优:**
+
+1. **退避曲线不同。** 免费层的 429 需要秒到分钟级的等待
+   (实测 GLM 需累计等 116 秒才恢复),而 5xx / 超时通常几秒就好。
+   共用一套参数,要么对 429 太短(白白判死),要么对 5xx 太长(白白拖慢)。
+2. **⚠️ 送达状态不同 —— 这条更重要。**
+   429 是服务端**在处理之前**明确拒绝,所以请求**确定没有送达**
+   (`NOT_SENT` / 副作用 `NONE` / 重试 `SAFE`);
+   而网络超时**无法确定**请求是否已被处理(`UNKNOWN`),
+   在不支持幂等键的目标上会升级为 `AMBIGUOUS_SIDE_EFFECT` 而**禁止重试**。
+
+   把 429 混进 `NETWORK_TRANSIENT`,就会让一个**本可安全重试**的限流
+   被当成"可能已产生副作用"而放弃 —— 在免费层上这会频繁误伤。
+
+3. 附带好处:跑批日志里能直接分出"**我们发太快了**"(该调节流)
+   和"**对方挂了**"(只能等)。这两种情况的处置完全不同。
 """
 
 from __future__ import annotations
@@ -12,13 +32,15 @@ from enum import StrEnum
 
 from pydantic import Field
 
-from redcell.protocols.common import RedCellModel
-from redcell.protocols.trace import CostRecord
+# ⚠️ 只依赖 `redcell._base`,**不要**改成从 `redcell.protocols.*` 导入 ——
+# 那会重新制造 failures ↔ protocols 的循环导入(见 `_base.py` 的模块文档)。
+from redcell._base import CostRecord, RedCellModel
 
 
 class FailureKind(StrEnum):
     AGENT_TRANSIENT = "agent_transient"
     NETWORK_TRANSIENT = "network_transient"
+    RATE_LIMITED = "rate_limited"
     PERSISTENCE_TRANSIENT = "persistence_transient"
     CONFIGURATION = "configuration"
     PROTOCOL = "protocol"
@@ -33,6 +55,7 @@ class FailureKind(StrEnum):
         return self in {
             FailureKind.AGENT_TRANSIENT,
             FailureKind.NETWORK_TRANSIENT,
+            FailureKind.RATE_LIMITED,
             FailureKind.PERSISTENCE_TRANSIENT,
         }
 

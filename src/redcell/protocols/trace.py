@@ -14,6 +14,7 @@ from typing import Any
 
 from pydantic import Field, model_validator
 
+from redcell._base import CostRecord
 from redcell.protocols.adapter import AdapterOutput
 from redcell.protocols.common import (
     REDCELL_PROTOCOL_VERSION,
@@ -69,15 +70,9 @@ class SignalScore(RedCellModel):
     """具体匹配到了什么,供人工复核。"""
 
 
-class CostRecord(RedCellModel):
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    usd: float = 0.0
-    wall_ms: float = 0.0
-
-    @property
-    def total_tokens(self) -> int:
-        return self.prompt_tokens + self.completion_tokens
+# `CostRecord` 现在定义在 `redcell._base` —— 因为 `failures.py` 也要用它,
+# 而 failures 不能依赖 protocols(会形成循环导入,见 `_base.py` 文档)。
+# 这里 re-export,既有的 `from redcell.protocols.trace import CostRecord` 不受影响。
 
 
 class ReproductionContext(RedCellModel):

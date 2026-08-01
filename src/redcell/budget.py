@@ -20,7 +20,9 @@ from enum import StrEnum
 
 from pydantic import Field, model_validator
 
-from redcell.protocols.common import RedCellModel
+# ⚠️ 从 `_base` 而非 `protocols.common` 取:`protocols/run.py` 反过来依赖本模块
+# (`Run.limits`),走 protocols 会形成循环导入。见 `_base.py` 的模块文档。
+from redcell._base import RedCellModel
 
 
 class BudgetLimit(StrEnum):

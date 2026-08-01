@@ -10,7 +10,7 @@ import time
 import uuid
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict
+from redcell._base import RedCellModel
 
 REDCELL_PROTOCOL_VERSION = "0.4.0"
 
@@ -43,14 +43,10 @@ def new_id() -> str:
 # ── 基类 ─────────────────────────────────────────────────────────────────────
 
 
-class RedCellModel(BaseModel):
-    """协议层所有模型的基类。
-
-    `extra="forbid"`:多写一个字段就报错。协议层是两个 agent(Claude Code / Codex)
-    和所有下游组件的契约,拼错字段名却静默通过是最难查的一类 bug。
-    """
-
-    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+# `RedCellModel` 现在定义在 `redcell._base` —— 为了打破 failures ↔ protocols
+# 的循环导入,见该模块的文档。这里保持 re-export,既有的
+# `from redcell.protocols.common import RedCellModel` 一行都不用改。
+__all__ = ["RedCellModel"]
 
 
 # ── 枚举 ─────────────────────────────────────────────────────────────────────
