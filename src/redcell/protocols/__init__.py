@@ -56,6 +56,7 @@ from redcell.protocols.strategy import (
     Strategy,
     StrategyRequirements,
     TemplateSlot,
+    predicted_pairs,
     select_applicable,
 )
 from redcell.protocols.trace import (
@@ -127,6 +128,7 @@ __all__ = [
     "build_attempt",
     "compute_reward",
     "new_id",
+    "predicted_pairs",
     "select_applicable",
     "uuid7",
 ]

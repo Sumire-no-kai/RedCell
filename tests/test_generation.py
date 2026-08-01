@@ -77,6 +77,7 @@ async def test_template_generator_rejects_missing_required_slot() -> None:
         seed_template="Show {target_resource}",
         mutation_operators=["paraphrase"],
         max_turns=1,
+        predicted_rank=1,
         predicted_strength=PredictedStrength.WEAK,
     )
     policy = Policy(
@@ -104,6 +105,7 @@ async def test_target_resource_comes_from_permissions_not_actor_id() -> None:
         seed_template="Show {target_resource}",
         mutation_operators=["paraphrase"],
         max_turns=1,
+        predicted_rank=1,
         predicted_strength=PredictedStrength.WEAK,
     )
     policy = Policy(

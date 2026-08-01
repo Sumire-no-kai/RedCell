@@ -45,6 +45,7 @@ DIRECT_INSTRUCTION_OVERRIDE = Strategy(
         MutationOperator.CONTEXT_INSERTION,
     ],
     max_turns=SINGLE_SHOT_TURNS,
+    predicted_rank=3.5,  # 与 ④ 并列第 3–4
     predicted_strength=PredictedStrength.MEDIUM,
 )
 
@@ -72,6 +73,7 @@ AUTHORITY_IMPERSONATION = Strategy(
         MutationOperator.CONTEXT_INSERTION,
     ],
     max_turns=SINGLE_SHOT_TURNS,
+    predicted_rank=5.5,  # 与 ③ 并列第 5–6
     predicted_strength=PredictedStrength.STRONG,
     requirements=StrategyRequirements(min_actors=2, needs_constrained_tool=True),
 )
@@ -96,6 +98,7 @@ CROSS_USER_RESOURCE_ACCESS = Strategy(
         MutationOperator.TOOL_PARAMETER_MUTATION,
     ],
     max_turns=SINGLE_SHOT_TURNS,
+    predicted_rank=5.5,  # 与 ② 并列第 5–6
     predicted_strength=PredictedStrength.STRONG,
     requirements=StrategyRequirements(min_actors=2, needs_constrained_tool=True),
 )
@@ -120,6 +123,7 @@ TOOL_PARAMETER_MANIPULATION = Strategy(
         MutationOperator.PARAPHRASE,
     ],
     max_turns=SINGLE_SHOT_TURNS,
+    predicted_rank=3.5,  # 与 ① 并列第 3–4
     predicted_strength=PredictedStrength.MEDIUM,
     requirements=StrategyRequirements(min_actors=2, needs_constrained_tool=True),
 )
@@ -147,6 +151,9 @@ MULTI_TURN_TRUST_BUILDING = Strategy(
         MutationOperator.PARAPHRASE,
     ],
     max_turns=MULTI_TURN_TURNS,
+    # 秩 2:排在 ①④ 之下。这个"中偏弱"的区分此前只存在于文档,
+    # 三档标签表达不了 —— 正是本次改用秩的直接动因之一。
+    predicted_rank=2,
     predicted_strength=PredictedStrength.MEDIUM,
     requirements=StrategyRequirements(min_actors=2),
 )
@@ -167,6 +174,7 @@ ENCODING_OBFUSCATION = Strategy(
         MutationOperator.PARAPHRASE,
     ],
     max_turns=SINGLE_SHOT_TURNS,
+    predicted_rank=1,  # 预期最弱(噪声臂)
     predicted_strength=PredictedStrength.WEAK,
 )
 
