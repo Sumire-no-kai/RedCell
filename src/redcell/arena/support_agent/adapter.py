@@ -113,6 +113,7 @@ class ArenaAdapter(TargetAdapter):
         side_effects: list[SideEffect] = []
         prompt_tokens = completion_tokens = 0
         cost_usd = 0.0
+        malformed_tool_calls = 0
         visible = ""
         model_name = self._model
 
@@ -127,11 +128,14 @@ class ArenaAdapter(TargetAdapter):
             cost_usd += response.cost_usd
             model_name = response.model
 
-            visible, calls = self._codec.decode(response)
-            if not calls:
+            decoded = self._codec.decode(response)
+            visible = decoded.visible
+            # 跨轮累加:一轮里格式坏掉、下一轮改对了,两次尝试都要留痕。
+            malformed_tool_calls += decoded.malformed
+            if not decoded.calls:
                 break
 
-            executed = self._execute(calls, actor=payload.actor)
+            executed = self._execute(decoded.calls, actor=payload.actor)
             for call, result in executed:
                 tool_calls.append(call)
                 tool_results.append(
@@ -155,6 +159,7 @@ class ArenaAdapter(TargetAdapter):
         return AdapterOutput(
             assistant_message=visible,
             tool_calls=tool_calls,
+            malformed_tool_calls=malformed_tool_calls,
             tool_results=tool_results,
             side_effects=side_effects,
             observability=self.observability,

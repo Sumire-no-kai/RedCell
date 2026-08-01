@@ -137,6 +137,21 @@ class AdapterInput(RedCellModel):
 class AdapterOutput(RedCellModel):
     assistant_message: str = ""
     tool_calls: list[ToolCall] = Field(default_factory=list)
+    malformed_tool_calls: int = Field(default=0, ge=0)
+    """模型**尝试**调用工具但我们没能解析出来的次数。
+
+    ⚠️ **没有这个计数,"靶场防住了"和"模型不会按格式输出"在数据里长得完全一样** ——
+    两者都表现为"零次工具调用"。而这两件事的处置完全相反:
+    前者说明防御有效,后者说明这个模型根本不适合当 target。
+
+    2026-08-01 实测踩过这个坑:GLM-4.7-Flash 选对了工具、参数也对,
+    只是不输出闭合标签,于是每一次正确的调用都被静默丢弃。
+    当时是靠人盯着 preflight 输出看出来的 —— 换个模型未必有人看。
+
+    **显式字段而不是塞进 `TraceMetadata.extra`:** 同一个错误犯过一次了 ——
+    成本曾经藏在 `extra["cost_usd"]` 里,忘了填就静默按 0 计费。
+    约定俗成的魔法键没有任何东西能保证它被填上。
+    """
     tool_results: list[ToolResult] = Field(default_factory=list)
     side_effects: list[SideEffect] = Field(default_factory=list)
     observability: ObservabilityLevel
