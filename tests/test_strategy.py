@@ -125,14 +125,14 @@ def test_predicted_pairs_are_ordered_stronger_first() -> None:
     assert pairs == [("strong", "weak")]
 
 
-def test_frozen_ranks_yield_the_thirteen_pair_verdict_table() -> None:
+def test_frozen_ranks_yield_the_nineteen_pair_verdict_table() -> None:
     """STRATEGIES.md §4.1 承诺完整报告的那张表,由秩现算而来。
 
-    六个策略两两 15 对,减去 ①④ 与 ②③ 两组并列 → 13 对有方向。
+    七个策略两两 21 对,减去 ①④ 与 ②③ 两组并列 → 19 对有方向。
     这个数字变了,说明预注册的排序被动过。
     """
     pairs = predicted_pairs(list(PHASE_0_STRATEGIES))
-    assert len(pairs) == 13
+    assert len(pairs) == 19
 
     # 表里不得出现并列对,两个方向都不行。
     for tie in (
@@ -200,10 +200,10 @@ def test_inapplicable_strategy_is_excluded_not_scored_zero(policy: Policy) -> No
 # ── Phase 0 策略库 ───────────────────────────────────────────────────────
 
 
-def test_library_has_exactly_six_arms() -> None:
-    """臂数受预算硬约束:100 ÷ 6 ≈ 每臂 16 次;臂再多就学不到东西。"""
-    assert len(PHASE_0_STRATEGIES) == 6
-    assert len({s.id for s in PHASE_0_STRATEGIES}) == 6
+def test_library_has_exactly_seven_arms() -> None:
+    """臂数受预算硬约束:100 ÷ 7 ≈ 每臂 14 次;臂再多就学不到东西。"""
+    assert len(PHASE_0_STRATEGIES) == 7
+    assert len({s.id for s in PHASE_0_STRATEGIES}) == 7
 
 
 def test_library_matches_frozen_predictions() -> None:
@@ -217,9 +217,52 @@ def test_library_matches_frozen_predictions() -> None:
         "multi_turn_trust_building": 2,
         "direct_instruction_override": 3.5,
         "tool_parameter_manipulation": 3.5,
-        "authority_impersonation": 5.5,
-        "cross_user_resource_access": 5.5,
+        "confirmation_bypass": 5,
+        "authority_impersonation": 6.5,
+        "cross_user_resource_access": 6.5,
     }
+
+
+def test_adding_the_seventh_arm_kept_the_relative_order_intact() -> None:
+    """②③ 从 5.5 改成 6.5 是**七个策略下的重新编号**,不是预测被改了。
+
+    秩的含义是相对位置,项数变了编号自然要变 —— 这正是当初选秩而非
+    绝对区间的理由之一。真正要守住的是顺序:⑥ < ⑤ < ①④ < ⑦ < ②③。
+    """
+    order = [s.id for s in sorted(PHASE_0_STRATEGIES, key=lambda s: s.predicted_rank)]
+    assert order[0] == "encoding_obfuscation"
+    assert order[1] == "multi_turn_trust_building"
+    assert set(order[2:4]) == {"direct_instruction_override", "tool_parameter_manipulation"}
+    assert order[4] == "confirmation_bypass"
+    assert set(order[5:]) == {"authority_impersonation", "cross_user_resource_access"}
+
+
+def test_confirmation_bypass_stays_out_of_the_arena_pool_until_it_has_a_target() -> None:
+    """⑦ 的预测已冻结,但自带靶场还没有确认状态机 —— 它必须**不进候选池**。
+
+    进去拿 0 分会污染分化度统计:结构性的 0("没靶子")与真实的 0
+    ("打了没打动")含义完全不同。
+    """
+    from redcell.arena.support_agent import SUPPORT_AGENT_POLICY
+
+    assert not any(t.requires_confirmation for t in SUPPORT_AGENT_POLICY.tools.values())
+
+    selected = {s.id for s in select_applicable(list(PHASE_0_STRATEGIES), SUPPORT_AGENT_POLICY)}
+    assert "confirmation_bypass" not in selected
+    assert len(selected) == 6
+
+
+def test_confirmation_bypass_joins_the_pool_once_a_confirmation_tool_exists(
+    policy: Policy,
+) -> None:
+    """门必须两个方向都有效 —— 否则"暂不适用"会变成"永远不上场"。
+
+    确认状态机实装后,⑦ 应当自动进池,不需要再改策略库。
+    """
+    assert any(t.requires_confirmation for t in policy.tools.values())
+
+    selected = {s.id for s in select_applicable(list(PHASE_0_STRATEGIES), policy)}
+    assert "confirmation_bypass" in selected
 
 
 def test_coarse_labels_stay_consistent_with_the_ranks() -> None:
