@@ -36,7 +36,21 @@ PYTHONUTF8=1 ./.venv/Scripts/python.exe -m redcell.cli run --online --budget 1
 - ⚠️ **Windows 控制台是 cp1252,直接跑会因中文输出抛 `UnicodeEncodeError`。**
   跑 CLI 时加 `PYTHONUTF8=1`。这是终端问题,不是代码 bug。
 - **当前:398 个测试全过,ruff / black 干净。**
-- 分支 `feat/run-orchestrator`,与远端同步;**本轮所有改动尚未提交**。
+- 分支 `feat/run-orchestrator`。**本轮改动已提交(5 次),尚未推送远端。**
+
+### 本轮提交(2026-08-01,共 31 文件 / +4489 −105)
+
+| commit | 内容 |
+|---|---|
+| `8db9d71` | `fix:` 修复两处循环导入 + 限流独立成一类故障 |
+| `ada9503` | `feat:` 真实 provider 层(成本与漂移都做显式声明) |
+| `75f96a0` | `fix:` 不再丢弃合法工具调用,并对坏格式计数 |
+| `40f533c` | `feat:` 真实模型生成攻击 + 攻击方对照 |
+| `60c45df` | `docs:` CONCEPTS 自包含化 + 预注册操作化 |
+
+拆成 5 次而非 1 次,是按**依赖顺序**排的:基础层 → provider → 靶场编解码 →
+生成与 CLI → 文档。每条 commit message 记录的是**取舍与理由**,不是文件清单 ——
+半年后回看时,能解释"为什么这么做"的提交才有价值。
 
 ## 模型配置(已定,已实测可用)
 
