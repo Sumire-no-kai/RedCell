@@ -111,9 +111,20 @@ class ProviderPair:
         await self.attacker.aclose()
 
 
+def load_attacker() -> OpenAICompatibleProvider:
+    """只建 attacker 一位。
+
+    攻击方对照(`redcell attacker-control`)整个流程**不碰 target** ——
+    它比较的是攻击方产出的话术,靶场一次都不会被调用。
+    因此不该因为 target 那半边配置不全就拒绝启动:
+    那会把一道"检查攻击方"的诊断,错误地卡在一个与它无关的前置条件上。
+    """
+    return AttackerSettings().build(name="attacker")
+
+
 def load_providers() -> ProviderPair:
     """从 env / `.env` 读出并建好两个 provider。配置不全时抛 ProviderConfigError。"""
     return ProviderPair(
         target=TargetSettings().build(name="target"),
-        attacker=AttackerSettings().build(name="attacker"),
+        attacker=load_attacker(),
     )

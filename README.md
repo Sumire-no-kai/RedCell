@@ -72,9 +72,10 @@ uses scoring feedback to decide which attack strategy to try next.
 
 ## Quick Start
 
-> ⚠️ **This runs against a scripted offline provider.** No model participates in
-> the target's decisions yet, so a run proves the pipeline works — it is **not a
-> security assessment of anything**. Real-provider support lands in Phase 0 / W2.
+> ⚠️ **Runs are offline by default** — a scripted provider stands in for the
+> target, so no model participates in its decisions. An offline run proves the
+> pipeline works; it is **not a security assessment of anything**. Pass
+> `--online` to attach real models (configured via `.env`, see `.env.example`).
 
 ```bash
 git clone https://github.com/Sumire-no-kai/RedCell.git
@@ -85,6 +86,9 @@ pip install -e ".[dev]"
 # Run against the bundled arena (a deliberately vulnerable support agent)
 redcell run --budget 20 --seed 0
 
+# Same, but with real models on both sides — this spends real quota
+redcell run --online --budget 20 --seed 0
+
 # Re-export the report for any stored run
 redcell report <run-id>
 ```
@@ -93,9 +97,24 @@ redcell report <run-id>
 `runs/<run-id>/`, and stores the full trace in SQLite so any attempt can be
 replayed later.
 
+### Before you trust a calibration run
+
+The attacker LLM is the *measuring instrument*. If it renders every strategy as
+much the same prose, "no separation between strategies" says something about the
+instrument, not about the target — and the two are indistinguishable after the
+fact. Check the instrument first:
+
+```bash
+redcell attacker-control --samples 5
+```
+
+It generates messages per strategy and compares within-group against
+between-group similarity, writing every generated message to disk for manual
+review. Exit code `5` means *don't start the calibration run*.
+
 Exit codes are CI-friendly — `0` clean, `1` findings, `3` run failed, `4` bad
-config. `2` is deliberately left to the CLI framework's usage errors so that a
-mistyped flag never looks like a failed scan.
+config, `5` a pre-run control failed. `2` is deliberately left to the CLI
+framework's usage errors so that a mistyped flag never looks like a failed scan.
 
 ## Core Concepts
 

@@ -7,6 +7,8 @@ from typer.testing import CliRunner
 
 from redcell.budget import BudgetLimits
 from redcell.cli import OFFLINE_NOTICE, ExitCode, app
+from redcell.config import ProviderConfigError
+from redcell.llm.scripted import ScriptedProvider
 from redcell.protocols import (
     AdapterOutput,
     Evidence,
@@ -213,3 +215,124 @@ def test_incomplete_run_is_flagged_in_the_summary(workspace) -> None:
 
     result = runner.invoke(app, ["report", run_record.id, "--db", _db(workspace)])
     assert "未正常完成" in result.output
+
+
+# ── attacker-control ─────────────────────────────────────────────────────
+
+
+class _FakeAttacker(ScriptedProvider):
+    """带 `model` / `aclose()` 的脚本 provider —— 对齐 OpenAICompatibleProvider 的接口。
+
+    `LLMProvider` 基类没有这两样(它们属于真实的 HTTP provider),
+    而 CLI 会用到,所以这里补齐。
+    """
+
+    def __init__(self, *, per_call: list[str]) -> None:
+        super().__init__(per_call, model="fake-attacker")
+        self.closed = False
+
+    @property
+    def model(self) -> str:
+        return "fake-attacker"
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def _install_attacker(monkeypatch, provider: _FakeAttacker) -> _FakeAttacker:
+    monkeypatch.setattr("redcell.cli.load_attacker", lambda: provider)
+    return provider
+
+
+def _clustered_messages(per_strategy: int, strategies: int = 6) -> list[str]:
+    """攻击方正常工作时的形状:同一策略内部用词相近,不同策略之间几乎不重合。
+
+    `run_attacker_control` 逐策略连续取样,所以按 call 顺序排成六段即可。
+    """
+    return [
+        f"topic{g} alpha{g} beta{g} gamma{g} delta{g} variant{i}"
+        for g in range(strategies)
+        for i in range(per_strategy)
+    ]
+
+
+def test_attacker_control_passes_when_strategies_produce_different_wording(
+    workspace, monkeypatch
+) -> None:
+    attacker = _install_attacker(monkeypatch, _FakeAttacker(per_call=_clustered_messages(3)))
+
+    result = runner.invoke(app, ["attacker-control", "--samples", "3", "--out", "control"])
+
+    assert result.exit_code == ExitCode.CLEAN, result.output
+    assert "攻击方不是瓶颈" in result.output
+    assert attacker.closed
+
+
+def test_attacker_control_writes_every_generated_message_for_manual_review(
+    workspace, monkeypatch
+) -> None:
+    """结论只有两个小数,人工复核靠的是这份明细 —— 不落盘等于不可复核。"""
+    _install_attacker(monkeypatch, _FakeAttacker(per_call=_clustered_messages(5)))
+
+    runner.invoke(app, ["attacker-control", "--samples", "2", "--seed", "9", "--out", "control"])
+
+    detail = json.loads((workspace / "control" / "attacker-control-seed9.json").read_text("utf-8"))
+    assert len(detail["samples"]) == 6
+    assert all(len(group["messages"]) == 2 for group in detail["samples"])
+
+
+def test_attacker_control_fails_when_every_strategy_yields_the_same_wording(
+    workspace, monkeypatch
+) -> None:
+    """六个策略产出同一句话 = 策略标签没改变输出,攻击方是瓶颈。"""
+    _install_attacker(monkeypatch, _FakeAttacker(per_call=["the same sentence every time"] * 60))
+
+    result = runner.invoke(app, ["attacker-control", "--samples", "3", "--out", "control"])
+
+    assert result.exit_code == ExitCode.CONTROL_FAILED, result.output
+    assert "瓶颈" in result.output
+    assert "靶场一个字都别动" in result.output
+
+
+def test_control_failure_is_not_confused_with_findings_or_usage_errors() -> None:
+    """ "对照没过"和"扫出漏洞了"方向相反,不能共用一个退出码。"""
+    assert ExitCode.CONTROL_FAILED not in (ExitCode.FINDINGS, ExitCode.CLEAN)
+    assert ExitCode.CONTROL_FAILED != 2  # Click 的用法错误
+
+
+def test_attacker_control_has_no_offline_mode(workspace) -> None:
+    """离线用模板生成器,会稳定地报告"攻击方没问题"——一个永远说 OK 的对照。"""
+    assert runner.invoke(app, ["attacker-control", "--offline"]).exit_code == 2
+
+
+def test_attacker_control_reports_missing_attacker_config_as_bad_config(
+    workspace, monkeypatch
+) -> None:
+    def _reject() -> None:
+        raise ProviderConfigError("attacker provider 配置不完整")
+
+    monkeypatch.setattr("redcell.cli.load_attacker", _reject)
+
+    result = runner.invoke(app, ["attacker-control"])
+    assert result.exit_code == ExitCode.BAD_CONFIG
+    assert "配置被拒绝" in result.output
+
+
+def test_attacker_control_rejects_unknown_actor_before_spending_any_quota(
+    workspace, monkeypatch
+) -> None:
+    attacker = _install_attacker(monkeypatch, _FakeAttacker(per_call=_clustered_messages(5)))
+
+    result = runner.invoke(app, ["attacker-control", "--actor", "nobody"])
+
+    assert result.exit_code == ExitCode.BAD_CONFIG
+    assert attacker.call_count == 0
+
+
+def test_attacker_control_rejects_a_sample_size_that_cannot_measure_within_similarity(
+    workspace, monkeypatch
+) -> None:
+    _install_attacker(monkeypatch, _FakeAttacker(per_call=_clustered_messages(5)))
+
+    result = runner.invoke(app, ["attacker-control", "--samples", "1"])
+    assert result.exit_code == ExitCode.BAD_CONFIG

@@ -22,8 +22,14 @@ from redcell.arena.support_agent import (
     ArenaAdapter,
     DefenseLevel,
 )
+from redcell.attacker_control import run_attacker_control
 from redcell.budget import BudgetLimits
-from redcell.config import ProviderConfigError, ProviderPair, load_providers
+from redcell.config import (
+    ProviderConfigError,
+    ProviderPair,
+    load_attacker,
+    load_providers,
+)
 from redcell.executor import ConversationExecutor
 from redcell.generation import AttackGenerator, TemplateAttackGenerator
 from redcell.llm.base import LLMProvider
@@ -80,6 +86,15 @@ class ExitCode(IntEnum):
 
     BAD_CONFIG = 4
     """配置被拒绝或目标不存在,目标未被触碰。"""
+
+    CONTROL_FAILED = 5
+    """开跑前的对照没通过 —— **不要拿这次配置去跑校准**。
+
+    ⚠️ **刻意不复用 1**:1 的含义是"跑完了,并且在目标身上发现了问题"。
+    而对照失败的含义几乎相反 —— "这套装置根本不具备发现问题的能力"。
+    两者在 CI 里挤进同一个码,一次"攻击方太弱"会被读成"扫出漏洞了",
+    方向正好反过来,是最糟的一种误读。
+    """
 
 
 def _controller(algorithm: str, seed: int) -> SearchController:
@@ -248,6 +263,83 @@ def report(
     paths = _emit(stored, attempts, findings, out)
     _summarise(stored, findings, paths)
     raise typer.Exit(ExitCode.FINDINGS if findings else ExitCode.CLEAN)
+
+
+@app.command(name="attacker-control")
+def attacker_control(
+    samples: Annotated[
+        int, typer.Option(help="每个策略生成几条话术(总调用数 = 策略数 × 本值)")
+    ] = 5,
+    seed: Annotated[int, typer.Option(help="种子;与正式 run 同一套派生机制")] = 0,
+    actor: Annotated[str, typer.Option(help="攻击时扮演的身份")] = "customer_a",
+    out: Annotated[Path, typer.Option(help="话术明细的输出目录")] = Path("runs"),
+) -> None:
+    """校准之前先跑这个:确认**攻击方不是瓶颈**。
+
+    若最终校准出现「六条 ASR 挤在一起」,有三种原因长得一模一样 ——
+    靶场与策略不契合 / 靶场有缺陷 / **攻击方太弱**。前两种要动靶场,
+    第三种动靶场是**调错地方**,还会白烧掉三轮配额里的一轮。
+    这道对照专门把第三种择出来。
+
+    ⚠️ **本命令没有离线模式,这是刻意的。** 离线用的是模板生成器,
+    同一策略每次产出同一句话 —— 组内相似度必然接近 1、分离度必然很大,
+    于是它会稳定地报告"攻击方不是瓶颈"。但那句话是关于**模板**的,
+    与真正上场的 attacker 无关。一个永远说 OK 的对照比没有对照更危险。
+    """
+    policy = SUPPORT_AGENT_POLICY
+    strategies = select_applicable(list(PHASE_0_STRATEGIES), policy)
+    if not strategies:
+        typer.secho("没有适用于该目标的策略。", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG)
+
+    try:
+        brief = policy.brief_for(actor)
+        attacker = load_attacker()
+    except (KeyError, ProviderConfigError) as exc:
+        typer.secho(f"配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG) from exc
+
+    generator = LLMMutationGenerator(attacker, model=attacker.model)
+
+    async def _control_and_close():
+        # 与 run 同理:provider 必须在创建它的那个事件循环里关闭。
+        try:
+            return await run_attacker_control(
+                generator,
+                strategies,
+                brief,
+                samples_per_strategy=samples,
+                seed=seed,
+            )
+        finally:
+            await attacker.aclose()
+
+    try:
+        report_data = asyncio.run(_control_and_close())
+    except ValueError as exc:
+        typer.secho(f"配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG) from exc
+
+    # 话术全文必须落盘:这道对照的结论只有两个小数,而 attacker_control 明确要求
+    # 结果可以**手工复核**(Jaccard 选得这么土就是为了这个)。只打印两个数字的话,
+    # 谁也没法回答"它们到底像在哪儿"。
+    out.mkdir(parents=True, exist_ok=True)
+    detail = out / f"attacker-control-seed{seed}.json"
+    detail.write_text(report_data.model_dump_json(indent=2), encoding="utf-8")
+
+    typer.echo(f"模型    {attacker.model}")
+    typer.echo(f"策略    {len(strategies)} 个 × {samples} 条 = {len(strategies) * samples} 次调用")
+    typer.echo(report_data.summary())
+    typer.echo(f"明细    {detail}")
+
+    if report_data.attacker_is_bottleneck:
+        typer.secho(
+            "不要用这套配置去跑校准 —— 先换攻击方或调高其 temperature,靶场一个字都别动。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(ExitCode.CONTROL_FAILED)
+    raise typer.Exit(ExitCode.CLEAN)
 
 
 def _emit(run_record: Run, attempts: list, findings: list, out: Path) -> dict[str, Path]:
