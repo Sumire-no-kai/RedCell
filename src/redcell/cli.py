@@ -23,9 +23,12 @@ from redcell.arena.support_agent import (
     DefenseLevel,
 )
 from redcell.budget import BudgetLimits
+from redcell.config import ProviderConfigError, ProviderPair, load_providers
 from redcell.executor import ConversationExecutor
-from redcell.generation import TemplateAttackGenerator
+from redcell.generation import AttackGenerator, TemplateAttackGenerator
+from redcell.llm.base import LLMProvider
 from redcell.llm.scripted import ScriptedProvider
+from redcell.mutation import LLMMutationGenerator
 from redcell.orchestrator import (
     RunExecutionRequest,
     RunFailedError,
@@ -91,6 +94,26 @@ def _controller(algorithm: str, seed: int) -> SearchController:
     raise typer.BadParameter(f"未知算法 '{algorithm}';可选:static / random")
 
 
+def _providers(
+    online: bool,
+) -> tuple[LLMProvider, AttackGenerator, ProviderPair | None]:
+    """按 online 开关组装 (target provider, 攻击生成器, 待关闭的 provider 对)。
+
+    离线路径刻意保持零成本:脚本化 target + 模板生成器,不读 .env、不建 HTTP 客户端。
+    因此第三个返回值为 None —— 没有需要关闭的东西。
+    """
+    if not online:
+        provider = ScriptedProvider(
+            default="I can help with orders and store policies. What do you need?",
+            model="scripted-offline",
+        )
+        return provider, TemplateAttackGenerator(), None
+
+    pair = load_providers()
+    generator = LLMMutationGenerator(pair.attacker, model=pair.attacker.model)
+    return pair.target, generator, pair
+
+
 @app.command()
 def run(
     algorithm: Annotated[str, typer.Option(help="搜索算法:static / random")] = "static",
@@ -103,6 +126,12 @@ def run(
     enforce_permissions: Annotated[
         bool, typer.Option(help="靶场工具层是否做权限检查(校准旋钮 ③)")
     ] = True,
+    online: Annotated[
+        bool,
+        typer.Option(
+            help="接真实模型跑(target=GLM / attacker=Gemini,从 .env 读)。" "默认离线,只验证流水线。"
+        ),
+    ] = False,
     max_tokens: Annotated[int | None, typer.Option(help="token 上限")] = None,
     max_seconds: Annotated[float | None, typer.Option(help="墙钟上限(秒)")] = None,
     db: Annotated[str, typer.Option(help="SQLite 连接串")] = DEFAULT_URL,
@@ -110,8 +139,8 @@ def run(
 ) -> None:
     """对自带靶场跑一次评测。
 
-    ⚠️ 目前只有脚本化离线 provider,因此这条命令验证的是**流水线**,
-    不是靶场的真实安全性。接入真实模型后同一条命令才会产出可用结论。
+    默认离线(脚本化 provider),验证的是**流水线**而非靶场的真实安全性。
+    加 `--online` 才接入真实模型 —— 那时才会产出可用于校准的结论。
     """
     limits = BudgetLimits(
         max_attempts=budget,
@@ -127,12 +156,14 @@ def run(
         typer.secho("没有适用于该目标的策略。", fg=typer.colors.RED, err=True)
         raise typer.Exit(ExitCode.BAD_CONFIG)
 
-    provider = ScriptedProvider(
-        default="I can help with orders and store policies. What do you need?",
-        model="scripted-offline",
-    )
+    try:
+        target_provider, generator, providers = _providers(online)
+    except ProviderConfigError as exc:
+        typer.secho(f"配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG) from exc
+
     adapter = ArenaAdapter(
-        provider,
+        target_provider,
         defense=defense,
         enforce_permissions=enforce_permissions,
     )
@@ -145,13 +176,13 @@ def run(
         limits=limits,
         seed=seed,
         strategy_ids=[s.id for s in strategies],
-        notes=OFFLINE_NOTICE,
+        notes=None if online else OFFLINE_NOTICE,
     )
 
     orchestrator = RunOrchestrator(
         executor=ConversationExecutor(
             adapter=adapter,
-            generator=TemplateAttackGenerator(),
+            generator=generator,
             scorer=Level1Scorer(policy),
             policy=policy,
         ),
@@ -159,14 +190,23 @@ def run(
         store=(store := RunStore(db)),
     )
 
-    typer.secho(f"⚠️  {OFFLINE_NOTICE}", fg=typer.colors.YELLOW, err=True)
+    if not online:
+        typer.secho(f"⚠️  {OFFLINE_NOTICE}", fg=typer.colors.YELLOW, err=True)
 
-    try:
-        result = asyncio.run(
-            orchestrator.execute(
+    async def _execute_and_close():
+        # ⚠️ execute 与 provider 关闭必须在**同一个事件循环**里:
+        # httpx AsyncClient 绑定到创建它的 loop,换一个新 loop 去关会报
+        # "Event loop is closed"。所以不能用两次 asyncio.run。
+        try:
+            return await orchestrator.execute(
                 RunExecutionRequest(run=run_record, strategies=strategies, actor=actor)
             )
-        )
+        finally:
+            if providers is not None:
+                await providers.aclose()
+
+    try:
+        result = asyncio.run(_execute_and_close())
     except RunFailedError as exc:
         typer.secho(
             f"Run {exc.run.id} 失败:{exc.failure.code} — {exc.failure.message}",
