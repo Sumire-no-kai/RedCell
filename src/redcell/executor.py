@@ -24,6 +24,12 @@ from redcell.failures import (
     safe_error_message,
 )
 from redcell.generation import AttackGenerationError, AttackGenerationRequest, AttackGenerator
+from redcell.llm.openai_compatible import (
+    ProviderConfigurationError,
+    ProviderProtocolError,
+    ProviderRateLimitedError,
+    ProviderTransientError,
+)
 from redcell.protocols.adapter import (
     AdapterCapabilities,
     AdapterInput,
@@ -45,6 +51,7 @@ from redcell.protocols.trace import (
     build_attempt,
 )
 from redcell.randomness import AttemptSeeds, derive_seed, seeds_for_attempt
+from redcell.retry import RETRY_AFTER_KEY
 from redcell.scoring.level1 import Level1Scorer, ScoringResult
 
 
@@ -439,7 +446,48 @@ def _classify_failure(
             cost=partial_cost,
         )
 
-    if isinstance(exc, (TimeoutError, ConnectionError)):
+    if isinstance(exc, ProviderRateLimitedError):
+        # 429 与超时的关键区别:服务端在**处理之前**就拒绝了,
+        # 所以送达状态是确定的 NOT_SENT,重试无条件安全 ——
+        # 不需要走 _network_failure 里那套"可能已产生副作用"的判定。
+        details: dict[str, str | int | float | bool | None] = {}
+        if exc.retry_after_seconds is not None:
+            details[RETRY_AFTER_KEY] = exc.retry_after_seconds
+        return _failure(
+            exc,
+            kind=FailureKind.RATE_LIMITED,
+            stage=stage,
+            retry_safety=RetrySafety.SAFE,
+            delivery=DeliveryStatus.NOT_SENT,
+            side_effect=SideEffectStatus.NONE,
+            cost=partial_cost,
+            details=details,
+        )
+
+    if isinstance(exc, ProviderConfigurationError):
+        return _failure(
+            exc,
+            kind=FailureKind.CONFIGURATION,
+            stage=stage,
+            retry_safety=RetrySafety.UNSAFE,
+            delivery=DeliveryStatus.NOT_SENT,
+            side_effect=SideEffectStatus.NONE,
+            cost=partial_cost,
+        )
+
+    if isinstance(exc, ProviderProtocolError):
+        # HTTP 200 但结构不对:请求确实送达并被处理了,只是我们读不懂回复。
+        # 重试通常无济于事 —— 多半是端点变了或对方改了协议,需要人看一眼。
+        return _failure(
+            exc,
+            kind=FailureKind.PROTOCOL,
+            stage=stage,
+            retry_safety=RetrySafety.UNSAFE,
+            delivery=DeliveryStatus.SENT,
+            cost=partial_cost,
+        )
+
+    if isinstance(exc, (ProviderTransientError, TimeoutError, ConnectionError)):
         return _network_failure(
             exc,
             stage=stage,
@@ -524,6 +572,7 @@ def _failure(
     cost: CostRecord,
     delivery: DeliveryStatus = DeliveryStatus.UNKNOWN,
     side_effect: SideEffectStatus = SideEffectStatus.UNKNOWN,
+    details: dict[str, str | int | float | bool | None] | None = None,
 ) -> FailureRecord:
     return FailureRecord(
         kind=kind,
@@ -535,6 +584,7 @@ def _failure(
         delivery_status=delivery,
         side_effect_status=side_effect,
         usage=cost,
+        details=details or {},
     )
 
 

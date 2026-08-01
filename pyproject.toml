@@ -16,6 +16,9 @@ dependencies = [
     "structlog>=24.1",
     "sqlalchemy>=2.0",
     "jinja2>=3.1",
+    # 真实 provider 的 HTTP 出口。选 httpx 而非 requests:执行器全程是 async,
+    # 且它的 MockTransport 让 provider 测试可以完全不联网。
+    "httpx>=0.27",
 ]
 
 [project.scripts]
