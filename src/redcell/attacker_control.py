@@ -49,6 +49,7 @@ from redcell.generation import AttackGenerationRequest, AttackGenerator
 from redcell.protocols.policy import TargetBrief
 from redcell.protocols.strategy import Strategy
 from redcell.randomness import derive_seed
+from redcell.retry import RetryPolicy, retry_provider_call
 
 _WORD = re.compile(r"[a-z0-9一-鿿]+")
 
@@ -112,6 +113,7 @@ async def run_attacker_control(
     *,
     samples_per_strategy: int = 5,
     seed: int = 0,
+    retry_policy: RetryPolicy | None = None,
 ) -> AttackerControlReport:
     """对每个策略各生成若干条话术,比较组内 / 组间相似度。
 
@@ -132,7 +134,14 @@ async def run_attacker_control(
                 prior_turns=[],
                 seed=derive_seed(seed, "attacker-control", strategy.id, str(index)),
             )
-            messages.append((await generator.generate(request)).content)
+            # ⚠️ 必须带重试:本函数直接打 provider,不走 orchestrator。
+            # 免费层上连续几十次串行调用几乎一定会撞 429,
+            # 没有重试就会让"对照崩了"被读成"对照没过" —— 两者处置相反。
+            reply = await retry_provider_call(
+                lambda request=request: generator.generate(request),
+                policy=retry_policy or RetryPolicy(),
+            )
+            messages.append(reply.content)
         collected.append(StrategySamples(strategy_id=strategy.id, messages=messages))
 
     return AttackerControlReport(

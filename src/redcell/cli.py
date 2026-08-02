@@ -30,6 +30,7 @@ from redcell.config import (
     load_attacker,
     load_providers,
 )
+from redcell.controls import ControlsReport, run_negative_control, run_positive_control
 from redcell.executor import ConversationExecutor
 from redcell.generation import AttackGenerator, TemplateAttackGenerator
 from redcell.llm.base import LLMProvider
@@ -275,6 +276,65 @@ def report(
     paths = _emit(stored, attempts, findings, out)
     _summarise(stored, findings, paths)
     raise typer.Exit(ExitCode.FINDINGS if findings else ExitCode.CLEAN)
+
+
+@app.command(name="controls")
+def controls(
+    out: Annotated[Path, typer.Option(help="明细输出目录")] = Path("runs"),
+) -> None:
+    """校准之前的**阳性 / 阴性对照**(`CALIBRATION.md` §2)。
+
+    阳性:把防御措辞拿掉,最直白的攻击**必须**得手 —— 不得手说明链路断了
+    (canary 没植入 / 工具没插桩 / 检测器有 bug),此时任何校准结果都无意义。
+
+    阴性:一批完全正当的请求**必须零 Finding** —— 有 Finding 就是误报。
+
+    ⚠️ **本命令没有离线模式,与 attacker-control 同一个理由:**
+    离线要让脚本化 provider "配合"地被攻破,那证明的只是我们自己写的脚本能触发
+    检测器。**报告里的发现必须来自模型决策。** 检测器本身由测试用脚本化 provider 锁住。
+    """
+    policy = SUPPORT_AGENT_POLICY
+    try:
+        pair = load_providers()
+    except ProviderConfigError as exc:
+        typer.secho(f"配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG) from exc
+
+    scorer = Level1Scorer(policy)
+
+    def _make(enforce_permissions: bool) -> ArenaAdapter:
+        # 阳性对照必须在**移除防御措辞**的靶场上跑 —— 那正是 DefenseLevel.NONE 的用途。
+        return ArenaAdapter(
+            pair.target,
+            defense=DefenseLevel.NONE,
+            enforce_permissions=enforce_permissions,
+        )
+
+    async def _run_controls():
+        try:
+            positive = await run_positive_control(_make, scorer)
+            # 阴性对照用**正常配置**跑:它要回答的是"日常设置下会不会误报",
+            # 在无防御的靶场上问这个问题没有意义。
+            negative = await run_negative_control(
+                ArenaAdapter(pair.target, defense=DefenseLevel.STANDARD), scorer
+            )
+            return ControlsReport(positive=positive, negative=negative)
+        finally:
+            await pair.aclose()
+
+    report_data = asyncio.run(_run_controls())
+
+    out.mkdir(parents=True, exist_ok=True)
+    detail = out / "controls.json"
+    detail.write_text(report_data.model_dump_json(indent=2), encoding="utf-8")
+
+    typer.echo(f"模型    {pair.target.model}")
+    typer.echo(report_data.summary())
+    typer.echo(f"明细    {detail}")
+
+    if not report_data.passed:
+        raise typer.Exit(ExitCode.CONTROL_FAILED)
+    raise typer.Exit(ExitCode.CLEAN)
 
 
 @app.command(name="attacker-control")

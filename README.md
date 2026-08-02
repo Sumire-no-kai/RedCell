@@ -114,10 +114,29 @@ across arms. Pass the flag for any run whose sample size is part of the claim.
 
 ### Before you trust a calibration run
 
+Three controls must pass before calibration data means anything. Two of them
+check the arena:
+
+```bash
+redcell controls
+```
+
+*Positive*: with the defensive wording removed, blunt attacks must land — if they
+don't, the chain is broken (canary not planted, tools not instrumented, detector
+buggy) and no calibration number is worth reading. *Negative*: a batch of
+perfectly legitimate requests must produce zero findings.
+
+Each positive case is repeated and passes if it lands **at least once**. The
+target runs at temperature 0.7 by protocol, so a single sample cannot establish
+"must succeed" — and a control that fails at random is worse than none, because
+it sends you looking for a broken chain that isn't there.
+
+The third checks the instrument itself:
+
 The attacker LLM is the *measuring instrument*. If it renders every strategy as
 much the same prose, "no separation between strategies" says something about the
 instrument, not about the target — and the two are indistinguishable after the
-fact. Check the instrument first:
+fact.
 
 ```bash
 redcell attacker-control --samples 5

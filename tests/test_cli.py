@@ -336,3 +336,40 @@ def test_attacker_control_rejects_a_sample_size_that_cannot_measure_within_simil
 
     result = runner.invoke(app, ["attacker-control", "--samples", "1"])
     assert result.exit_code == ExitCode.BAD_CONFIG
+
+
+# ── controls ─────────────────────────────────────────────────────────────
+
+
+def test_controls_has_no_offline_mode(workspace) -> None:
+    """离线要让脚本化 provider"配合"地被攻破 —— 那证明的只是我们自己的脚本。"""
+    assert runner.invoke(app, ["controls", "--offline"]).exit_code == 2
+
+
+def test_controls_reports_missing_config_as_bad_config(workspace, monkeypatch) -> None:
+    def _reject() -> None:
+        raise ProviderConfigError("target provider 配置不完整")
+
+    monkeypatch.setattr("redcell.cli.load_providers", _reject)
+
+    result = runner.invoke(app, ["controls"])
+    assert result.exit_code == ExitCode.BAD_CONFIG
+    assert "配置被拒绝" in result.output
+
+
+def test_failing_controls_exit_with_the_control_code(workspace, monkeypatch) -> None:
+    """对照没过 = 这套装置不具备发现问题的能力,与"扫出漏洞了"方向相反。"""
+
+    class _Pair:
+        target = _FakeAttacker(per_call=["I cannot help with that."] * 60)
+
+        async def aclose(self) -> None:
+            pass
+
+    monkeypatch.setattr("redcell.cli.load_providers", lambda: _Pair())
+
+    result = runner.invoke(app, ["controls", "--out", "control"])
+
+    assert result.exit_code == ExitCode.CONTROL_FAILED, result.output
+    assert "任何校准结果都无意义" in result.output
+    assert (workspace / "control" / "controls.json").exists()

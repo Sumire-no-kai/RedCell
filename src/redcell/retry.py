@@ -2,13 +2,29 @@
 
 from __future__ import annotations
 
+import asyncio
 import random
+from collections.abc import Awaitable, Callable
+from typing import TypeVar
 
 from pydantic import Field
 
-from redcell.failures import FailureKind, FailureRecord
+from redcell.failures import (
+    DeliveryStatus,
+    FailureKind,
+    FailureRecord,
+    FailureStage,
+    RetrySafety,
+    SideEffectStatus,
+)
+
+# 只依赖 provider 的异常类型。openai_compatible 只向下依赖 llm.base 与 protocols.common,
+# 不会与本模块形成环 —— 有 test_module_imports 的逐模块子进程导入兜底。
+from redcell.llm.openai_compatible import ProviderRateLimitedError, ProviderTransientError
 from redcell.protocols.common import RedCellModel
 from redcell.reliability import ReliabilityPolicy
+
+T = TypeVar("T")
 
 RETRY_AFTER_KEY = "retry_after_seconds"
 """`FailureRecord.details` 里存放服务端 `Retry-After` 的键。
@@ -102,8 +118,91 @@ class RetryPolicy(RedCellModel):
         return self.max_delay_seconds
 
 
+async def retry_provider_call(
+    operation: Callable[[], Awaitable[T]],
+    *,
+    policy: RetryPolicy,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    rng: random.Random | None = None,
+    on_retry: Callable[[FailureRecord, int, float], None] | None = None,
+) -> T:
+    """给**直接调用 provider** 的路径做有界重试。⭐
+
+    ## 为什么需要它
+
+    正式 run 的重试在 orchestrator 里(按 attempt 重试)。但开跑前的两道对照
+    (`controls` / `attacker-control`)**不走 orchestrator**,于是它们此前
+    **一次重试都没有** —— 而它们恰恰是最容易撞 429 的地方:
+    连续几十次串行调用、跑在免费层上。实测就是这样被一个 429 整个打断的。
+
+    后果比"跑失败了"更糟:命令带着 traceback 崩掉,而操作者很容易把
+    **"对照崩了"读成"对照没过"** —— 前者要重跑,后者要停下来查链路,处置完全相反。
+
+    ## 只重试两类,其余立刻抛
+
+    * `RATE_LIMITED` —— 服务端在处理**之前**就拒绝,送达状态确定为 NOT_SENT;
+    * `NETWORK_TRANSIENT` —— 超时 / 5xx。
+
+    配置错误(401/404)与协议错误(200 但结构不对)**不重试**:
+    退避循环只会把"端点写错了"磨成一条超时,让人查错方向。
+
+    ⚠️ 这里对副作用的判断比 executor 宽松,原因是**场景不同**:对照跑的是
+    只读探测,且每条 case 之前都会 `reset()` 靶场 —— 靶场是模拟器,重放安全。
+    正式 run 里的攻击可能触发退款一类不可重放的动作,所以那条路径**必须**
+    保留 executor 那套更严的"可能已产生副作用"判定,不要拿本函数去替换它。
+    """
+    rng = rng or random.Random(0)
+    retry_number = 0
+    while True:
+        try:
+            return await operation()
+        except ProviderRateLimitedError as exc:
+            details: dict[str, str | int | float | bool | None] = {}
+            if exc.retry_after_seconds is not None:
+                details[RETRY_AFTER_KEY] = exc.retry_after_seconds
+            failure = _preflight_failure(exc, FailureKind.RATE_LIMITED, details)
+            pending = exc
+        except (ProviderTransientError, TimeoutError, ConnectionError) as exc:
+            failure = _preflight_failure(exc, FailureKind.NETWORK_TRANSIENT, {})
+            pending = exc
+
+        if retry_number >= policy.max_retries_for(failure):
+            # ⚠️ 必须显式 re-raise 这个对象:裸 `raise` 在 except 块**之外**没有
+            # 活跃异常,会变成 "No active exception to reraise",把真正的限流原因
+            # 换成一条毫无信息量的 RuntimeError。抛同一个对象可保留原始 traceback。
+            raise pending
+        retry_number += 1
+        delay = policy.delay_seconds(failure, retry_number, rng=rng)
+        if on_retry is not None:
+            on_retry(failure, retry_number, delay)
+        await sleep(delay)
+
+
+def _preflight_failure(
+    exc: Exception,
+    kind: FailureKind,
+    details: dict[str, str | int | float | bool | None],
+) -> FailureRecord:
+    return FailureRecord(
+        kind=kind,
+        stage=FailureStage.PREFLIGHT,
+        code=kind.value,
+        message=str(exc),
+        cause_type=type(exc).__name__,
+        retry_safety=RetrySafety.SAFE,
+        delivery_status=DeliveryStatus.NOT_SENT,
+        side_effect_status=SideEffectStatus.NONE,
+        details=details,
+    )
+
+
 # `ReliabilityPolicy` 已下沉到 redcell.reliability —— 见该模块开头的说明。
 # 这里保留 re-export,既有的 `from redcell.retry import ReliabilityPolicy` 无需改动。
 # ⚠️ 不要改回在本文件里定义:`protocols/run.py` 需要它,而 retry 依赖 protocols,
 # 定义在这里会制造循环导入。
-__all__ = ["RETRY_AFTER_KEY", "ReliabilityPolicy", "RetryPolicy"]
+__all__ = [
+    "RETRY_AFTER_KEY",
+    "ReliabilityPolicy",
+    "RetryPolicy",
+    "retry_provider_call",
+]
