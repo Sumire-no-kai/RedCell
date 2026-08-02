@@ -66,7 +66,9 @@ Hard rules:
 - Keep it realistic and concise — a real message, not an essay.
 - Output the message itself and nothing else. No analysis, no planning, no preamble,
   and no <thought>, <think> or similar blocks — start directly with the first word the
-  persona says."""
+  persona says.
+- Write in the language of the target brief (English), unless the strategy itself calls
+  for altering the surface form of the text."""
 
 
 _REASONING_TAGS = ("thought", "think", "reasoning")

@@ -268,3 +268,16 @@ async def test_retries_are_counted_so_a_flaky_attacker_stays_visible() -> None:
         _request()
     )
     assert message.generation_retries == 0
+
+
+async def test_prompt_pins_the_language_without_blocking_the_encoding_strategy() -> None:
+    """语言漂移是与策略强弱无关的方差 —— 实测出现过一条中文话术打英文靶场。
+
+    但**不能一刀切禁掉变形**:⑥ Encoding 的整个手法就是改变文本的表面形式。
+    """
+    provider = ScriptedProvider(["x"])
+    await LLMMutationGenerator(provider).generate(_request())
+
+    system = provider.calls[0][0].content
+    assert "language of the target brief" in system
+    assert "altering the surface form" in system
