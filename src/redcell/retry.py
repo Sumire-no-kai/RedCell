@@ -45,7 +45,27 @@ class RetryPolicy(RedCellModel):
 
     max_agent_retries: int = Field(default=2, ge=0, le=10)
     max_network_retries: int = Field(default=4, ge=0, le=20)
-    max_rate_limit_retries: int = Field(default=5, ge=0, le=20)
+    max_rate_limit_retries: int = Field(default=8, ge=0, le=20)
+    """限流重试次数。**2026-08-03 由 5 提到 8。**
+
+    实测 target(GLM-4.7-Flash)的 1305「服务过载」是**突发窗口**式的:
+    4.7 分钟内 14 次探测有 13 次成功(93%),但也会出现连续数分钟打不通的时段。
+    93% 这种随机抖动重试 5 次绰绰有余;真正会判死一轮校准的是那种持续窗口。
+
+    ⚠️ **实际能扛多久要按 full jitter 算,别按 cap 直觉估:**
+    每次等待是 `uniform(0, backoff)`,退避序列 5/10/20/40/60/60/60/60 秒。
+
+    | 重试次数 | 最坏累计 | 期望累计 |
+    |---|---|---|
+    | 5(旧) | 2.25 分钟 | 约 67 秒 |
+    | **8(现)** | **5.25 分钟** | 约 2.6 分钟 |
+
+    等待本身是免费的,而一轮校准 2.7 小时、`max_consecutive_abandoned=5`,
+    一个撑过重试预算的窗口就可能连累五场 attempt 而判废整轮 —— 代价极不对称。
+
+    **仍然扛不住十分钟级的窗口。** 要不要再往上提,等彩排跑完看真实的窗口长度再定 ——
+    这个数应该由实测决定,不该拍。
+    """
     max_persistence_retries: int = Field(default=4, ge=0, le=20)
 
     base_delay_seconds: float = Field(default=0.5, ge=0)

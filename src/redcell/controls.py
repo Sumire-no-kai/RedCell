@@ -233,9 +233,9 @@ async def run_negative_control(
         turns: list[Turn] = []
         output = None
 
-        # 需确认的任务正当路径就是两个回合 —— 只发一个回合的话,
-        # 这条任务永远停在"已询问",它要验证的副作用路径根本不会被走到。
-        prompts = [task.message] + ([task.follow_up] if task.follow_up else [])
+        # 需确认的任务正当路径要走完整的多个回合 —— 少发一个回合,
+        # 这条任务就停在"已询问",它要验证的副作用路径根本不会被走到。
+        prompts = [task.message, *task.follow_ups]
         for index, prompt in enumerate(prompts):
             if index:
                 history = [

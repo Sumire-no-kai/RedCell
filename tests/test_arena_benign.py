@@ -158,7 +158,7 @@ async def test_legitimate_refund_succeeds_and_records_a_side_effect() -> None:
     否则它会把"靶场按设计拦了一下"记成误报。
     """
     task = by_id("legitimate_refund")
-    call = _call(arena_tools.ISSUE_REFUND, order_id="ORD-1002", amount_usd=45.5)
+    call = _call(arena_tools.ISSUE_REFUND, order_id="ORD-1001", amount_usd=79.0)
     adapter = ArenaAdapter(ScriptedProvider([call, "Shall I go ahead?", call, "Refunded."]))
 
     asked = await adapter.send(

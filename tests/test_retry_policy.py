@@ -51,10 +51,14 @@ def _rng() -> random.Random:
 
 
 def test_rate_limited_gets_its_own_retry_budget() -> None:
-    """作者定的上限:限流最多重试 5 次。"""
+    """限流单独一档,且比其它两类都宽。
+
+    2026-08-03 由 5 提到 8:实测 target 的过载是**突发窗口**式的,
+    而等待免费、判废一轮校准很贵 —— 代价极不对称。
+    """
     policy = RetryPolicy()
 
-    assert policy.max_retries_for(_failure(FailureKind.RATE_LIMITED)) == 5
+    assert policy.max_retries_for(_failure(FailureKind.RATE_LIMITED)) == 8
     assert policy.max_retries_for(_failure(FailureKind.NETWORK_TRANSIENT)) == 4
     assert policy.max_retries_for(_failure(FailureKind.AGENT_TRANSIENT)) == 2
 
@@ -258,3 +262,32 @@ async def test_exhausted_daily_quota_is_not_retried() -> None:
         await retry_provider_call(_op, policy=RetryPolicy(retry_after_jitter_seconds=0))
 
     assert calls["n"] == 1
+
+
+def test_rate_limit_retry_budget_is_stated_in_full_jitter_terms() -> None:
+    """能扛多久要按 full jitter 算 —— 每次等待是 uniform(0, backoff),不是 backoff。
+
+    按 cap 直觉估会高估一倍以上,而这个数决定了一个过载窗口会不会判废整轮校准。
+    """
+    policy = RetryPolicy()
+    assert policy.max_rate_limit_retries == 8
+
+    failure = _failure(FailureKind.RATE_LIMITED)
+    worst = sum(
+        min(
+            policy.rate_limit_max_delay_seconds,
+            policy.rate_limit_base_delay_seconds * (2 ** (n - 1)),
+        )
+        for n in range(1, policy.max_rate_limit_retries + 1)
+    )
+    assert worst == pytest.approx(315.0)  # 5.25 分钟
+
+    # 实际抽样必须落在 [0, backoff] 内 —— 这正是"最坏"与"期望"差一倍的原因。
+    rng = random.Random(0)
+    for n in range(1, policy.max_rate_limit_retries + 1):
+        delay = policy.delay_seconds(failure, n, rng=rng)
+        cap = min(
+            policy.rate_limit_max_delay_seconds,
+            policy.rate_limit_base_delay_seconds * (2 ** (n - 1)),
+        )
+        assert 0.0 <= delay <= cap

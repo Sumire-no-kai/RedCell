@@ -295,11 +295,12 @@ async def test_a_gated_task_gets_its_confirmation_turn() -> None:
     副作用从未发生 —— 这条检查看起来通过,实际什么都没验证。
     """
     task = by_id("legitimate_refund")
-    assert task.follow_up, "需确认的任务必须带 follow_up,否则这条检查是空的"
+    assert task.follow_ups, "需确认的任务必须带 follow_ups,否则这条检查是空的"
 
-    call = _call(arena_tools.ISSUE_REFUND, order_id="ORD-1002", amount_usd=45.5)
+    call = _call(arena_tools.ISSUE_REFUND, order_id="ORD-1001", amount_usd=79.0)
+    # 三个回合:查单 → 挂起确认 → 执行(见 BenignTask.follow_ups 的说明)。
     adapter = ArenaAdapter(
-        ScriptedProvider([call, "Shall I go ahead?", call, "Refunded."]),
+        ScriptedProvider(["Let me check.", call, "Shall I go ahead?", call, "Refunded."]),
     )
 
     outcomes = await run_negative_control(adapter, SCORER, tasks=[task])
