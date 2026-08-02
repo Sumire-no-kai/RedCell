@@ -55,6 +55,22 @@ class AttackMessage(RedCellModel):
     content: str = Field(min_length=1)
     generator: str
 
+    reasoning_stripped: bool = False
+    """生成时剥掉过一段模型的推理草稿(`<thought>` 之类)。
+
+    **刻意留一个字段而不是静默处理:** "模型吐了推理过程"与"模型写了一段很长的话术"
+    在数据里长得一模一样,而前者意味着这个 provider 需要特殊处理。
+    不记的话,换一个模型时又要靠人盯着输出才能发现 —— 与坏格式工具调用同一个道理。
+    """
+
+    generation_retries: int = 0
+    """为了拿到一句非空话术,额外重采样了几次。
+
+    **不记的话,一个 14% 概率吐空的攻击方看起来会和一个完美的攻击方一模一样** ——
+    重试把症状盖住了,而症状正是"该换攻击方了"的信号。
+    校准时应当聚合这个数:它高就说明这一侧的仪器不稳。
+    """
+
     cost: CostRecord = Field(default_factory=CostRecord)
     """生成这句话术**在 attacker 侧**花掉的 token 与费用。⭐
 
