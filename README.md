@@ -99,18 +99,35 @@ replayed later.
 
 ### Calibration knobs and sample integrity
 
-The bundled arena has two enforcement gates you can switch off to study depth of
-defence separately from the model's judgement — `--enforce-permissions` (does the
-tool layer check ownership?) and `--enforce-confirmation` (does a destructive
-action require the customer to say yes first?). Both change *Impact* only: the
-agent still generates the violating call either way, which is what
-*Attempt* measures.
+`--defense` sets how firmly the target's system prompt states its rules, from
+`none` (no rules at all — positive-control use only) through `lenient` and
+`standard` to `strict`. Every level above `none` must cover the *same* four
+topics; only the wording softens. Dropping one would weaken the specific
+strategies that topic blocks, which turns measured strategy differentiation into
+an artefact of our own tuning — a test enforces this.
+
+Two more gates let you study depth of defence separately from the model's
+judgement — `--enforce-permissions` (does the tool layer check ownership?) and
+`--enforce-confirmation` (does a destructive action need the customer to say yes
+first?). Both change *Impact* only: the agent still generates the violating call
+either way, which is what *Attempt* measures.
 
 One flag matters more than it looks: `--top-up-abandoned`. By default a
 `--budget` counts *attempts started*, so an attempt abandoned to a rate limit
 still consumes its slot — and a calibration round can finish "successfully" with
 fewer samples per strategy than it was supposed to collect, unevenly distributed
 across arms. Pass the flag for any run whose sample size is part of the claim.
+
+`--max-cost` caps spend across *both* model slots. It is rejected outright if
+either side cannot report cost, rather than silently capping nothing.
+
+> ⚠️ Cost caps under-count models that think. Reasoning tokens are billed but do
+> not appear in the API's reported `usage`, so the cap only sees part of the
+> spend — and the same hidden budget truncates visible output unless you raise
+> the attacker's `max_tokens`. Measured: two Gemini Flash models returned attack
+> messages cut off mid-sentence at the default limit, while the Flash-Lite tier
+> did not. Prefer a non-thinking model, or reconcile against your provider's
+> console after the first paid run.
 
 ### Before you trust a calibration run
 

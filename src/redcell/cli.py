@@ -127,7 +127,11 @@ def _providers(
         return provider, TemplateAttackGenerator(), None
 
     pair = load_providers()
-    generator = LLMMutationGenerator(pair.attacker, model=pair.attacker.model)
+    generator = LLMMutationGenerator(
+        pair.attacker,
+        model=pair.attacker.model,
+        max_tokens=pair.attacker_max_tokens,
+    )
     return pair.target, generator, pair
 
 

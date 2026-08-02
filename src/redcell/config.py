@@ -50,6 +50,23 @@ class ProviderSettings(BaseSettings):
     max_concurrency: int = Field(default=0, ge=0)
     """并发上限,0 表示不限。给按并发数限流的 provider(如 GLM 免费层上限 1)用。"""
 
+    max_tokens: int = Field(default=512, gt=0)
+    """单次回复的 token 上限。⭐
+
+    ⚠️ **开了 thinking 的模型必须调大。** 2026-08-03 实测:
+    `gemini-3.6-flash` / `3.5-flash` 的思考 token **占用这个预算却不计进
+    `completion_tokens`** —— 512 时可见正文被截在句子中间(3.5-flash 七条全断),
+    调到 2048 后截断归零。
+
+    截断的攻击话术是**残缺的仪器**:它系统性地弱化每一条攻击,
+    而截断率还可能因策略而异 —— 那就成了偏差,不是噪声。
+
+    ⚠️ **同时意味着成本会被低估:** `--max-cost` 是按 `usage` 报的 token 算的,
+    而思考 token 不在里面。对 thinking 模型,那道闸门只管住了一部分开销 ——
+    首次跑完必须拿控制台用量对一次账。不想操心这件事就选非 thinking 的模型
+    (`*-flash-lite` 实测无此问题:512 下 0/7 截断,报的 token 与正文长度相符)。
+    """
+
     # 免费档默认按 0 成本处理:这是一句"我确认它免费"的显式声明,
     # 让预算上限可信。若接入付费模型,应在这里填真实单价。
     input_usd_per_mtok: float = Field(default=0.0, ge=0.0)
@@ -102,9 +119,13 @@ class ProviderPair:
         self,
         target: OpenAICompatibleProvider,
         attacker: OpenAICompatibleProvider,
+        *,
+        attacker_max_tokens: int = 512,
     ) -> None:
         self.target = target
         self.attacker = attacker
+        self.attacker_max_tokens = attacker_max_tokens
+        """attacker 单次回复的 token 上限 —— thinking 模型需要更大,见 ProviderSettings。"""
 
     async def aclose(self) -> None:
         await self.target.aclose()
@@ -124,7 +145,9 @@ def load_attacker() -> OpenAICompatibleProvider:
 
 def load_providers() -> ProviderPair:
     """从 env / `.env` 读出并建好两个 provider。配置不全时抛 ProviderConfigError。"""
+    attacker_settings = AttackerSettings()
     return ProviderPair(
         target=TargetSettings().build(name="target"),
-        attacker=load_attacker(),
+        attacker=attacker_settings.build(name="attacker"),
+        attacker_max_tokens=attacker_settings.max_tokens,
     )
