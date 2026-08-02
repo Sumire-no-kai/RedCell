@@ -207,3 +207,54 @@ def test_reliability_policy_is_importable_from_both_places() -> None:
     from redcell.retry import ReliabilityPolicy as ReExported
 
     assert Sunk is ReExported
+
+
+# ── 当日配额耗尽 ≠ 瞬时节流(2026-08-02 实测) ───────────────────────────
+
+
+def test_daily_quota_exhaustion_is_detected_from_the_body() -> None:
+    """Gemini 免费层在 quotaId 里明写 PerDay —— 那是按天计的,重试无用。"""
+    import httpx
+
+    from redcell.llm.openai_compatible import _is_daily_quota_exhausted
+
+    daily = httpx.Response(
+        429,
+        json=[
+            {
+                "error": {
+                    "code": 429,
+                    "details": [
+                        {
+                            "violations": [
+                                {"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}
+                            ]
+                        }
+                    ],
+                }
+            }
+        ],
+    )
+    throttle = httpx.Response(429, json={"error": {"message": "too many requests per minute"}})
+
+    assert _is_daily_quota_exhausted(daily)
+    # 认不出来就按可重试处理 —— 把普通节流误判成"今天没了"会让跑批白白停掉。
+    assert not _is_daily_quota_exhausted(throttle)
+
+
+async def test_exhausted_daily_quota_is_not_retried() -> None:
+    """重试到明天之前都不会好,烧光重试预算只会掩盖真实原因。"""
+    from redcell.llm.openai_compatible import ProviderRateLimitedError
+    from redcell.retry import retry_provider_call
+
+    calls = {"n": 0}
+
+    async def _op():
+        calls["n"] += 1
+        # ⚠️ 服务端此时仍会给一个很短的 Retry-After —— 照它退避正是那个坑。
+        raise ProviderRateLimitedError("quota", retry_after_seconds=2, daily_quota_exhausted=True)
+
+    with pytest.raises(ProviderRateLimitedError):
+        await retry_provider_call(_op, policy=RetryPolicy(retry_after_jitter_seconds=0))
+
+    assert calls["n"] == 1

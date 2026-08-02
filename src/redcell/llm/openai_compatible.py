@@ -77,6 +77,26 @@ class ProviderRateLimitedError(ProviderTransientError):
     而不是让上层瞎猜。
     """
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        retry_after_seconds: float | None = None,
+        daily_quota_exhausted: bool = False,
+    ) -> None:
+        super().__init__(message, retry_after_seconds=retry_after_seconds)
+        self.daily_quota_exhausted = daily_quota_exhausted
+        """这次 429 是**当日配额打满**,而不是一次瞬时节流。⭐
+
+        两者在 HTTP 层长得一模一样,处置却完全相反:节流等几秒就好,
+        当日配额**等到明天之前重试多少次都没用**。
+
+        ⚠️ 更坑的是服务端给的 `Retry-After` 会误导人 —— 实测 Gemini 在
+        每日配额耗尽时仍然回 `retryDelay: 2s`。照它退避会让调用方
+        白烧完整套重试预算,最后抛出一条"限流"错误,而真正的原因
+        (今天没额度了)一个字都没提到。
+        """
+
 
 class ProviderProtocolError(RuntimeError):
     """HTTP 200,但响应结构不是预期的样子。
@@ -268,10 +288,23 @@ class OpenAICompatibleProvider(LLMProvider):
             )
         if status == 429:
             retry_after = _retry_after(response)
-            self._log_failure(status, "rate_limited", "触发限流", retry_after=retry_after)
+            exhausted = _is_daily_quota_exhausted(response)
+            kind = "quota_exhausted" if exhausted else "rate_limited"
+            self._log_failure(
+                status,
+                kind,
+                "当日配额耗尽" if exhausted else "触发限流",
+                retry_after=retry_after,
+            )
+            hint = (
+                "**当日配额已耗尽,重试无用** —— 等配额窗口重置,或换一个 provider。"
+                if exhausted
+                else ""
+            )
             raise ProviderRateLimitedError(
-                f"{self._name} 触发限流(HTTP 429)。{detail}",
+                f"{self._name} 触发限流(HTTP 429)。{hint}{detail}",
                 retry_after_seconds=retry_after,
+                daily_quota_exhausted=exhausted,
             )
         if status >= 500:
             retry_after = _retry_after(response)
@@ -352,6 +385,34 @@ class OpenAICompatibleProvider(LLMProvider):
             cost_usd=cost,
             raw=raw,
         )
+
+
+_DAILY_QUOTA_MARKERS = ("perday", "per_day", "requestsperday")
+"""当日配额的标识片段(小写、去掉分隔符后匹配)。
+
+只在能**正面识别**出"按天计"的配额时才判定为耗尽;认不出来一律按可重试处理。
+默认取保守值 —— 把一次普通节流误判成"今天没了"会让跑批白白停掉,
+比多重试几次糟糕得多。
+"""
+
+
+def _is_daily_quota_exhausted(response: httpx.Response) -> bool:
+    """这条 429 是不是"今天的额度用完了"。
+
+    实测 Gemini 免费层在 `quotaId` 里明写
+    `GenerateRequestsPerDayPerProjectPerModel-FreeTier` —— 那是按天计的,
+    重试到明天之前都不会好。而普通 RPM 节流不带这个标识。
+
+    刻意只做字符串识别、不解析各家的配额结构:各家格式不同且会变,
+    解析器一旦失配就会**静默**退回错误的分支。字符串匹配失配时退回的是
+    "当作可重试",那是安全的一侧。
+    """
+    try:
+        body = response.text
+    except Exception:  # pragma: no cover - 响应体不可读时按可重试处理
+        return False
+    squashed = "".join(ch for ch in body.lower() if ch.isalnum())
+    return any(marker.replace("_", "") in squashed for marker in _DAILY_QUOTA_MARKERS)
 
 
 def _retry_after(response: httpx.Response) -> float | None:

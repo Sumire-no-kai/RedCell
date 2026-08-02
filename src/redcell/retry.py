@@ -157,6 +157,11 @@ async def retry_provider_call(
         try:
             return await operation()
         except ProviderRateLimitedError as exc:
+            # 当日配额耗尽:等到明天之前重试多少次都没用,而服务端给的
+            # Retry-After 还会误导人(实测 Gemini 此时仍回 2s)。
+            # 白烧完整套重试预算之后抛出的还是"限流",真正的原因一个字没提。
+            if exc.daily_quota_exhausted:
+                raise
             details: dict[str, str | int | float | bool | None] = {}
             if exc.retry_after_seconds is not None:
                 details[RETRY_AFTER_KEY] = exc.retry_after_seconds

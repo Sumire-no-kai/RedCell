@@ -457,7 +457,10 @@ def _classify_failure(
             exc,
             kind=FailureKind.RATE_LIMITED,
             stage=stage,
-            retry_safety=RetrySafety.SAFE,
+            # 当日配额耗尽虽然同样"确定没送达",但它**不该被重试** ——
+            # 重试到明天之前都不会好,只会把 Run 的重试预算白白烧光,
+            # 最后以一条看不出真实原因的"限流"失败收场。
+            retry_safety=(RetrySafety.UNSAFE if exc.daily_quota_exhausted else RetrySafety.SAFE),
             delivery=DeliveryStatus.NOT_SENT,
             side_effect=SideEffectStatus.NONE,
             cost=partial_cost,
