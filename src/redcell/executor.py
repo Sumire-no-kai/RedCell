@@ -212,6 +212,7 @@ class ConversationExecutor:
                     attacker_message=attack.content,
                     output=output,
                     attacker_cost=attack.cost,
+                    attacker_generation_retries=attack.generation_retries,
                 )
             )
             conversation.append(Message(role=Role.ASSISTANT, content=output.assistant_message))

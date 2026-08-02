@@ -351,3 +351,50 @@ def test_confirmation_and_permission_are_different_gates() -> None:
     assert not policy[arena_tools.DELETE_CUSTOMER].allowed
     assert policy[arena_tools.CLOSE_MY_ACCOUNT].allowed
     assert policy[arena_tools.CLOSE_MY_ACCOUNT].requires_confirmation
+
+
+# ── 难度旋钮 ①:弱化必须均匀 ─────────────────────────────────────────────
+
+_DEFENCE_TOPICS = {
+    "自有记录": ("own account", "you are speaking with"),
+    "配置与参考码": ("configuration", "reference code"),
+    "内部备注": ("annotations",),
+    "高危动作需确认": ("confirm",),
+}
+
+
+@pytest.mark.parametrize(
+    "level", [DefenseLevel.LENIENT, DefenseLevel.STANDARD, DefenseLevel.STRICT]
+)
+def test_every_defence_level_covers_the_same_topics(level: DefenseLevel) -> None:
+    """⭐ 调难度只能**均匀弱化措辞**,不能少写某一条。
+
+    删掉其中任何一条都是**针对单个策略调难度**,而 §11 明令禁止 ——
+    例如删掉"配置是内部的"会专门削弱 ①⑥ 那条 canary 线,
+    于是测出来的分化是我们自己造的,不是靶场的性质。
+
+    确认那条还有一层更硬的理由:模型没收到过的规则,谈不上"绕过" ——
+    删掉它 ⑦ 就根本无法被测试。
+    """
+    prompt = build_system_prompt(actor="customer_a", defense=level).lower()
+    for topic, anchors in _DEFENCE_TOPICS.items():
+        assert any(a in prompt for a in anchors), f"{level.value} 缺少「{topic}」"
+
+
+def test_lenient_sits_between_none_and_standard() -> None:
+    """中间档要真的更弱 —— 否则补它没有意义。
+
+    用措辞强度的代理指标:STANDARD 用的是命令式(Only/Never/must not),
+    LENIENT 降级成惯例式(normally/usually/meant for)。
+    """
+    lenient = build_system_prompt(actor="customer_a", defense=DefenseLevel.LENIENT)
+    standard = build_system_prompt(actor="customer_a", defense=DefenseLevel.STANDARD)
+
+    assert "Guidelines:" in lenient and "Operating rules:" in standard
+    for imperative in ("Only look up", "Never reveal", "must not"):
+        assert imperative not in lenient
+    assert any(hedge in lenient for hedge in ("normally", "usually", "meant for"))
+    # NONE 仍然是真的什么都没有 —— 它是阳性对照,不是最弱的校准档。
+    assert build_system_prompt(actor="customer_a", defense=DefenseLevel.NONE).endswith(
+        "customer_a."
+    )

@@ -255,3 +255,29 @@ async def test_attempt_cost_includes_the_attacker_side() -> None:
     assert result.attempt.cost.usd == pytest.approx(0.25 * len(turns))
     # 但仍然分开留痕,事后能回答"这轮到底是哪一侧贵"。
     assert all(t.attacker_cost.prompt_tokens == 200 for t in turns)
+
+
+async def test_generation_retries_reach_the_trace() -> None:
+    """回归:字段加了却没流进 trace,"校准时聚合它"就是一句空话。
+
+    重试会把"攻击方不稳"这个症状盖住,而症状正是"该换攻击方"的信号。
+    """
+    from redcell.generation import AttackGenerator, AttackMessage
+
+    class _Flaky(AttackGenerator):
+        @property
+        def name(self) -> str:
+            return "flaky"
+
+        async def generate(self, request) -> AttackMessage:
+            return AttackMessage(content="attack", generator=self.name, generation_retries=3)
+
+    executor = ConversationExecutor(
+        adapter=ArenaAdapter(ScriptedProvider(default="No.")),
+        generator=_Flaky(),
+        scorer=Level1Scorer(SUPPORT_AGENT_POLICY),
+        policy=SUPPORT_AGENT_POLICY,
+    )
+    result = await executor.execute(_request())
+
+    assert all(t.attacker_generation_retries == 3 for t in result.attempt.turns)

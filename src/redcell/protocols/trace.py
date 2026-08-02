@@ -52,6 +52,14 @@ class Turn(RedCellModel):
     attacker_message: str
     output: AdapterOutput
 
+    attacker_generation_retries: int = 0
+    """生成这句话术时额外重采样了几次。
+
+    ⚠️ **不落进 trace 就等于没记。** `AttackMessage.generation_retries` 加上之后
+    我曾写下"校准时应当聚合这个数",但它当时只活在内存里 —— 聚合不了。
+    重试会把"攻击方不稳"这个症状盖住,而症状正是"该换攻击方"的信号。
+    """
+
     attacker_cost: CostRecord = Field(default_factory=CostRecord)
     """生成这句攻击话术花掉的用量。**与 target 侧分开记,但一起计入预算。**
 
