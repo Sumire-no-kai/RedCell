@@ -169,3 +169,27 @@ async def test_attacker_and_target_temperature_are_configured_separately() -> No
     await gen.generate(_request())
 
     assert seen == [1.0]
+
+
+async def test_generated_message_carries_the_attacker_side_usage() -> None:
+    """⭐ 不带回用量的话,attacker 的开销**完全不进 Run 预算**。
+
+    `max_total_tokens` / `max_cost_usd` 只统计 target 那一侧,
+    于是设了上限也挡不住攻击方烧钱 —— 一张假的安全网,比没有更危险。
+    接入付费 attacker 之前必须先补上这条。
+    """
+    provider = ScriptedProvider(["opening line"], tokens_per_call=(120, 30))
+    message = await LLMMutationGenerator(provider).generate(_request())
+
+    assert message.cost.prompt_tokens == 120
+    assert message.cost.completion_tokens == 30
+    assert message.cost.total_tokens == 150
+
+
+async def test_a_generator_without_an_llm_declares_zero_rather_than_nothing() -> None:
+    """模板生成器不调 LLM,0 是**一句确认**,不是"忘了填"。"""
+    from redcell.generation import TemplateAttackGenerator
+
+    message = await TemplateAttackGenerator().generate(_request())
+    assert message.cost.total_tokens == 0
+    assert message.cost.usd == 0.0

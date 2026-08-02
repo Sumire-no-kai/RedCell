@@ -637,12 +637,21 @@ class RunOrchestrator:
                 f"Controller 的种子({self._controller.controller_seed})与从 run.seed "
                 f"派生的值({expected_seed})不一致;记录下来的 controller_seed 将无法重放"
             )
-        reports_cost = self._executor.adapter_capabilities.reports_cost
-        if run.limits.max_cost_usd is not None and not reports_cost:
+        # ⚠️ **两侧都要检查。** attacker 的开销自 2026-08-02 起计入 Run 预算,
+        # 只校验 target 会留下同一个盲点:上限只管住一半,却看起来在管全部。
+        blind = [
+            side
+            for side, ok in (
+                ("目标", self._executor.adapter_capabilities.reports_cost),
+                ("攻击方", self._executor.generator_reports_cost),
+            )
+            if not ok
+        ]
+        if run.limits.max_cost_usd is not None and blind:
             raise ValueError(
-                "目标不报告成本(AdapterCapabilities.reports_cost=False),"
-                "max_cost_usd 将永远不会触发也不会报错 —— 那是一个假的安全网。"
-                "请移除该上限,或换用能填充 cost_usd 的 provider"
+                f"{'与'.join(blind)}不报告成本(reports_cost=False),"
+                "max_cost_usd 将少算这一侧的开销 —— 那是一个假的安全网。"
+                "请移除该上限,或给对应 provider 填上真实单价(TokenPricing)"
             )
         if run.target_name != self._executor.target_name:
             raise ValueError("Run.target_name 与 Executor Policy 不一致")

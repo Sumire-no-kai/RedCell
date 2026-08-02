@@ -35,7 +35,7 @@ PYTHONUTF8=1 ./.venv/Scripts/python.exe -m redcell.cli run --online --budget 1
 
 - ⚠️ **Windows 控制台是 cp1252,直接跑会因中文输出抛 `UnicodeEncodeError`。**
   跑 CLI 时加 `PYTHONUTF8=1`。这是终端问题,不是代码 bug。
-- **当前:452 个测试全过,ruff / black 干净。**
+- **当前:456 个测试全过,ruff / black 干净。**
 - 分支 `feat/run-orchestrator`。前一批 5 次提交已落地、尚未推送远端;
   **Step 13 的改动尚未提交**(见下)。
 
@@ -74,7 +74,9 @@ PYTHONUTF8=1 ./.venv/Scripts/python.exe -m redcell.cli run --online --budget 1
 **当前位置:⛔ 卡在 attacker 侧选型。** 阳性/阴性对照已在真实模型上跑通;
 攻击方对照跑不了 —— **`gemini-3.6-flash` 每天只有 20 次请求**,
 而一轮校准需要约 3,400 次(见 Step 18)。
-限制是**按模型**的,换个型号很可能就能跑,但换哪个由作者定。
+限制是**按模型**的。**作者已定:attacker 换 `gemini-3.5-flash`**
+(实测撞的是每分钟 5 次,不是按天计 —— 可以靠 `rpm` 节流绕过去,
+一轮校准 attacker 侧约 11 小时)。`.env` 已配好,攻击方对照待跑。
 以下原始记录保留供追溯。
 
 <details>
@@ -720,6 +722,80 @@ failures.py  →  protocols.common(取 RedCellModel)
 
 - **测试:376 个全过**(本 Step 新增 48 + 坏格式计数 4)。
 - **剩余状态:** DONE
+
+### 2026-08-02 · Step 19 · 🐛 attacker 的开销**根本没进预算**(作者发现)
+
+#### 缺口
+
+作者在准备付费之前查出来的:`max_cost_usd` / `max_total_tokens` **只管住 target 一侧**。
+
+```
+LLMMutationGenerator.generate()  拿到 LLMResponse → 只留 content,用量丢弃
+AttackMessage                    没有 token / cost 字段
+_cost_of(turns)                  只累加 t.output.trace_metadata(target adapter 的)
+```
+
+**这是"假的安全网",而且比没有更糟** —— CLI 当初拒绝暴露 `--max-cost`,
+理由正是"永不触发的上限比没有更危险,因为你会依赖它"。
+这次是同一个错误的**更坏版本**:上限提供了,却只管一半,
+而使用者会以为它管住了全部。接付费 attacker 之前必须补。
+
+#### 修法:分开记录,一起计入
+
+* `AttackMessage.cost` 新增(显式字段,**不塞进任何魔法键**)——
+  成本藏在 `extra["cost_usd"]` 里忘了填就静默按 0 计费,这个错误犯过一次;
+* `Turn.attacker_cost` 分开留痕 —— CONCEPTS §14.4 要求两个模型位分别记录,
+  这样事后能回答"这轮到底是哪一侧贵";
+* `_cost_of()` 两侧相加。**墙钟只取 target 侧** ——
+  attacker 的等待已包含在整场 attempt 的耗时里,相加会把同一段时间算两次。
+
+#### ⚠️ 同一个盲点在上一层还有一份
+
+`orchestrator` 那道"拒绝假安全网"的 preflight 守卫**只检查 target 报不报成本**。
+attacker 进预算之后,它也必须报得出成本,否则上限照样少算一半。
+
+于是补上对称的能力声明:`AttackGenerator.reports_cost`
+(与 `AdapterCapabilities.reports_cost` 同一个模式,默认取最保守的 False)。
+`LLMMutationGenerator` **透传 provider 的声明**,不写死 True ——
+那等于替使用者担保一个我们并不知道的数字。
+不调 LLM 的生成器声明 **True**:它报的 0 是准确值,不是"不知道",两者语义必须分开。
+
+#### 顺带:`--max-cost` 从"刻意不暴露"改为"暴露但拒绝造假"
+
+藏起来的前提是"设了永不触发"。现在 preflight 会在**任一侧**报不出成本时当场拒绝,
+它不可能再变成假的安全网 —— 继续藏着反而挡住了正当用法(接了付费 provider 的人)。
+
+**并且顺手修了退出码语义:** preflight 阶段失败此前走 `RUN_FAILED(3)`,
+但那时**目标一次都没被触碰**,按 `ExitCode` 自己的定义就该是 `BAD_CONFIG(4)`。
+CI 必须分得开:前者改配置,后者查目标或环境。
+
+- **测试:456 个全过**(本 Step 新增 5),ruff / black 干净。
+- **剩余状态:** DONE。⚠️ **在真正接付费 provider 之前,仍建议同时开 Google 项目侧的
+  账单告警** —— 我们这道闸门是**按 attempt 前置检查**的(预算不在一场 attempt 中途
+  打断,见 `BudgetManager` 的说明),所以最多可能超出一场 attempt 的量;
+  账单告警管的是另一个失效面(比如配置写错了单价)。
+
+### 2026-08-02 · Step 20 · Web 总控里的模型选择(需求登记,Phase 2)
+
+作者提出:既然各模型的限制差异这么大(有的按天、有的按分钟、有的按 token),
+**把选择权交给用户** —— Web 总控里做成下拉选项,把每个模型的实测限制写在旁边,
+嫌慢就换一个。
+
+**认可,登记为 Phase 2(Web/Dashboard)的需求。** 现在不实装,但记下两条约束,
+免得到时候做成一个会骗人的界面:
+
+1. **界面上的限制数字必须是实测的,不能是抄文档的。** 本项目已经在这件事上栽过两次
+   (Step 01 只测 RPM 没测每日总量;Step 18 只测一个型号就写成"Gemini 免费层")。
+   所以这个下拉框背后应当是一条**可重跑的探测**,而不是一张手写常量表 ——
+   手写表会过时,而且过时得悄无声息。
+2. **换模型必须同时提示它对实验的含义。** `STRATEGIES.md` §4.1 写明预测是
+   「策略 × 靶场 × 攻击方」三元组的属性 —— 换攻击方等于换了被检验的对象。
+   开跑前换没问题(此刻就是这么做的),**看到结果之后换则要重新预注册**。
+   界面若只显示"快/慢",会诱导用户在中途换模型而不知道自己作废了什么。
+
+- **剩余状态:** OPEN(Phase 2,与 Web/Dashboard 一并)。
+  前置件已就绪:`redcell controls` / `attacker-control` 的退出码语义、
+  以及 Step 18 那套按模型探测配额的做法,都可以直接被 Web 复用。
 
 ### 2026-08-02 · Step 18 · ⛔ `gemini-3.6-flash` 是**每天 20 次**,attacker 侧选型作废
 

@@ -11,6 +11,7 @@ from string import Formatter
 
 from pydantic import Field, model_validator
 
+from redcell._base import CostRecord
 from redcell.protocols.common import RedCellModel
 from redcell.protocols.policy import TargetBrief
 from redcell.protocols.strategy import Strategy, TemplateSlot
@@ -54,6 +55,28 @@ class AttackMessage(RedCellModel):
     content: str = Field(min_length=1)
     generator: str
 
+    cost: CostRecord = Field(default_factory=CostRecord)
+    """生成这句话术**在 attacker 侧**花掉的 token 与费用。⭐
+
+    ## 为什么必须带回来
+
+    没有它的时候,attacker 的开销**完全不进 Run 预算** ——
+    `max_total_tokens` / `max_cost_usd` 只统计 target adapter 那一侧,
+    于是设了上限也挡不住攻击方烧钱。**那是一张假的安全网,比没有更危险,
+    因为你会依赖它。**(与 CLI 当初拒绝暴露 `--max-cost` 是同一条理由,
+    只不过那次是"不提供",这次是"提供了但漏计"——后者更坏。)
+
+    ## 为什么是显式字段
+
+    同样的错误犯过一次:成本一度藏在 `TraceMetadata.extra["cost_usd"]`
+    这种约定俗成的魔法键里,忘了填就静默按 0 计费。约定俗成的键
+    没有任何机制保证它被填上。
+
+    默认 `CostRecord()`(全 0)对**不调 LLM 的生成器**是正确的声明 ——
+    `TemplateAttackGenerator` 填槽位,确实不花钱。
+    但凡背后有 provider 的生成器都必须如实填,有测试锁住。
+    """
+
 
 class AttackGenerator(ABC):
     """每一轮生成一句攻击方消息。
@@ -65,6 +88,22 @@ class AttackGenerator(ABC):
     @property
     @abstractmethod
     def name(self) -> str: ...
+
+    @property
+    def reports_cost(self) -> bool:
+        """`AttackMessage.cost` 里的数字可不可信。⭐
+
+        与 `AdapterCapabilities.reports_cost` 同一个模式:**把"我做不到"变成显式声明**,
+        而不是让它静默失效。默认取最保守值 `False`。
+
+        为什么需要它:attacker 的开销现在计入 Run 预算了,
+        那么"这一侧报不报得出成本"就和 target 侧一样,决定了 `max_cost_usd`
+        是不是一张假的安全网。少检查一侧,上限就只管住一半。
+
+        **不花钱的生成器应当声明 `True`** —— 它报的 0 是一个准确的值,
+        不是"不知道"。两者语义必须分得开。
+        """
+        return False
 
     @abstractmethod
     async def generate(self, request: AttackGenerationRequest) -> AttackMessage: ...
@@ -92,6 +131,11 @@ class TemplateAttackGenerator(AttackGenerator):
     @property
     def name(self) -> str:
         return "template"
+
+    @property
+    def reports_cost(self) -> bool:
+        """不调 LLM,开销确定为 0 —— 报出来的是准确值,不是"不知道"。"""
+        return True
 
     async def generate(self, request: AttackGenerationRequest) -> AttackMessage:
         if request.turn_index > 0:
@@ -122,6 +166,11 @@ class ScriptedAttackGenerator(AttackGenerator):
     @property
     def name(self) -> str:
         return "scripted"
+
+    @property
+    def reports_cost(self) -> bool:
+        """不调 LLM,开销确定为 0 —— 报出来的是准确值,不是"不知道"。"""
+        return True
 
     async def generate(self, request: AttackGenerationRequest) -> AttackMessage:
         messages = self._scripts.get(request.strategy.id)

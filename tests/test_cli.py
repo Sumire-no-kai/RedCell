@@ -110,10 +110,17 @@ def test_unknown_algorithm_is_a_usage_error_not_a_run_failure(workspace) -> None
     assert result.exit_code not in (ExitCode.RUN_FAILED, ExitCode.BAD_CONFIG)
 
 
-def test_cost_budget_is_not_exposed_while_provider_reports_no_cost(workspace) -> None:
-    """当前 provider 不报成本,`--max-cost` 会是个永不触发的假安全网。"""
+def test_cost_budget_is_rejected_rather_than_silently_useless(workspace) -> None:
+    """`--max-cost` 现在存在,但**任一侧报不出成本就当场拒绝**。
+
+    从前是"刻意不暴露",因为设了永不触发;现在改成"暴露但拒绝造假" ——
+    藏起来会连正当用法一起挡掉,而拒绝能把问题直接说清楚。
+    离线路径用脚本 provider,两侧都不报成本,所以这里必然被拒。
+    """
     result = runner.invoke(app, ["run", "--max-cost", "1.0", "--db", _db(workspace)])
-    assert result.exit_code == 2  # no such option
+
+    assert result.exit_code == ExitCode.BAD_CONFIG, result.output
+    assert "假的安全网" in result.output
 
 
 # ── report ───────────────────────────────────────────────────────────────
@@ -373,3 +380,13 @@ def test_failing_controls_exit_with_the_control_code(workspace, monkeypatch) -> 
     assert result.exit_code == ExitCode.CONTROL_FAILED, result.output
     assert "任何校准结果都无意义" in result.output
     assert (workspace / "control" / "controls.json").exists()
+
+
+def test_preflight_rejection_is_config_not_a_failed_run(workspace) -> None:
+    """preflight 失败时目标一次都没被触碰 —— 那是配置问题,不是 run 挂了。
+
+    CI 必须分得开:前者改配置,后者查目标或环境。
+    """
+    result = runner.invoke(app, ["run", "--max-cost", "1.0", "--db", _db(workspace)])
+    assert result.exit_code == ExitCode.BAD_CONFIG
+    assert result.exit_code != ExitCode.RUN_FAILED

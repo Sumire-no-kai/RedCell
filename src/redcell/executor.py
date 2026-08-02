@@ -211,6 +211,7 @@ class ConversationExecutor:
                     index=turn_index,
                     attacker_message=attack.content,
                     output=output,
+                    attacker_cost=attack.cost,
                 )
             )
             conversation.append(Message(role=Role.ASSISTANT, content=output.assistant_message))
@@ -288,6 +289,11 @@ class ConversationExecutor:
         return self._adapter.capabilities
 
     @property
+    def generator_reports_cost(self) -> bool:
+        """attacker 那一侧报不报得出成本 —— 预算守卫要用。"""
+        return self._generator.reports_cost
+
+    @property
     def target_name(self) -> str:
         return self._policy.target_name
 
@@ -357,10 +363,25 @@ def _turn_request_id(attempt_id: str, turn_index: int) -> str:
 
 
 def _cost_of(turns: list[Turn]) -> CostRecord:
+    """一场 attempt 的总开销 = target 侧 + **attacker 侧**。
+
+    ⚠️ **attacker 那一项曾经整个漏掉。** 当时 `AttackMessage` 只带文本,
+    生成话术的 token 与费用在 `LLMMutationGenerator` 里就被丢弃了,
+    于是 `max_total_tokens` / `max_cost_usd` **挡不住攻击方的开销** ——
+    设了上限却只管住一半,是一张假的安全网。接入付费 attacker 之前必须先补上。
+
+    墙钟只取 target 侧:attacker 的等待已经包含在整场 attempt 的耗时里,
+    两边相加会把同一段时间算两次。
+    """
     return CostRecord(
-        prompt_tokens=sum(t.output.trace_metadata.prompt_tokens for t in turns),
-        completion_tokens=sum(t.output.trace_metadata.completion_tokens for t in turns),
-        usd=sum(t.output.trace_metadata.cost_usd for t in turns),
+        prompt_tokens=sum(
+            t.output.trace_metadata.prompt_tokens + t.attacker_cost.prompt_tokens for t in turns
+        ),
+        completion_tokens=sum(
+            t.output.trace_metadata.completion_tokens + t.attacker_cost.completion_tokens
+            for t in turns
+        ),
+        usd=sum(t.output.trace_metadata.cost_usd + t.attacker_cost.usd for t in turns),
         wall_ms=sum(t.output.trace_metadata.latency_ms for t in turns),
     )
 

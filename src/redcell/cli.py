@@ -32,6 +32,7 @@ from redcell.config import (
 )
 from redcell.controls import ControlsReport, run_negative_control, run_positive_control
 from redcell.executor import ConversationExecutor
+from redcell.failures import FailureStage
 from redcell.generation import AttackGenerator, TemplateAttackGenerator
 from redcell.llm.base import LLMProvider
 from redcell.llm.scripted import ScriptedProvider
@@ -158,7 +159,14 @@ def run(
             help="接真实模型跑(target=GLM / attacker=Gemini,从 .env 读)。" "默认离线,只验证流水线。"
         ),
     ] = False,
-    max_tokens: Annotated[int | None, typer.Option(help="token 上限")] = None,
+    max_tokens: Annotated[int | None, typer.Option(help="token 上限(两侧合计)")] = None,
+    max_cost: Annotated[
+        float | None,
+        typer.Option(
+            help="美元成本上限(两侧合计)。任一侧不报成本时会被当场拒绝,"
+            "而不是给你一个永不触发的假上限。"
+        ),
+    ] = None,
     max_seconds: Annotated[float | None, typer.Option(help="墙钟上限(秒)")] = None,
     db: Annotated[str, typer.Option(help="SQLite 连接串")] = DEFAULT_URL,
     out: Annotated[Path, typer.Option(help="报告输出目录")] = Path("runs"),
@@ -172,9 +180,12 @@ def run(
         max_attempts=budget,
         max_total_tokens=max_tokens,
         max_wall_seconds=max_seconds,
+        max_cost_usd=max_cost,
         count_abandoned_against_attempts=not top_up_abandoned,
-        # 刻意不暴露 --max-cost:当前 provider 不报告成本,
-        # 设了也永不触发 —— 那是个假的安全网,比没有更危险。
+        # `--max-cost` 从"刻意不暴露"改为"暴露但拒绝造假"(2026-08-02)。
+        # 原来藏起来是因为 provider 不报成本,设了永不触发;
+        # 现在 orchestrator 的 preflight 会在**任一侧**报不出成本时当场拒绝,
+        # 所以它不可能再变成一个假的安全网 —— 藏着反而挡住了正当用法。
     )
 
     policy = SUPPORT_AGENT_POLICY
@@ -236,6 +247,12 @@ def run(
     try:
         result = asyncio.run(_execute_and_close())
     except RunFailedError as exc:
+        # ⚠️ preflight 阶段失败**不是** RUN_FAILED:那时目标一次都没被触碰,
+        # 属于"配置被拒绝"。CI 需要分开这两者 —— 前者改命令行/配置,
+        # 后者要去查目标或环境。混成一个码,排查方向就没了。
+        if exc.failure.stage is FailureStage.PREFLIGHT:
+            typer.secho(f"配置被拒绝:{exc.failure.message}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(ExitCode.BAD_CONFIG) from exc
         typer.secho(
             f"Run {exc.run.id} 失败:{exc.failure.code} — {exc.failure.message}",
             fg=typer.colors.RED,

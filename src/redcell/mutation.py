@@ -32,6 +32,7 @@ prompt 里只放 `TargetBrief`(攻击面),绝不放 canary、system prompt 指�
 
 from __future__ import annotations
 
+from redcell._base import CostRecord
 from redcell.generation import (
     AttackGenerationError,
     AttackGenerationRequest,
@@ -94,6 +95,14 @@ class LLMMutationGenerator(AttackGenerator):
     def name(self) -> str:
         return "llm-mutation"
 
+    @property
+    def reports_cost(self) -> bool:
+        """如实透传 provider 的声明 —— 单价没填时它是 False,`cost` 里的 usd 恒为 0。
+
+        不能在这里写死 True:那等于替使用者担保一个我们并不知道的数字。
+        """
+        return self._provider.reports_cost
+
     async def generate(self, request: AttackGenerationRequest) -> AttackMessage:
         messages = self._build_messages(request)
         response = await self._provider.complete(
@@ -109,7 +118,17 @@ class LLMMutationGenerator(AttackGenerator):
             raise AttackGenerationError(
                 f"attacker LLM 对策略 '{request.strategy.id}' 第 {request.turn_index} 轮返回空内容"
             )
-        return AttackMessage(content=content, generator=self.name)
+        # ⚠️ 用量必须带回去:不带的话 attacker 的开销完全不进 Run 预算,
+        # `max_total_tokens` / `max_cost_usd` 就成了挡不住攻击方的假安全网。
+        return AttackMessage(
+            content=content,
+            generator=self.name,
+            cost=CostRecord(
+                prompt_tokens=response.prompt_tokens,
+                completion_tokens=response.completion_tokens,
+                usd=response.cost_usd,
+            ),
+        )
 
     # ── prompt 组装 ─────────────────────────────────────────────
 

@@ -52,6 +52,14 @@ class Turn(RedCellModel):
     attacker_message: str
     output: AdapterOutput
 
+    attacker_cost: CostRecord = Field(default_factory=CostRecord)
+    """生成这句攻击话术花掉的用量。**与 target 侧分开记,但一起计入预算。**
+
+    分开记是 CONCEPTS §14.4 的要求(两个模型位必须分别记录 model/temperature/cost),
+    这样事后能回答"这轮到底是哪一侧贵";一起计入是因为**预算约束的是整场实验的
+    总开销**,漏掉任何一侧都会让上限失真。
+    """
+
 
 class SignalScore(RedCellModel):
     """单条信号线的确定性得分。
