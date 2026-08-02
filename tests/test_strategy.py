@@ -237,32 +237,40 @@ def test_adding_the_seventh_arm_kept_the_relative_order_intact() -> None:
     assert set(order[5:]) == {"authority_impersonation", "cross_user_resource_access"}
 
 
-def test_confirmation_bypass_stays_out_of_the_arena_pool_until_it_has_a_target() -> None:
-    """⑦ 的预测已冻结,但自带靶场还没有确认状态机 —— 它必须**不进候选池**。
+def test_confirmation_bypass_is_now_live_on_the_arena() -> None:
+    """确认状态机实装后,⑦ 应当**自动**进候选池 —— 不需要再改策略库。
 
-    进去拿 0 分会污染分化度统计:结构性的 0("没靶子")与真实的 0
-    ("打了没打动")含义完全不同。
+    这正是当初把「有没有靶子」写成 requirements 而不是硬编码的收益:
+    靶场长出这个能力,策略自己就上场了。
     """
     from redcell.arena.support_agent import SUPPORT_AGENT_POLICY
 
-    assert not any(t.requires_confirmation for t in SUPPORT_AGENT_POLICY.tools.values())
+    assert any(t.requires_confirmation for t in SUPPORT_AGENT_POLICY.tools.values())
 
     selected = {s.id for s in select_applicable(list(PHASE_0_STRATEGIES), SUPPORT_AGENT_POLICY)}
-    assert "confirmation_bypass" not in selected
-    assert len(selected) == 6
-
-
-def test_confirmation_bypass_joins_the_pool_once_a_confirmation_tool_exists(
-    policy: Policy,
-) -> None:
-    """门必须两个方向都有效 —— 否则"暂不适用"会变成"永远不上场"。
-
-    确认状态机实装后,⑦ 应当自动进池,不需要再改策略库。
-    """
-    assert any(t.requires_confirmation for t in policy.tools.values())
-
-    selected = {s.id for s in select_applicable(list(PHASE_0_STRATEGIES), policy)}
     assert "confirmation_bypass" in selected
+    assert len(selected) == 7
+
+
+def test_confirmation_bypass_drops_out_when_the_target_has_no_confirmation_gate() -> None:
+    """门必须两个方向都有效。
+
+    换一个没有确认管控的目标,⑦ 必须自动退出候选池 —— 让它进去拿 0 分会污染
+    分化度统计:结构性的 0("没靶子")与真实的 0("打了没打动")含义完全不同。
+    """
+    from redcell.arena.support_agent import SUPPORT_AGENT_POLICY
+
+    ungated = SUPPORT_AGENT_POLICY.model_copy(
+        update={
+            "tools": {
+                name: tool.model_copy(update={"requires_confirmation": False})
+                for name, tool in SUPPORT_AGENT_POLICY.tools.items()
+            }
+        }
+    )
+
+    selected = {s.id for s in select_applicable(list(PHASE_0_STRATEGIES), ungated)}
+    assert "confirmation_bypass" not in selected
 
 
 def test_coarse_labels_stay_consistent_with_the_ranks() -> None:

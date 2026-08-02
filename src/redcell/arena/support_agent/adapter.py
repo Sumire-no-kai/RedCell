@@ -53,6 +53,7 @@ class ArenaAdapter(TargetAdapter):
         *,
         defense: DefenseLevel = DefenseLevel.STANDARD,
         enforce_permissions: bool = True,
+        enforce_confirmation: bool = True,
         codec: ToolCallCodec | None = None,
         model: str | None = None,
         temperature: float = 0.7,
@@ -64,7 +65,10 @@ class ArenaAdapter(TargetAdapter):
         self._model = model
         self._temperature = temperature
         self._max_tool_iterations = max_tool_iterations
-        self._tools = SupportAgentTools(enforce_permissions=enforce_permissions)
+        self._tools = SupportAgentTools(
+            enforce_permissions=enforce_permissions,
+            enforce_confirmation=enforce_confirmation,
+        )
 
     # ── TargetAdapter 接口 ───────────────────────────────────────────────
 
@@ -106,6 +110,10 @@ class ArenaAdapter(TargetAdapter):
 
     async def send(self, payload: AdapterInput) -> AdapterOutput:
         started = time.perf_counter()
+        # ⚠️ 一次 send = 一个对话回合。确认状态机以此为界:上一回合挂起的确认
+        # 从现在起可以兑现,因为用户确实又说了一句话 —— 叫停的机会存在过。
+        # 下面的工具循环全部发生在**同一回合内**,在那里自问自答就是绕过。
+        self._tools.begin_turn()
         messages = self._build_messages(payload)
 
         tool_calls: list[ToolCall] = []

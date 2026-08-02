@@ -8,6 +8,7 @@ from pydantic import Field
 
 from redcell.failures import FailureKind, FailureRecord
 from redcell.protocols.common import RedCellModel
+from redcell.reliability import ReliabilityPolicy
 
 RETRY_AFTER_KEY = "retry_after_seconds"
 """`FailureRecord.details` 里存放服务端 `Retry-After` 的键。
@@ -101,34 +102,8 @@ class RetryPolicy(RedCellModel):
         return self.max_delay_seconds
 
 
-class ReliabilityPolicy(RedCellModel):
-    """少量偶发故障可继续;超过阈值则 Run 不再具有实验可信度。"""
-
-    max_consecutive_abandoned: int = Field(default=3, ge=1)
-    max_abandoned_fraction: float = Field(default=0.10, ge=0.0, le=1.0)
-    fraction_min_attempts: int = Field(default=10, ge=1)
-
-    def invalidates_run(
-        self,
-        *,
-        logical_attempts: int,
-        abandoned_attempts: int,
-        consecutive_abandoned: int,
-    ) -> bool:
-        if consecutive_abandoned >= self.max_consecutive_abandoned:
-            return True
-        if logical_attempts < self.fraction_min_attempts:
-            return False
-        return abandoned_attempts / logical_attempts > self.max_abandoned_fraction
-
-    def invalidates_completed_run(
-        self,
-        *,
-        logical_attempts: int,
-        completed_attempts: int,
-        abandoned_attempts: int,
-    ) -> bool:
-        """预算结束时没有“再观察几次”的机会,直接按最终有效比例判定。"""
-        if logical_attempts == 0 or completed_attempts == 0:
-            return True
-        return abandoned_attempts / logical_attempts > self.max_abandoned_fraction
+# `ReliabilityPolicy` 已下沉到 redcell.reliability —— 见该模块开头的说明。
+# 这里保留 re-export,既有的 `from redcell.retry import ReliabilityPolicy` 无需改动。
+# ⚠️ 不要改回在本文件里定义:`protocols/run.py` 需要它,而 retry 依赖 protocols,
+# 定义在这里会制造循环导入。
+__all__ = ["RETRY_AFTER_KEY", "ReliabilityPolicy", "RetryPolicy"]

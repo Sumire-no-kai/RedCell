@@ -119,7 +119,7 @@ def test_logical_attempt_completion_abandonment_and_retries_are_distinct() -> No
 
     manager.reserve_attempt("s2")
     manager.record_usage(prompt_tokens=20, completion_tokens=5, cost_usd=0.02)
-    manager.complete_attempt()
+    manager.complete_attempt("s2")
 
     usage = manager.usage()
     assert usage.attempts == 2
@@ -128,3 +128,41 @@ def test_logical_attempt_completion_abandonment_and_retries_are_distinct() -> No
     assert usage.retries == 1
     assert usage.total_tokens == 35
     assert usage.cost_usd == pytest.approx(0.03)
+    # 逻辑机会与有效样本按策略分开记:校准要知道 N 被吃掉在了哪个臂上。
+    assert usage.per_strategy_attempts == {"s1": 1, "s2": 1}
+    assert usage.per_strategy_completed == {"s2": 1}
+
+
+# ── 放弃的 attempt 会不会悄悄吃掉样本量 ─────────────────────────────────
+
+
+def test_abandoned_attempts_consume_the_budget_by_default() -> None:
+    """普通扫描:`--budget` 是成本闸门,故障也花掉了配额和时间。"""
+    manager = _manager(max_attempts=2)
+    for _ in range(2):
+        manager.reserve_attempt("s1")
+        manager.abandon_attempt()
+
+    assert manager.exhausted() is BudgetLimit.ATTEMPTS
+    assert manager.usage().completed_attempts == 0
+
+
+def test_top_up_mode_refuses_to_let_failures_shrink_the_sample() -> None:
+    """校准口径:预算按**完成数**结算,放弃的会被补跑。
+
+    否则 N=200 这个冻结的统计标准会被运行故障悄悄改小,而且缺口不均匀 ——
+    限流窗口里正在跑哪个臂,缺的就是哪个臂。
+    """
+    manager = BudgetManager(BudgetLimits(max_attempts=2, count_abandoned_against_attempts=False))
+    for _ in range(5):
+        manager.reserve_attempt("s1")
+        manager.abandon_attempt()
+
+    assert manager.exhausted() is None  # 一场都没跑成,预算不该被算作用掉
+
+    for _ in range(2):
+        manager.reserve_attempt("s1")
+        manager.complete_attempt("s1")
+
+    assert manager.exhausted() is BudgetLimit.ATTEMPTS
+    assert manager.usage().per_strategy_completed == {"s1": 2}

@@ -141,6 +141,16 @@ def run(
     enforce_permissions: Annotated[
         bool, typer.Option(help="靶场工具层是否做权限检查(校准旋钮 ③)")
     ] = True,
+    enforce_confirmation: Annotated[
+        bool, typer.Option(help="靶场是否强制「高危动作先问过用户」(校准旋钮 ④)")
+    ] = True,
+    top_up_abandoned: Annotated[
+        bool,
+        typer.Option(
+            help="放弃的 attempt 是否补跑(不计入 --budget)。"
+            "校准必须开:否则运行故障会悄悄把每臂样本量压到 200 以下。"
+        ),
+    ] = False,
     online: Annotated[
         bool,
         typer.Option(
@@ -161,6 +171,7 @@ def run(
         max_attempts=budget,
         max_total_tokens=max_tokens,
         max_wall_seconds=max_seconds,
+        count_abandoned_against_attempts=not top_up_abandoned,
         # 刻意不暴露 --max-cost:当前 provider 不报告成本,
         # 设了也永不触发 —— 那是个假的安全网,比没有更危险。
     )
@@ -181,6 +192,7 @@ def run(
         target_provider,
         defense=defense,
         enforce_permissions=enforce_permissions,
+        enforce_confirmation=enforce_confirmation,
     )
 
     run_record = Run(

@@ -97,6 +97,21 @@ redcell report <run-id>
 `runs/<run-id>/`, and stores the full trace in SQLite so any attempt can be
 replayed later.
 
+### Calibration knobs and sample integrity
+
+The bundled arena has two enforcement gates you can switch off to study depth of
+defence separately from the model's judgement — `--enforce-permissions` (does the
+tool layer check ownership?) and `--enforce-confirmation` (does a destructive
+action require the customer to say yes first?). Both change *Impact* only: the
+agent still generates the violating call either way, which is what
+*Attempt* measures.
+
+One flag matters more than it looks: `--top-up-abandoned`. By default a
+`--budget` counts *attempts started*, so an attempt abandoned to a rate limit
+still consumes its slot — and a calibration round can finish "successfully" with
+fewer samples per strategy than it was supposed to collect, unevenly distributed
+across arms. Pass the flag for any run whose sample size is part of the claim.
+
 ### Before you trust a calibration run
 
 The attacker LLM is the *measuring instrument*. If it renders every strategy as

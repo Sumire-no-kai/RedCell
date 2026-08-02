@@ -152,6 +152,10 @@ class RunOrchestrator:
                 "status": RunStatus.RUNNING,
                 "started_at": self._utcnow(),
                 "strategy_ids": [strategy.id for strategy in strategies],
+                # 把实际生效的可靠性阈值钉进 Run,而且必须在**首次落盘之前** ——
+                # 事后只看结果是看不出当时用的是哪一组阈值的,而它决定了
+                # "这次 run 算不算数"。中途崩溃的 run 也因此带着它。
+                "reliability": self._reliability,
             }
         )
         started = self._event(run, RunEventType.RUN_STARTED)
@@ -292,7 +296,7 @@ class RunOrchestrator:
                     completion_tokens=result.attempt.cost.completion_tokens,
                     cost_usd=result.attempt.cost.usd,
                 )
-                budget.complete_attempt()
+                budget.complete_attempt(strategy_id)
                 self._controller.update(strategy_id, result.attempt.reward)
                 consecutive_abandoned = 0
                 run = run.model_copy(update={"usage": budget.usage()})

@@ -18,7 +18,7 @@ from redcell.failures import (
     RetrySafety,
     SideEffectStatus,
 )
-from redcell.retry import RETRY_AFTER_KEY, RetryPolicy
+from redcell.retry import RETRY_AFTER_KEY, ReliabilityPolicy, RetryPolicy
 
 
 def _failure(
@@ -173,3 +173,37 @@ def test_network_failures_also_honour_retry_after() -> None:
     )
 
     assert delay == pytest.approx(3.0)
+
+
+# ── Run 失效阈值(2026-08-01 复核) ──────────────────────────────────────
+
+
+def test_consecutive_threshold_tolerates_a_free_tier_rate_limit_window() -> None:
+    """3 → 5 的理由是代价不对称。
+
+    重试已经在一场 attempt 内部吸收了约 116 秒的退避,所以连续 3 次放弃
+    意味着已持续失败 6 分钟以上 —— 而免费层的配额窗口经常就是这个量级。
+    为一次可恢复的抖动作废整轮 2.3 小时的校准,比多等几场糟糕得多。
+    """
+    policy = ReliabilityPolicy()
+    assert policy.max_consecutive_abandoned == 5
+
+    assert not policy.invalidates_run(
+        logical_attempts=100, abandoned_attempts=4, consecutive_abandoned=4
+    )
+    # 真正的宕机不会在第 5 场自己好转,仍然抓得住。
+    assert policy.invalidates_run(
+        logical_attempts=100, abandoned_attempts=5, consecutive_abandoned=5
+    )
+
+
+def test_reliability_policy_is_importable_from_both_places() -> None:
+    """它已下沉到 redcell.reliability,retry 保留 re-export。
+
+    ⚠️ 搬回 retry.py 会重新制造 protocols ↔ retry 的循环导入
+    (2026-08-01 Step 11 修过一次同形状的 bug)。
+    """
+    from redcell.reliability import ReliabilityPolicy as Sunk
+    from redcell.retry import ReliabilityPolicy as ReExported
+
+    assert Sunk is ReExported

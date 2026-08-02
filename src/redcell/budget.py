@@ -44,6 +44,23 @@ class BudgetLimits(RedCellModel):
     max_cost_usd: float | None = Field(default=None, gt=0)
     max_wall_seconds: float | None = Field(default=None, gt=0)
 
+    count_abandoned_against_attempts: bool = True
+    """放弃的 attempt 算不算进 `max_attempts`。⭐
+
+    **默认 True(普通扫描):** `max_attempts` 是"最多给目标发多少场",
+    放弃的也算 —— 它是**成本闸门**,故障也消耗了配额和时间。
+
+    **校准必须设 False。** 否则会出现一件很难察觉的坏事:
+    `max_attempts=1200` 配上 10% 的放弃容忍,一轮可以"正常完成"于约 1080 条
+    有效样本 —— 某个策略手里只有 180 条,而 `CALIBRATION.md` §7 冻结的是 **200**。
+    更糟的是缺口**不均匀**:限流窗口里正在跑哪个臂,缺的就是哪个臂,
+    而 §4.1 检验的正是**成对比较** —— 一边 200 一边 180,两条臂不再等权。
+
+    设为 False 后,放弃的场次会被自动补跑(预算按**完成数**结算),
+    N=200 这个冻结标准就不会被运行故障悄悄改小。
+    其余上限(token / 墙钟 / 连续放弃 / 放弃比例)仍然照常兜底,不会无限跑下去。
+    """
+
     max_share_per_strategy: float | None = Field(default=None, gt=0, le=1.0)
     """单个策略最多能占走多少比例的 attempt 预算。
 
@@ -77,6 +94,12 @@ class BudgetUsage(RedCellModel):
     cost_usd: float = 0.0
     wall_seconds: float = 0.0
     per_strategy_attempts: dict[str, int] = Field(default_factory=dict)
+    per_strategy_completed: dict[str, int] = Field(default_factory=dict)
+    """每个策略**跑完**了多少场。
+
+    与 `per_strategy_attempts`(逻辑机会)分开记,因为校准要的是有效样本量:
+    看这两个数对不对得上,就知道 N 有没有被运行故障吃掉,以及吃在了哪个臂上。
+    """
 
     @property
     def total_tokens(self) -> int:
@@ -100,6 +123,7 @@ class BudgetManager:
         self._started = clock()
         self._usage = BudgetUsage()
         self._per_strategy: Counter[str] = Counter()
+        self._per_strategy_completed: Counter[str] = Counter()
 
     @property
     def limits(self) -> BudgetLimits:
@@ -110,18 +134,29 @@ class BudgetManager:
             update={
                 "wall_seconds": self._elapsed(),
                 "per_strategy_attempts": dict(self._per_strategy),
+                "per_strategy_completed": dict(self._per_strategy_completed),
             }
         )
 
     def _elapsed(self) -> float:
         return self._clock() - self._started
 
+    def _attempts_spent(self) -> int:
+        """按当前计数口径,已经花掉多少 attempt 预算。
+
+        口径由 `count_abandoned_against_attempts` 决定 —— 见该字段的说明。
+        计成本时数逻辑机会,计样本时数完成数,两者不能混用同一个变量。
+        """
+        if self._limits.count_abandoned_against_attempts:
+            return self._usage.attempts
+        return self._usage.completed_attempts
+
     # ── 准入 ─────────────────────────────────────────────────────────────
 
     def exhausted(self) -> BudgetLimit | None:
         """整体预算是否已经用尽(与具体策略无关)。"""
         limits = self._limits
-        if limits.max_attempts is not None and self._usage.attempts >= limits.max_attempts:
+        if limits.max_attempts is not None and self._attempts_spent() >= limits.max_attempts:
             return BudgetLimit.ATTEMPTS
         if (
             limits.max_total_tokens is not None
@@ -179,7 +214,7 @@ class BudgetManager:
             completion_tokens=completion_tokens,
             cost_usd=cost_usd,
         )
-        self.complete_attempt()
+        self.complete_attempt(strategy_id)
 
     def reserve_attempt(self, strategy_id: str) -> None:
         """Controller 选中 Strategy 后立即占用一个逻辑 Attempt 位置。"""
@@ -206,10 +241,16 @@ class BudgetManager:
             }
         )
 
-    def complete_attempt(self) -> None:
+    def complete_attempt(self, strategy_id: str) -> None:
+        """记一场**有效样本**。
+
+        刻意要求传 strategy_id 而不是做成可选:每臂的有效样本量是校准的核心量,
+        让调用方无法"忘了传"比事后发现某个臂的计数一直是 0 要好。
+        """
         self._usage = self._usage.model_copy(
             update={"completed_attempts": self._usage.completed_attempts + 1}
         )
+        self._per_strategy_completed[strategy_id] += 1
 
     def abandon_attempt(self) -> None:
         self._usage = self._usage.model_copy(
@@ -224,14 +265,14 @@ class BudgetManager:
     def remaining_attempts(self) -> int | None:
         if self._limits.max_attempts is None:
             return None
-        return max(0, self._limits.max_attempts - self._usage.attempts)
+        return max(0, self._limits.max_attempts - self._attempts_spent())
 
     def progress(self) -> float:
         """已消耗比例,取各项里最紧的一项。用于进度显示。"""
         ratios = []
         limits, usage = self._limits, self._usage
         if limits.max_attempts:
-            ratios.append(usage.attempts / limits.max_attempts)
+            ratios.append(self._attempts_spent() / limits.max_attempts)
         if limits.max_total_tokens:
             ratios.append(usage.total_tokens / limits.max_total_tokens)
         if limits.max_cost_usd:

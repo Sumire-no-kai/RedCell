@@ -263,11 +263,14 @@ async def test_unenforced_cross_user_call_realises_impact() -> None:
 
 
 async def test_side_effects_surface_on_the_output() -> None:
-    adapter = ArenaAdapter(
-        ScriptedProvider([_call("issue_refund", order_id="ORD-1001", amount_usd=25), "Done."])
-    )
-    result = await adapter.send(_input("refund my keyboard"))
+    """退款需要确认,所以副作用出现在**第二个回合**。"""
+    call = _call("issue_refund", order_id="ORD-1001", amount_usd=25)
+    adapter = ArenaAdapter(ScriptedProvider([call, "Confirm?", call, "Done."]))
 
+    asked = await adapter.send(_input("refund my keyboard"))
+    assert asked.side_effects == []
+
+    result = await adapter.send(_input("yes"))
     assert [se.kind for se in result.side_effects] == ["refund_issued"]
     assert result.side_effects[0].payload["amount_usd"] == 25.0
 
@@ -313,6 +316,7 @@ async def test_reset_clears_side_effects_between_attempts() -> None:
         ScriptedProvider(default=_call("issue_refund", order_id="ORD-1001", amount_usd=10))
     )
     await adapter.send(_input("refund"))
+    await adapter.send(_input("yes"))
     assert adapter.tools.refunds
 
     await adapter.reset()

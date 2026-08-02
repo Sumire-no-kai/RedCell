@@ -16,6 +16,7 @@ from pydantic import Field
 from redcell.budget import BudgetLimit, BudgetLimits, BudgetUsage
 from redcell.failures import FailureRecord
 from redcell.protocols.common import REDCELL_PROTOCOL_VERSION, RedCellModel, new_id
+from redcell.reliability import ReliabilityPolicy
 
 
 class RunStatus(StrEnum):
@@ -64,6 +65,13 @@ class Run(RedCellModel):
     """搜索算法标识,如 "static" / "random" / "thompson"。消融对比的分组键。"""
 
     limits: BudgetLimits
+    reliability: ReliabilityPolicy = Field(default_factory=ReliabilityPolicy)
+    """这次 Run 用的可靠性阈值 —— **必须随 Run 落盘**。
+
+    它决定了"这次 run 算不算数",而事后只看结果是看不出当时用的是哪组阈值的。
+    与 `CALIBRATION.md` §12 要求记录"改了哪个旋钮"是同一条理由:
+    判定标准本身也是实验条件。
+    """
     usage: BudgetUsage = Field(default_factory=BudgetUsage)
     status: RunStatus = RunStatus.PENDING
     stopped_by: BudgetLimit | None = None

@@ -42,7 +42,7 @@ from redcell.protocols import (
 )
 from redcell.protocols.run import Run, RunEventType, RunStatus
 from redcell.randomness import controller_seed_for
-from redcell.retry import RetryPolicy
+from redcell.retry import ReliabilityPolicy, RetryPolicy
 from redcell.scoring import Level1Scorer
 from redcell.search import (
     ControllerDecisionOutcome,
@@ -511,3 +511,32 @@ async def test_cost_budget_is_rejected_when_the_target_cannot_report_cost(
     assert excinfo.value.failure.stage is FailureStage.PREFLIGHT
     assert "reports_cost" in excinfo.value.failure.message
     assert store.get_run(run.id).status is RunStatus.FAILED
+
+
+async def test_the_reliability_thresholds_used_are_persisted_with_the_run(
+    store: RunStore,
+) -> None:
+    """判定标准本身也是实验条件 —— 事后只看结果,看不出当时用的是哪一组阈值。
+
+    与 CALIBRATION.md §12 要求记录"改了哪个旋钮"是同一条理由。
+    """
+    strategy = _one_turn_strategy()
+    policy = ReliabilityPolicy(max_consecutive_abandoned=2, max_abandoned_fraction=0.5)
+    orchestrator = RunOrchestrator(
+        executor=_executor(
+            StableAdapter(),
+            ScriptedAttackGenerator({strategy.id: ["attack"]}),
+        ),
+        controller=StaticController([strategy.id]),
+        store=store,
+        retry_policy=RetryPolicy(base_delay_seconds=0, max_delay_seconds=0),
+        reliability_policy=policy,
+        sleep=_no_sleep,
+    )
+    result = await orchestrator.execute(
+        RunExecutionRequest(run=_run(), strategies=[strategy], actor="customer_a")
+    )
+
+    assert result.run.reliability == policy
+    # 落盘的那一份也必须带着它,而不只是内存里的对象。
+    assert store.get_run(result.run.id).reliability == policy

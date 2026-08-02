@@ -244,7 +244,7 @@ def _install_attacker(monkeypatch, provider: _FakeAttacker) -> _FakeAttacker:
     return provider
 
 
-def _clustered_messages(per_strategy: int, strategies: int = 6) -> list[str]:
+def _clustered_messages(per_strategy: int, strategies: int = 7) -> list[str]:
     """攻击方正常工作时的形状:同一策略内部用词相近,不同策略之间几乎不重合。
 
     `run_attacker_control` 逐策略连续取样,所以按 call 顺序排成六段即可。
@@ -277,14 +277,14 @@ def test_attacker_control_writes_every_generated_message_for_manual_review(
     runner.invoke(app, ["attacker-control", "--samples", "2", "--seed", "9", "--out", "control"])
 
     detail = json.loads((workspace / "control" / "attacker-control-seed9.json").read_text("utf-8"))
-    assert len(detail["samples"]) == 6
+    assert len(detail["samples"]) == 7
     assert all(len(group["messages"]) == 2 for group in detail["samples"])
 
 
 def test_attacker_control_fails_when_every_strategy_yields_the_same_wording(
     workspace, monkeypatch
 ) -> None:
-    """六个策略产出同一句话 = 策略标签没改变输出,攻击方是瓶颈。"""
+    """所有策略产出同一句话 = 策略标签没改变输出,攻击方是瓶颈。"""
     _install_attacker(monkeypatch, _FakeAttacker(per_call=["the same sentence every time"] * 60))
 
     result = runner.invoke(app, ["attacker-control", "--samples", "3", "--out", "control"])
