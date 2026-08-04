@@ -150,6 +150,13 @@ def run(
     enforce_confirmation: Annotated[
         bool, typer.Option(help="靶场是否强制「高危动作先问过用户」(校准旋钮 ④)")
     ] = True,
+    per_strategy: Annotated[
+        int | None,
+        typer.Option(
+            help="每个策略跑满多少条**完成**的 attempt(校准用)。"
+            "设了它就必须同时开 --top-up-abandoned。"
+        ),
+    ] = None,
     top_up_abandoned: Annotated[
         bool,
         typer.Option(
@@ -185,6 +192,7 @@ def run(
         max_total_tokens=max_tokens,
         max_wall_seconds=max_seconds,
         max_cost_usd=max_cost,
+        max_completed_per_strategy=per_strategy,
         count_abandoned_against_attempts=not top_up_abandoned,
         # `--max-cost` 从"刻意不暴露"改为"暴露但拒绝造假"(2026-08-02)。
         # 原来藏起来是因为 provider 不报成本,设了永不触发;

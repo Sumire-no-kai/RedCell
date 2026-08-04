@@ -61,6 +61,25 @@ class BudgetLimits(RedCellModel):
     其余上限(token / 墙钟 / 连续放弃 / 放弃比例)仍然照常兜底,不会无限跑下去。
     """
 
+    max_completed_per_strategy: int | None = Field(default=None, ge=1)
+    """每个策略要跑满多少条**完成**的 attempt。⭐ 校准专用。
+
+    ## 为什么单靠 `count_abandoned_against_attempts` 不够
+
+    那一项补的是**总样本量**,不是**每臂的**。实测(2026-08-03)一轮 N=10 的彩排:
+
+    ```
+    逻辑 76 / 完成 70 / 放弃 6
+    每臂完成: [9, 9, 10, 10, 10, 11, 11]   ← 总数对了,每臂没对
+    ```
+
+    round-robin 控制器在某臂被放弃后只是继续轮转,**不会专门把那一臂补回来**。
+    而校准冻结的是**每臂 N=200**:190 与 210 并存会让成对比较不等权 ——
+    那恰好是 `STRATEGIES.md` §4.1 要测的量。
+
+    设了本项之后,跑满额度的臂会退出候选池,其余继续跑,直到**每一臂都满**。
+    """
+
     max_share_per_strategy: float | None = Field(default=None, gt=0, le=1.0)
     """单个策略最多能占走多少比例的 attempt 预算。
 
@@ -79,6 +98,13 @@ class BudgetLimits(RedCellModel):
             raise ValueError("至少要设一项预算上限,否则 Run 可能永不停止")
         if self.max_share_per_strategy is not None and self.max_attempts is None:
             raise ValueError("max_share_per_strategy 需要 max_attempts 作为分母")
+        if self.max_completed_per_strategy is not None and self.count_abandoned_against_attempts:
+            # 不静默降级:两者同时生效时,坏运气会在每臂跑满之前先耗光总预算,
+            # 于是又回到"每臂不等长"那个 bug —— 而且**看起来是正常完成的**。
+            raise ValueError(
+                "max_completed_per_strategy 需要配合 count_abandoned_against_attempts=False,"
+                "否则放弃的 attempt 会先耗光总预算,每臂仍然跑不满"
+            )
         return self
 
 
@@ -191,6 +217,12 @@ class BudgetManager:
         return [sid for sid in strategy_ids if not self._strategy_share_exceeded(sid)]
 
     def _strategy_share_exceeded(self, strategy_id: str) -> bool:
+        per_strategy = self._limits.max_completed_per_strategy
+        if per_strategy is not None and self._per_strategy_completed[strategy_id] >= per_strategy:
+            # 这一臂已经跑满 —— 退出候选池,让别的臂补上。
+            # 全部退出时 available_strategies() 返回空,orchestrator 据此正常结束。
+            return True
+
         share = self._limits.max_share_per_strategy
         if share is None or self._limits.max_attempts is None:
             return False

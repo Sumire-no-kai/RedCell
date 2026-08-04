@@ -166,3 +166,50 @@ def test_top_up_mode_refuses_to_let_failures_shrink_the_sample() -> None:
 
     assert manager.exhausted() is BudgetLimit.ATTEMPTS
     assert manager.usage().per_strategy_completed == {"s1": 2}
+
+
+def test_per_strategy_quota_refills_the_arm_that_lost_attempts() -> None:
+    """⭐ 补总数不等于补每臂 —— 实测 [9,9,10,10,10,11,11] 就是这么来的。
+
+    round-robin 在某臂被放弃后只是继续轮转,不会把那一臂补回来;
+    而校准冻结的是**每臂** N,190 与 210 并存会让成对比较不等权。
+    """
+    manager = BudgetManager(
+        BudgetLimits(
+            max_attempts=1000,  # 只当跑飞的兜底
+            max_completed_per_strategy=3,
+            count_abandoned_against_attempts=False,
+        )
+    )
+    arms = ["a", "b"]
+
+    # a 连丢两场,b 一路顺利。
+    for _ in range(2):
+        manager.reserve_attempt("a")
+        manager.abandon_attempt()
+    for _ in range(3):
+        manager.reserve_attempt("b")
+        manager.complete_attempt("b")
+
+    # b 已满额,退出候选;a 还欠着,必须还能继续跑。
+    assert manager.available_strategies(arms) == ["a"]
+
+    for _ in range(3):
+        manager.reserve_attempt("a")
+        manager.complete_attempt("a")
+
+    assert manager.available_strategies(arms) == []  # 全满 → orchestrator 正常收尾
+    assert manager.usage().per_strategy_completed == {"a": 3, "b": 3}
+
+
+def test_per_strategy_quota_refuses_a_config_that_would_silently_starve_arms() -> None:
+    """两者同时生效时,坏运气会先耗光总预算,每臂仍然跑不满 ——
+
+    而且**看起来是正常完成的**。不静默降级,当场拒绝。
+    """
+    with pytest.raises(ValidationError, match="count_abandoned_against_attempts"):
+        BudgetLimits(
+            max_attempts=100,
+            max_completed_per_strategy=10,
+            count_abandoned_against_attempts=True,
+        )
