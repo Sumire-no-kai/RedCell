@@ -7,10 +7,10 @@
 
 ## 2026-08-06 22:20 AEST · Step 06 · 提交与 PR 交接
 
-- 进度:将本次 Phase 0 实验脊椎收尾（Thompson、消融分析、实验条件指纹、attempt-boundary resume、测试与文档）提交为 `5ad6d0c`，提交信息为 `feat: finish phase zero experiment spine`。
+- 进度:将本次 Phase 0 实验脊椎收尾（Thompson、消融分析、实验条件指纹、attempt-boundary resume、测试与文档）提交为 `5c3cdcf`，提交信息为 `feat: finish phase zero experiment spine`，并推送到 `origin/feat/run-orchestrator`。
 - 验证证据:提交前 `git diff --cached --check` 通过；先前全量 `ruff check .` 与 `pytest` 为 491 passed。
 - 遇到的问题:当前环境没有 `gh` GitHub CLI，无法按仓库 PR 工作流安全地查询、创建或合并 Pull Request。
-- 剩余状态:PUSH / PR / merge PENDING；分支推送完成后，需要在具备 GitHub CLI 或等效受控 GitHub 访问的环境创建并合并到 master。
+- 剩余状态:PUSH DONE；PR / merge BLOCKED。需要在具备 GitHub CLI 或等效受控 GitHub 访问的环境创建并合并到 master。
 
 ## 2026-08-06 22:13 AEST · Step 05 · Run 条件审计与 crash-safe resume
 
