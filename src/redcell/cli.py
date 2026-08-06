@@ -409,7 +409,7 @@ def resume(
                 "当前 provider / temperature / attacker / actor 或靶场开关与原 Run 不一致"
             )
     except (ProviderConfigError, ValueError) as exc:
-        if 'providers' in locals() and providers is not None:
+        if "providers" in locals() and providers is not None:
             asyncio.run(providers.aclose())
         store.close()
         typer.secho(f"恢复配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
