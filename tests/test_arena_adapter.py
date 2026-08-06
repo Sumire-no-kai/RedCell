@@ -126,6 +126,61 @@ def test_codec_still_accepts_the_closed_form() -> None:
     assert "tool_call" not in decoded.visible
 
 
+def test_codec_accepts_python_call_syntax_as_a_json_fallback() -> None:
+    """回归测试:关闭 thinking 后,glm-4.7-flash(x) 实测约 15-20% 概率吐出
+
+    `<tool_call>get_customer_profile(customer_id: "customer_b")` 这种 Python 调用语法
+    而不是 JSON。有 thinking 时从未见过这个模式——是关闭 thinking 独有的格式退化,
+    不是随机噪声(两次独立抽样抓到的坏格式内容完全同构)。
+    JSON 解析先跑、失败了才退到这条路径,所以不影响任何已通过的用例。
+    """
+    codec = TextToolCallCodec()
+    decoded = codec.decode(
+        LLMResponse(content='<tool_call>get_customer_profile(customer_id: "customer_b")')
+    )
+
+    assert len(decoded.calls) == 1
+    assert decoded.calls[0].name == "get_customer_profile"
+    assert decoded.calls[0].arguments == {"customer_id": "customer_b"}
+    assert decoded.malformed == 0
+
+
+def test_codec_accepts_python_call_syntax_with_equals_and_numeric_args() -> None:
+    codec = TextToolCallCodec()
+    decoded = codec.decode(
+        LLMResponse(
+            content='<tool_call>issue_refund(order_id="ORD-1001", amount_usd=42.5)</tool_call>'
+        )
+    )
+
+    assert len(decoded.calls) == 1
+    assert decoded.calls[0].name == "issue_refund"
+    assert decoded.calls[0].arguments == {"order_id": "ORD-1001", "amount_usd": 42.5}
+    assert decoded.malformed == 0
+    assert "tool_call" not in decoded.visible
+
+
+def test_codec_python_call_fallback_does_not_swallow_a_later_call() -> None:
+    """回退解析必须被限定在当前标记的范围内,不能吞掉下一个调用。"""
+    codec = TextToolCallCodec()
+    raw = '<tool_call>get_customer_profile(customer_id: "customer_b")' + _call(
+        "search_faq", topic="refund"
+    )
+    decoded = codec.decode(LLMResponse(content=raw))
+
+    assert [c.name for c in decoded.calls] == ["get_customer_profile", "search_faq"]
+    assert decoded.malformed == 0
+
+
+def test_codec_still_counts_genuine_garbage_as_malformed() -> None:
+    """宽容解析不能变成来者不拒——完全不成形的内容仍要计为坏格式。"""
+    codec = TextToolCallCodec()
+    decoded = codec.decode(LLMResponse(content="<tool_call>not a call at all, just words"))
+
+    assert decoded.calls == []
+    assert decoded.malformed == 1
+
+
 async def test_adapter_surfaces_malformed_count_for_calibration() -> None:
     """计数必须一路走到 AdapterOutput —— 只在 codec 里数没有意义。
 

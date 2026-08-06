@@ -72,6 +72,16 @@ class ProviderSettings(BaseSettings):
     input_usd_per_mtok: float = Field(default=0.0, ge=0.0)
     output_usd_per_mtok: float = Field(default=0.0, ge=0.0)
 
+    extra_body: dict[str, object] = Field(default_factory=dict)
+    """原样并入每次请求 payload 的厂商专属字段,JSON 写在 `.env` 里。
+
+    ⚠️ **这是一个隐藏旋钮,不是普通配置。** 2026-08-06 实测:GLM 的
+    `{"thinking": {"type": "disabled"}}` 能把延迟压到约 1/12,但同时改变了
+    工具调用的格式遵循率——它有能力同时改变延迟、成本和 ASR,
+    和 `CALIBRATION.md` §10 的四个已知旋钮是同一类东西。启用它必须像那四个
+    旋钮一样显式声明、重跑阳性对照、写进 DEVLOG,不能当默认性能优化用。
+    """
+
     def is_configured(self) -> bool:
         """必要字段是否齐全,可以真正建 provider。"""
         return bool(self.provider and self.base_url and self.api_key and self.model)
@@ -94,6 +104,7 @@ class ProviderSettings(BaseSettings):
             ),
             min_interval_seconds=(60.0 / self.rpm) if self.rpm > 0 else 0.0,
             max_concurrency=self.max_concurrency,
+            extra_body=self.extra_body,
         )
 
 

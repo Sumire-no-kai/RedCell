@@ -74,6 +74,17 @@ _DECODER = json.JSONDecoder()
 
 _CLOSE_TAG_PATTERN = re.compile(re.escape(_CLOSE_TAG))
 
+# 2026-08-06 实测:glm-4.7-flash(x) 关闭 thinking 后,约 15-20% 的工具调用
+# 尝试会脱离 JSON、改写成 Python 调用语法,例如:
+#   <tool_call>get_customer_profile(customer_id: "customer_b")
+# 有思考预算时这个问题没出现过——这是关闭 thinking 独有的格式退化,不是随机噪声
+# (两次独立抽样抓到的坏格式内容完全同构)。JSON 解析先跑、失败了才退到这条路径,
+# 所以不影响任何已通过的用例;且只在 `<tool_call>` 标记内触发,不会误吞正常对话文本。
+_PY_CALL_PATTERN = re.compile(r"\A\s*([A-Za-z_][A-Za-z0-9_]*)\s*\((.*?)\)", re.DOTALL)
+_PY_ARG_PATTERN = re.compile(
+    r"""\s*([A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*(?:"([^"]*)"|'([^']*)'|([^,)]+))\s*,?"""
+)
+
 _INSTRUCTIONS = """
 
 You can call tools. To call one, emit a line of the form:
@@ -119,7 +130,22 @@ class TextToolCallCodec(ToolCallCodec):
         while (start := content.find(_OPEN_TAG, cursor)) != -1:
             kept.append(content[cursor:start])
             after_tag = start + len(_OPEN_TAG)
-            brace = content.find("{", after_tag)
+
+            # 这次调用的搜索范围到哪结束:下一个开标记 / 闭标记 / 字符串结尾,取最近者。
+            # ⚠️ 必须先算出这个边界再找 `{`——否则一次调用坏了格式(没有 `{`)时,
+            # 无界的 `find("{", after_tag)` 会越过它去匹配**下一个**调用的 JSON,
+            # 把两次调用的内容拼错(2026-08-06 加入 Python 调用语法回退时被
+            # 回归测试当场抓到:第一个调用没有花括号,搜索会直接跳到第二个调用
+            # 的 `{`,导致第一个调用整个消失、只剩第二个)。
+            closing = _CLOSE_TAG_PATTERN.search(content, after_tag)
+            next_open = content.find(_OPEN_TAG, after_tag)
+            region_end = len(content)
+            if closing is not None:
+                region_end = min(region_end, closing.start())
+            if next_open != -1:
+                region_end = min(region_end, next_open)
+
+            brace = content.find("{", after_tag, region_end)
             payload: object = None
             end = -1
             if brace != -1:
@@ -129,10 +155,19 @@ class TextToolCallCodec(ToolCallCodec):
                     payload = None
 
             if payload is None:
+                call = _parse_python_style_call(content[after_tag:region_end])
+                if call is not None:
+                    calls.append(call)
+                    cursor = (
+                        closing.end()
+                        if closing is not None and closing.start() == region_end
+                        else region_end
+                    )
+                    continue
+
                 # 坏格式的调用不算调用,但也不能让标记漏进给用户看的正文——
                 # 有闭合标签就连它一起吃掉,没有就只吃开标签。
                 malformed += 1
-                closing = _CLOSE_TAG_PATTERN.search(content, after_tag)
                 cursor = closing.end() if closing else after_tag
                 continue
 
@@ -175,3 +210,40 @@ def _consume_optional_close_tag(content: str, end: int) -> int:
     if stripped.startswith(_CLOSE_TAG):
         return end + (len(rest) - len(stripped)) + len(_CLOSE_TAG)
     return end
+
+
+def _parse_python_style_call(region: str) -> ToolCall | None:
+    """JSON 解析失败后的兜底:识别 `name(key: "value", key2: value2)` 这种写法。
+
+    只在 JSON 路径已经失败之后才会被调用,且 `region` 已经被上层限定在
+    当前这个 `<tool_call>` 标记的范围内(下一个开标记 / 闭标记 / 字符串结尾
+    三者取最近),不会误吞后面属于别的调用或普通对话文本的内容。
+    """
+    match = _PY_CALL_PATTERN.match(region)
+    if match is None:
+        return None
+    name, arg_text = match.group(1), match.group(2)
+
+    arguments: dict[str, Any] = {}
+    for arg_match in _PY_ARG_PATTERN.finditer(arg_text):
+        key = arg_match.group(1)
+        raw_value = next(g for g in arg_match.groups()[1:] if g is not None)
+        arguments[key] = _coerce_scalar(raw_value.strip())
+
+    return ToolCall(id=new_id(), name=name, arguments=arguments)
+
+
+def _coerce_scalar(value: str) -> Any:
+    """把裸词参数值还原成 JSON 原生类型,好让下游(如金额校验)拿到数字而不是字符串。"""
+    if value in ("true", "True"):
+        return True
+    if value in ("false", "False"):
+        return False
+    try:
+        return int(value)
+    except ValueError:
+        pass
+    try:
+        return float(value)
+    except ValueError:
+        return value

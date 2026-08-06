@@ -106,6 +106,42 @@ async def test_max_tokens_is_omitted_when_not_set() -> None:
     assert "max_tokens" not in seen
 
 
+async def test_extra_body_is_merged_into_every_request() -> None:
+    """2026-08-06 加入:厂商专属字段(如 GLM 的 `thinking: disabled`)原样透传。
+
+    这是让"关闭 thinking"这个隐藏旋钮能被显式配置、写进 .env 的机制——
+    不是 GLM 专属代码,provider 层不理解也不校验字段含义,只负责原样带过去。
+    """
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json=_OK_BODY)
+
+    await _provider(
+        httpx.MockTransport(handler), extra_body={"thinking": {"type": "disabled"}}
+    ).complete(_user("你好"))
+
+    assert seen["thinking"] == {"type": "disabled"}
+    assert seen["model"] == "glm-4.7-flash"  # 标准字段不受影响
+
+
+async def test_extra_body_defaults_to_empty_and_stays_out_of_the_payload() -> None:
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json=_OK_BODY)
+
+    await _provider(httpx.MockTransport(handler)).complete(_user("你好"))
+
+    assert "thinking" not in seen
+
+
 async def test_uses_server_reported_model_as_drift_evidence() -> None:
     """服务端回传的 model 串与请求串不一致时,必须留下前者——那是模型漂移的唯一证据。"""
     body = {**_OK_BODY, "model": "glm-4.7-flash-0301"}

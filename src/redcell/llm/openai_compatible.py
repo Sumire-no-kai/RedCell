@@ -132,6 +132,7 @@ class OpenAICompatibleProvider(LLMProvider):
         timeout_seconds: float = 60.0,
         min_interval_seconds: float = 0.0,
         max_concurrency: int = 0,
+        extra_body: dict[str, Any] | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         """
@@ -151,6 +152,17 @@ class OpenAICompatibleProvider(LLMProvider):
 
                 ⚠️ 两者都是**本地自律**,不是配额保证 —— 真限流仍会以 429 出现,
                 所以 `ProviderTransientError` 那条路径必须一直有效。
+            extra_body: 原样并入每次请求 payload 的厂商专属字段,例如
+                GLM 的 `{"thinking": {"type": "disabled"}}`。
+
+                ⚠️ **这是一个隐藏旋钮,不是普通配置。** 2026-08-06 实测:关闭 GLM
+                的 thinking 能把延迟从约 30-55 秒压到约 4-5 秒(12 倍),但它同时
+                改变了工具调用的格式遵循率(引出了 Python 调用语法而非 JSON,已在
+                `codec.py` 修好)——也就是说它有能力**同时改变延迟、成本和 ASR**,
+                和 `CALIBRATION.md` §10 的四个已知旋钮是同一类东西,只是不在那张表里。
+                因此启用它必须像旋钮①②③④一样显式声明、重跑阳性对照、写进
+                DEVLOG,不能当成一个默认打开的性能优化。字段名与取值均不校验——
+                厂商专属,校验属于滥用这层抽象的普适性。
             client: 供测试注入 `httpx.MockTransport`,从而全程不联网、不花钱。
         """
         self._base_url = base_url.rstrip("/")
@@ -160,6 +172,7 @@ class OpenAICompatibleProvider(LLMProvider):
         self._pricing = pricing
         self._timeout = timeout_seconds
         self._min_interval = min_interval_seconds
+        self._extra_body = extra_body or {}
         self._client = client
         self._owns_client = client is None
         self._throttle = asyncio.Lock()
@@ -200,6 +213,9 @@ class OpenAICompatibleProvider(LLMProvider):
         }
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        # 标准字段先填,厂商专属的 extra_body 后合并——调用方若真的需要覆盖
+        # 标准字段(不该发生,但不无谓地挡住),让 extra_body 赢,便于排查。
+        payload.update(self._extra_body)
 
         if self._slots is None:
             return await self._timed_post(payload)
