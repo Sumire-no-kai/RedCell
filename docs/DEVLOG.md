@@ -5,6 +5,18 @@
 
 ---
 
+## 2026-08-06 22:57 AEST · Step 07 · 为 Phase 0–3 增加可证伪退出门
+
+- 进度:在 `PRD.md` §19 增加统一 Phase Gate 合同，并分别为 Phase 0–3 写明可证伪假设、冻结条件、主要指标、保护性指标、证据产物、通过路径与否证路径；`docs/CONCEPTS.md` 同步解释“实现存在”与“价值被证明”的区别；`AGENTS.md` Definition of Done 增加阶段完成声明必须引用对应 Gate 的约束。
+- 决策与理由:每个 Phase 采用 `SUPPORTED / NOT SUPPORTED` 双结果出口。有效实验得到负结果也能结束该研究阶段，但不能宣称改进有效；这避免把“Adaptive 必须赢”写成一个会诱导无限调参的毕业条件。
+- 否掉的替代 1:“功能清单全部打勾即完成”。它只能证明实现存在，不能证明算法、漏洞覆盖或产品工作流有价值。
+- 否掉的替代 2:“在至少一个主要指标上赢”。若预先列多个指标、事后挑唯一获胜者，会造成结果导向选择；因此 Phase 0 要冻结一个主要指标，其他指标作为次要解释或保护性约束。确需多个共同主要指标时，必须事前指定层级或多重比较修正。
+- Phase 0 具体门:主要问题冻结为“Adaptive 在低预算下是否比 Static 和 Random 都更早触发第一个 Level-1 Finding”；未命中 Run 按右删失处理。当前消融脚本正确保留删失计数，但只汇总已成功 Run 的 median，尚不足以单独支持该 Gate；正式消融前还需冻结删失统计量、最小有用效应和成对不确定性方法。
+- Phase 1–3 具体门:Phase 1 要求新增类别有 Ground Truth 或经独立标注验证的 Judge，并对 Phase 0 做非劣回归；Phase 2 要求用户走通 Target→Run→Evidence→Replay→Regression Test→Benchmark；Phase 3 每个算法/Adapter 单独对既有基线证明量化增益。
+- 遇到的问题:`PRD.md` 是内部、gitignored 的需求真相源，因此路线原文不会进入远端；可公开的概念说明同步写入 tracked 的 `docs/CONCEPTS.md`。工作区另有未跟踪 `scripts/run_ablation.sh`，不是本步骤创建，保持不动且不纳入本次提交。
+- 验证证据:`git diff --check` 通过；本步骤仅改设计文档，不改运行时代码。
+- 剩余状态:阶段门结构 DONE；Phase 0 的最小实际效应阈值、删失分析方法与 seed 数必须在正式消融前定稿，当前为 OPEN，不能看完结果后补。
+
 ## 2026-08-06 22:20 AEST · Step 06 · 提交与 PR 交接
 
 - 进度:将本次 Phase 0 实验脊椎收尾（Thompson、消融分析、实验条件指纹、attempt-boundary resume、测试与文档）提交为 `5c3cdcf`，提交信息为 `feat: finish phase zero experiment spine`，并推送到 `origin/feat/run-orchestrator`。

@@ -2509,6 +2509,39 @@ src/redcell/
 > 同时测量去重 Coverage;若 Adaptive 更快但覆盖更窄,那也是诚实且有价值的结论。
 > Phase 1 再把新颖性折扣与非平稳 Bandit 作为独立改进,避免一次实验同时改五个变量。
 
+### 阶段不是功能清单:可证伪的 Phase Gate
+
+“Bandit 写完”“新增四种攻击”“页面做齐了”都只说明**实现存在**，不能说明它有价值。
+从 2026-08-06 起，PRD §19 为每个 Phase 增加统一阶段门:
+
+```text
+冻结条件
+  ↓
+预注册假设 + 一个主要指标 + 实际意义阈值 + 保护性指标
+  ↓
+完整、可审计的证据
+  ├─ SUPPORTED      → 可以声明该改进有效
+  └─ NOT SUPPORTED  → 假设被否证；结束本轮，不能调到赢为止
+```
+
+这里最容易犯的错误是写“在至少一个主要指标上赢”。如果事前列了三个指标，结果出来后
+挑唯一获胜的那个，实际上是在**结果出来后更换问题**。因此 Phase 0 应预注册一个主要指标；
+discovery rate、coverage、cost 等作为次要指标或保护性指标解释取舍。若确实需要多个共同主要
+指标，则必须事前声明层级或多重比较修正，不能事后任选。
+
+Phase 0 的主要问题是“有限预算下，自适应分配是否比 Static 和 Random 更早找到确定性
+Finding”。没有 Finding 的 Run 不是“等于预算上限时成功”，而是**右删失**：我们只知道
+它在预算结束前没发生。当前 `scripts/analyze_ablation.py` 会保留删失计数，这是正确的第一步；
+但它对 time-to-first-Finding 仍只汇总已观察成功的 median，**尚不足以单独支撑 Phase 0
+Gate**。正式消融前必须冻结能处理删失的主要统计量、最小有用效应和成对不确定性方法。
+这是分析协议收尾，不是继续给运行时堆功能。
+
+同样的原则向后延伸:
+
+- **Phase 1:** 新类别必须有 Ground Truth 或经标注验证的 Judge，并通过 Phase 0 非劣回归；
+- **Phase 2:** 用户必须走通“配置 → Run → Evidence → replay → Regression Test → Benchmark”；
+- **Phase 3:** 每个算法/Adapter 单独对基线证明增量价值，不以支持列表长度毕业。
+
 ---
 
 ## 19. 截至 2026-08-01:系统现在到哪一步,下一步是什么
@@ -2557,7 +2590,7 @@ Run 配置
 | CLI | ✅ 已实现 | `redcell run` / `report`;`--online` 可驱动真实模型 | — |
 | **Mutation** | ✅ **已实现** | **attacker LLM 逐轮生成话术,跨 attempt 无记忆** | 可复现性降级为"同分布可比"(见下) |
 | **攻击方对照** | ✅ 已实现 | 能在校准前判定"攻击方是不是瓶颈" | 尚未对真实 attacker 跑过 |
-| Validator/Experiment | 🟡 部分实现 | Thompson regret 自检与固定 3×2×3 消融汇总脚本已就位 | 尚无真实多 seed 消融数字；Finding 复现率仍未实现。⚠️ **复现率按 PRD §19 属于 Phase 1,不在 Phase 0 关键路径上** |
+| Validator/Experiment | 🟡 部分实现 | Thompson regret 自检与固定 3×2×3 消融汇总脚本已就位；缺失 Finding 的 Run 不会被伪装成预算点成功 | 尚无真实多 seed 消融数字；time-to-first-Finding 的删失统计、最小有用效应与不确定性规则仍需在正式实验前冻结；Finding 复现率按 PRD §19 属于 Phase 1 |
 | Web/Dashboard | ❌ Phase 2 | — | 当前没有可视化操作台 |
 
 > ⚠️ **两行已确认过时**(2026-08-06):
