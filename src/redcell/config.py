@@ -19,6 +19,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from redcell.llm import OpenAICompatibleProvider, TokenPricing
+from redcell.protocols.run import ProviderRunConfiguration
 
 # `.env` 里把一个键留空(`REDCELL_ATTACKER_TEMPERATURE=`)是很自然的写法,意思是"用默认值"。
 # 但 pydantic 默认会把空串喂给字段,数值字段随即报错。`env_ignore_empty=True` 让空值
@@ -86,6 +87,21 @@ class ProviderSettings(BaseSettings):
         """必要字段是否齐全,可以真正建 provider。"""
         return bool(self.provider and self.base_url and self.api_key and self.model)
 
+    def run_configuration(self) -> ProviderRunConfiguration:
+        """返回可落盘的非凭据快照；用于实验可比性与 resume 前复核。"""
+        return ProviderRunConfiguration(
+            provider=self.provider,
+            base_url=self.base_url,
+            model=self.model,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            rpm=self.rpm,
+            max_concurrency=self.max_concurrency,
+            input_usd_per_mtok=self.input_usd_per_mtok,
+            output_usd_per_mtok=self.output_usd_per_mtok,
+            extra_body=self.extra_body,
+        )
+
     def build(self, *, name: str) -> OpenAICompatibleProvider:
         if not self.is_configured():
             raise ProviderConfigError(
@@ -132,10 +148,14 @@ class ProviderPair:
         attacker: OpenAICompatibleProvider,
         *,
         attacker_max_tokens: int = 512,
+        target_configuration: ProviderRunConfiguration,
+        attacker_configuration: ProviderRunConfiguration,
     ) -> None:
         self.target = target
         self.attacker = attacker
         self.attacker_max_tokens = attacker_max_tokens
+        self.target_configuration = target_configuration
+        self.attacker_configuration = attacker_configuration
         """attacker 单次回复的 token 上限 —— thinking 模型需要更大,见 ProviderSettings。"""
 
     async def aclose(self) -> None:
@@ -156,9 +176,12 @@ def load_attacker() -> OpenAICompatibleProvider:
 
 def load_providers() -> ProviderPair:
     """从 env / `.env` 读出并建好两个 provider。配置不全时抛 ProviderConfigError。"""
+    target_settings = TargetSettings()
     attacker_settings = AttackerSettings()
     return ProviderPair(
-        target=TargetSettings().build(name="target"),
+        target=target_settings.build(name="target"),
         attacker=attacker_settings.build(name="attacker"),
         attacker_max_tokens=attacker_settings.max_tokens,
+        target_configuration=target_settings.run_configuration(),
+        attacker_configuration=attacker_settings.run_configuration(),
     )

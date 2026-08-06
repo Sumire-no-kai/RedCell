@@ -148,11 +148,17 @@ class SearchController(ABC):
                 f"'{decision.selected_strategy_id}' 不一致"
             )
 
-        self._learn(strategy_id, score)
+        learning_state = self._learn(strategy_id, score)
+        decision_state = decision.decision_state
+        if learning_state:
+            # Selection 时记录的是「为什么选」;学习完成后补上「这次如何更新」。
+            # 对非学习基线它保持原样,因此不让 Thompson 的审计需求污染调用方接口。
+            decision_state = {**decision_state, **learning_state}
         self._decisions[self._pending_index] = _resolved_decision(
             decision,
             observed_score=score,
             outcome=ControllerDecisionOutcome.COMPLETED,
+            decision_state=decision_state,
         )
         self._pending_index = None
 
@@ -198,11 +204,39 @@ class SearchController(ABC):
         """是否有一次 select 尚未由 update / abandon 收尾。"""
         return self._pending_index is not None
 
+    def restore(
+        self,
+        *,
+        controller_seed: int,
+        decisions: Sequence[ControllerDecision],
+    ) -> None:
+        """从已完成/已放弃的审计轨迹重建内部 RNG 与学习状态。
+
+        恢复只接受已经收尾的 decision；崩溃留下的 pending decision 必须先由
+        Orchestrator 标为 abandoned，避免重放一场可能已碰过外部副作用的 Attempt。
+        """
+        if any(decision.outcome is ControllerDecisionOutcome.PENDING for decision in decisions):
+            raise ControllerProtocolError("恢复前必须先处理 pending ControllerDecision")
+        self.seed(controller_seed)
+        for expected in decisions:
+            selected = self.select(expected.available_strategy_ids)
+            if selected != expected.selected_strategy_id:
+                raise ControllerProtocolError(
+                    "恢复时 Controller 选择了 "
+                    f"'{selected}',审计记录为 '{expected.selected_strategy_id}'"
+                )
+            if expected.outcome is ControllerDecisionOutcome.COMPLETED:
+                assert expected.observed_score is not None
+                self.update(selected, expected.observed_score)
+            else:
+                assert expected.failure_reason is not None
+                self.abandon(selected, expected.failure_reason)
+
     @abstractmethod
     def _choose(self, available_strategy_ids: tuple[str, ...]) -> Selection: ...
 
-    def _learn(self, strategy_id: str, score: float) -> None:
-        """非学习基线为空实现;Bandit 将在子类中覆盖。"""
+    def _learn(self, strategy_id: str, score: float) -> dict[str, Any] | None:
+        """更新内部学习状态,可返回要追加到决策审计的快照。"""
         return None
 
 

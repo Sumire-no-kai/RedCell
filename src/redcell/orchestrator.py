@@ -83,6 +83,10 @@ class RunAlreadyExistsError(RuntimeError):
     """Store 中已经存在同一 run_id;拒绝覆盖既有运行历史。"""
 
 
+class RunResumeError(RuntimeError):
+    """A persisted Run cannot safely be resumed with the supplied runtime."""
+
+
 class RunOrchestrator:
     """一条窄接口背后的完整串行运行状态机。
 
@@ -112,7 +116,19 @@ class RunOrchestrator:
         self._claimed = False
 
     async def execute(self, request: RunExecutionRequest) -> RunExecutionResult:
-        """执行到预算终点;严重错误会持久化 FAILED 后抛 RunFailedError。"""
+        """执行一个新的 PENDING Run 到预算终点。"""
+        return await self._run(request, resume=False)
+
+    async def resume(self, request: RunExecutionRequest) -> RunExecutionResult:
+        """从已原子提交的 Attempt 边界继续一个 RUNNING Run。"""
+        return await self._run(request, resume=True)
+
+    async def _run(
+        self,
+        request: RunExecutionRequest,
+        *,
+        resume: bool,
+    ) -> RunExecutionResult:
         if self._claimed:
             raise OrchestratorReuseError("RunOrchestrator 是一次性状态机;新 Run 必须创建新实例")
         self._claimed = True
@@ -122,18 +138,30 @@ class RunOrchestrator:
         run = self._prepare_run(run, strategies)
         # 必须在这里播种,不能交给调用方:run.seed 可能刚在 _prepare_run 里生成,
         # 调用方构造 Controller 时还不知道它。preflight 会复核这一条真的生效了。
-        self._controller.seed(controller_seed_for(run.seed or 0))
         retry_rng = random.Random(derive_seed(run.seed or 0, "retry-backoff"))
         existing = await self._persist(lambda: self._store.get_run(run.id), retry_rng)
-        if existing is not None:
+        if existing is not None and not resume:
             raise RunAlreadyExistsError(
-                f"Run '{run.id}' 已存在;拒绝覆盖既有状态与事件。"
-                "断点恢复必须使用未来独立的 resume interface"
+                f"Run '{run.id}' 已存在;请使用 resume 命令恢复 RUNNING Run,不要覆盖历史。"
             )
+        if resume:
+            if existing is None:
+                raise RunResumeError(f"Run '{run.id}' 不存在,无法恢复")
+            run = existing
+            events = await self._persist(lambda: self._store.events_for(run.id), retry_rng)
+            self._event_sequence = max((event.sequence for event in events), default=-1) + 1
+            retry_rng = random.Random(derive_seed(run.seed or 0, "retry-backoff-resume"))
+        else:
+            self._controller.seed(controller_seed_for(run.seed or 0))
 
         try:
-            self._preflight(run, strategies, request.actor)
+            if resume:
+                self._preflight_resume(run, strategies, request.actor)
+            else:
+                self._preflight(run, strategies, request.actor)
         except Exception as exc:
+            if resume:
+                raise RunResumeError(f"Run '{run.id}' 不能安全恢复:{exc}") from exc
             failure = _serious_failure(exc, FailureStage.PREFLIGHT)
             failed = self._failed_run(run, failure)
             event = self._event(
@@ -147,28 +175,37 @@ class RunOrchestrator:
             )
             raise RunFailedError(failed, failure) from exc
 
-        run = run.model_copy(
-            update={
-                "status": RunStatus.RUNNING,
-                "started_at": self._utcnow(),
-                "strategy_ids": [strategy.id for strategy in strategies],
-                # 把实际生效的可靠性阈值钉进 Run,而且必须在**首次落盘之前** ——
-                # 事后只看结果是看不出当时用的是哪一组阈值的,而它决定了
-                # "这次 run 算不算数"。中途崩溃的 run 也因此带着它。
-                "reliability": self._reliability,
-            }
-        )
-        started = self._event(run, RunEventType.RUN_STARTED)
-        await self._persist(
-            lambda: self._store.commit_run_state(run=run, run_event=started),
-            retry_rng,
-        )
+        if not resume:
+            run = run.model_copy(
+                update={
+                    "status": RunStatus.RUNNING,
+                    "started_at": self._utcnow(),
+                    "strategy_ids": [strategy.id for strategy in strategies],
+                    # 把实际生效的可靠性阈值钉进 Run,而且必须在**首次落盘之前** ——
+                    # 事后只看结果是看不出当时用的是哪一组阈值的,而它决定了
+                    # "这次 run 算不算数"。中途崩溃的 run 也因此带着它。
+                    "reliability": self._reliability,
+                }
+            )
+            started = self._event(run, RunEventType.RUN_STARTED)
+            await self._persist(
+                lambda: self._store.commit_run_state(run=run, run_event=started),
+                retry_rng,
+            )
+            budget = BudgetManager(run.limits)
+            attempts: list[Attempt] = []
+            findings: list[Finding] = []
+            consecutive_abandoned = 0
+        else:
+            budget = BudgetManager.from_usage(run.limits, run.usage)
+            run, budget = await self._resolve_interrupted_attempt(run, budget, retry_rng)
+            decisions = await self._persist(lambda: self._store.decisions_for(run.id), retry_rng)
+            self._controller = self._restore_controller(run, decisions)
+            attempts = await self._persist(lambda: self._store.attempts_for(run.id), retry_rng)
+            findings = await self._persist(lambda: self._store.findings_for(run.id), retry_rng)
+            consecutive_abandoned = _trailing_abandoned(decisions)
 
-        budget = BudgetManager(run.limits)
         by_id = {strategy.id: strategy for strategy in strategies}
-        attempts: list[Attempt] = []
-        findings: list[Finding] = []
-        consecutive_abandoned = 0
         current_attempt_id: str | None = None
         current_result: ExecutionResult | None = None
         last_abandoned_failure: FailureRecord | None = None
@@ -225,6 +262,7 @@ class RunOrchestrator:
                     target_model=run.target_model,
                     target_temperature=run.target_temperature,
                     attacker_model=run.attacker_model,
+                    attacker_temperature=run.attacker_temperature,
                 )
 
                 try:
@@ -672,6 +710,116 @@ class RunOrchestrator:
                 )
             )
 
+    def _preflight_resume(self, run: Run, strategies: list[Strategy], actor: str) -> None:
+        """Validate a continuation without changing the persisted experiment."""
+        if run.status is not RunStatus.RUNNING:
+            raise ValueError("只有状态为 RUNNING 的 Run 可以恢复")
+        if run.seed is None:
+            raise ValueError("缺少 run.seed,无法重建随机决策历史")
+        if run.limits.max_attempts is None:
+            raise ValueError("Run 缺少 max_attempts,无法保证恢复后能停止")
+        strategy_ids = [strategy.id for strategy in strategies]
+        if strategy_ids != run.strategy_ids:
+            raise ValueError("当前 Strategy 集合/顺序与落盘 Run 不一致")
+        if run.algorithm != self._controller.name:
+            raise ValueError("Run.algorithm 与当前 Controller 不一致")
+        if self._controller.decisions:
+            raise ValueError("Controller 已有历史,不能用于恢复")
+        if run.target_name != self._executor.target_name:
+            raise ValueError("Run.target_name 与 Executor Policy 不一致")
+        if run.policy_version != self._executor.policy_version:
+            raise ValueError("Run.policy_version 与 Executor Policy 不一致")
+        if run.adapter_type != self._executor.adapter_type:
+            raise ValueError("Run.adapter_type 与 TargetAdapter 不一致")
+        blind = [
+            side
+            for side, ok in (
+                ("目标", self._executor.adapter_capabilities.reports_cost),
+                ("攻击方", self._executor.generator_reports_cost),
+            )
+            if not ok
+        ]
+        if run.limits.max_cost_usd is not None and blind:
+            raise ValueError("恢复运行时任一侧不报告成本,无法守住已记录的 max_cost")
+        for strategy in strategies:
+            self._executor.validate(
+                ExecutionRequest(
+                    attempt_id=f"resume-preflight:{strategy.id}",
+                    run_id=run.id,
+                    strategy=strategy,
+                    actor=actor,
+                    run_seed=run.seed,
+                    attempt_index=0,
+                )
+            )
+
+    async def _resolve_interrupted_attempt(
+        self,
+        run: Run,
+        budget: BudgetManager,
+        retry_rng: random.Random,
+    ) -> tuple[Run, BudgetManager]:
+        """Atomically abandon a selected-but-uncommitted attempt before resuming.
+
+        We intentionally never replay this attempt.  Between selection being
+        committed and process death, the target may already have observed a
+        request or tool side effect; replaying would make the trace lie.
+        """
+        pending = await self._persist(lambda: self._store.pending_decision_for(run.id), retry_rng)
+        if pending is None:
+            event = self._event(
+                run,
+                RunEventType.RUN_RESUMED,
+                payload={"recovery_boundary": "attempt", "recovered_pending_attempt_id": None},
+            )
+            await self._persist(
+                lambda: self._store.commit_run_state(run=run, run_event=event), retry_rng
+            )
+            return run, budget
+
+        attempt_id, decision = pending
+        payload = decision.model_dump(mode="python")
+        payload.update(
+            outcome=ControllerDecisionOutcome.ABANDONED,
+            observed_score=None,
+            failure_reason="resume: attempt interrupted before outcome was atomically committed",
+        )
+        abandoned = ControllerDecision.model_validate(payload)
+        budget.abandon_attempt()
+        recovered = run.model_copy(update={"usage": budget.usage()})
+        abandoned_event = self._event(
+            recovered,
+            RunEventType.ATTEMPT_ABANDONED,
+            attempt_id=attempt_id,
+            payload={"reason": abandoned.failure_reason, "recovered_on_resume": True},
+        )
+        resumed_event = self._event(
+            recovered,
+            RunEventType.RUN_RESUMED,
+            payload={"recovery_boundary": "attempt", "recovered_pending_attempt_id": attempt_id},
+        )
+        await self._persist(
+            partial(
+                self._store.commit_abandonment,
+                run=recovered,
+                attempt_id=attempt_id,
+                decision=abandoned,
+                run_events=[abandoned_event, resumed_event],
+            ),
+            retry_rng,
+        )
+        return recovered, budget
+
+    def _restore_controller(
+        self,
+        run: Run,
+        decisions: Sequence[ControllerDecision],
+    ) -> SearchController:
+        self._controller.restore(
+            controller_seed=controller_seed_for(run.seed or 0), decisions=decisions
+        )
+        return self._controller
+
     def _require_latest_decision(self) -> ControllerDecision:
         """取最近一次决策;不存在即为内部不变量被破坏,不静默兜底。"""
         decision = self._controller.latest_decision
@@ -726,6 +874,16 @@ class RunOrchestrator:
 
 def _failure_reason(failure: FailureRecord) -> str:
     return f"{failure.kind.value}:{failure.code}"
+
+
+def _trailing_abandoned(decisions: Sequence[ControllerDecision]) -> int:
+    """Count the current abandonment streak for reliability checks after resume."""
+    streak = 0
+    for decision in reversed(decisions):
+        if decision.outcome is not ControllerDecisionOutcome.ABANDONED:
+            break
+        streak += 1
+    return streak
 
 
 def _serious_failure(exc: Exception, stage: FailureStage) -> FailureRecord:

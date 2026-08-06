@@ -150,6 +150,23 @@ class BudgetManager:
         self._usage = BudgetUsage()
         self._per_strategy: Counter[str] = Counter()
         self._per_strategy_completed: Counter[str] = Counter()
+        self._wall_seconds_before_start = 0.0
+
+    @classmethod
+    def from_usage(
+        cls,
+        limits: BudgetLimits,
+        usage: BudgetUsage,
+        *,
+        clock=time.monotonic,
+    ) -> BudgetManager:
+        """从一次原子提交后的账本恢复；离线停机时间不计入 wall-clock 预算。"""
+        manager = cls(limits, clock=clock)
+        manager._usage = usage.model_copy(deep=True)
+        manager._per_strategy = Counter(usage.per_strategy_attempts)
+        manager._per_strategy_completed = Counter(usage.per_strategy_completed)
+        manager._wall_seconds_before_start = usage.wall_seconds
+        return manager
 
     @property
     def limits(self) -> BudgetLimits:
@@ -165,7 +182,7 @@ class BudgetManager:
         )
 
     def _elapsed(self) -> float:
-        return self._clock() - self._started
+        return self._wall_seconds_before_start + self._clock() - self._started
 
     def _attempts_spent(self) -> int:
         """按当前计数口径,已经花掉多少 attempt 预算。

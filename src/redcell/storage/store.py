@@ -131,6 +131,32 @@ class RunStore:
         with self._open() as session:
             return [ControllerDecision.model_validate(row.payload) for row in session.scalars(stmt)]
 
+    def pending_decision_for(self, run_id: str) -> tuple[str, ControllerDecision] | None:
+        """Return the one selected decision whose outcome was never committed.
+
+        A RUNNING run is allowed to have at most one such row: decisions are
+        selected serially, and the next selection only occurs after the prior
+        decision has atomically become COMPLETED or ABANDONED.  Treating more
+        than one as corruption is safer than guessing which target call to
+        replay.
+        """
+        stmt = (
+            select(ControllerDecisionRow)
+            .where(
+                ControllerDecisionRow.run_id == run_id,
+                ControllerDecisionRow.outcome == ControllerDecisionOutcome.PENDING.value,
+            )
+            .order_by(ControllerDecisionRow.attempt_index)
+        )
+        with self._open() as session:
+            rows = list(session.scalars(stmt))
+        if len(rows) > 1:
+            raise ValueError(f"Run '{run_id}' has {len(rows)} pending decisions")
+        if not rows:
+            return None
+        row = rows[0]
+        return row.attempt_id, ControllerDecision.model_validate(row.payload)
+
     def save_event(self, run_event: RunEvent) -> None:
         with self._open() as session, session.begin():
             self._merge_event(session, run_event)

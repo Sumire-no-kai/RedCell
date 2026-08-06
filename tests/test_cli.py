@@ -73,6 +73,22 @@ def test_offline_run_is_labelled_as_not_a_security_assessment(workspace) -> None
     assert payload["run"]["notes"] == OFFLINE_NOTICE
 
 
+def test_run_persists_an_auditable_condition_fingerprint(workspace) -> None:
+    result = runner.invoke(
+        app,
+        ["run", "--budget", "1", "--actor", "customer_b", "--db", _db(workspace)],
+    )
+
+    assert result.exit_code == ExitCode.CLEAN, result.output
+    with RunStore(_db(workspace)) as store:
+        stored = store.list_runs()[0]
+    assert stored.has_auditable_conditions
+    assert stored.experiment_conditions is not None
+    assert stored.experiment_conditions.actor == "customer_b"
+    assert stored.experiment_conditions.arena.enforce_permissions is True
+    assert stored.experiment_fingerprint == stored.experiment_conditions.fingerprint()
+
+
 def test_run_is_reproducible_under_the_same_seed(workspace) -> None:
     """同一 seed 必须给出同一条策略序列,否则"可复现"是空话。"""
     common = ["run", "--budget", "4", "--seed", "7", "--algorithm", "random"]
@@ -90,6 +106,17 @@ def test_run_is_reproducible_under_the_same_seed(workspace) -> None:
             return [a.strategy_id for a in store.attempts_for(run_id)]
 
     assert order(_db(workspace / "a")) == order(_db(workspace / "b"))
+
+
+def test_thompson_run_is_available_from_the_cli(workspace) -> None:
+    result = runner.invoke(
+        app,
+        ["run", "--algorithm", "thompson", "--budget", "3", "--db", _db(workspace)],
+    )
+
+    assert result.exit_code == ExitCode.CLEAN, result.output
+    with RunStore(_db(workspace)) as store:
+        assert store.list_runs()[0].algorithm == "thompson"
 
 
 def test_budget_is_respected(workspace) -> None:

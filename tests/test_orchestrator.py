@@ -121,6 +121,16 @@ class StableAdapter(FlakyAdapter):
         )
 
 
+class CrashOnSecondSendAdapter(StableAdapter):
+    """Models a process death after selection has been durably recorded."""
+
+    async def send(self, payload: AdapterInput) -> AdapterOutput:
+        if self.send_calls == 1:
+            self.send_calls += 1
+            raise KeyboardInterrupt("simulated process crash")
+        return await super().send(payload)
+
+
 class FlakyGenerator(AttackGenerator):
     def __init__(self, failures_before_success: int) -> None:
         self.failures_before_success = failures_before_success
@@ -422,6 +432,61 @@ async def test_existing_run_id_is_rejected_without_overwriting_history(
     assert persisted is not None
     assert persisted.status is RunStatus.COMPLETED
     assert store.events_for(completed.run.id) == events_before
+
+
+async def test_resume_abandons_the_interrupted_attempt_without_replaying_it(
+    store: RunStore,
+) -> None:
+    """A crash after DECISION_SELECTED must not cause the same attempt to be resent."""
+    strategy = _one_turn_strategy()
+    # 1/10 is exactly at the production abandonment ceiling, so the test
+    # exercises successful recovery without weakening the reliability policy.
+    run = _run(max_attempts=10)
+    crashing = CrashOnSecondSendAdapter()
+    first = RunOrchestrator(
+        executor=_executor(crashing, FlakyGenerator(0)),
+        controller=StaticController([strategy.id]),
+        store=store,
+        retry_policy=RetryPolicy(base_delay_seconds=0, max_delay_seconds=0),
+        sleep=_no_sleep,
+    )
+    request = RunExecutionRequest(run=run, strategies=[strategy], actor="customer_a")
+
+    with pytest.raises(KeyboardInterrupt, match="simulated process crash"):
+        await first.execute(request)
+
+    interrupted = store.get_run(run.id)
+    assert interrupted is not None
+    assert interrupted.status is RunStatus.RUNNING
+    assert store.pending_decision_for(run.id) is not None
+    assert crashing.send_calls == 2
+
+    resumed_adapter = StableAdapter()
+    resumed = RunOrchestrator(
+        executor=_executor(resumed_adapter, FlakyGenerator(0)),
+        controller=StaticController([strategy.id]),
+        store=store,
+        retry_policy=RetryPolicy(base_delay_seconds=0, max_delay_seconds=0),
+        sleep=_no_sleep,
+    )
+    result = await resumed.resume(request)
+
+    assert result.run.status is RunStatus.COMPLETED
+    assert result.run.usage.attempts == 10
+    assert result.run.usage.completed_attempts == 9
+    assert result.run.usage.abandoned_attempts == 1
+    assert resumed_adapter.send_calls == 8
+    decisions = store.decisions_for(run.id)
+    assert [decision.outcome for decision in decisions[:2]] == [
+        ControllerDecisionOutcome.COMPLETED,
+        ControllerDecisionOutcome.ABANDONED,
+    ]
+    assert all(
+        decision.outcome is ControllerDecisionOutcome.COMPLETED for decision in decisions[2:]
+    )
+    event_types = [event.event_type for event in store.events_for(run.id)]
+    assert RunEventType.RUN_RESUMED in event_types
+    assert store.pending_decision_for(run.id) is None
 
 
 # ── Controller 播种与可复现性 ────────────────────────────────────────────
