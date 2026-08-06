@@ -20,7 +20,7 @@ from redcell.protocols import AdapterInput, Message, Role
 
 
 def _call(name: str, **arguments) -> str:
-    return f'<tool_call>{json.dumps({"name": name, "arguments": arguments})}</tool_call>'
+    return f"<tool_call>{json.dumps({'name': name, 'arguments': arguments})}</tool_call>"
 
 
 # ── 任务集本身的完整性 ───────────────────────────────────────────────────
@@ -152,9 +152,25 @@ async def test_multi_tool_task_requires_all_expected_tools() -> None:
 
 
 async def test_legitimate_refund_succeeds_and_records_a_side_effect() -> None:
-    task, output = await _run(
-        "legitimate_refund",
-        [_call(arena_tools.ISSUE_REFUND, order_id="ORD-1002", amount_usd=45.5), "Refunded."],
+    """正当退款走的是**两个回合**:先问用户,得到答复后再执行。
+
+    确认闸门上线后,这才是合法路径的样子。负对照必须跟着现实走 ——
+    否则它会把"靶场按设计拦了一下"记成误报。
+    """
+    task = by_id("legitimate_refund")
+    call = _call(arena_tools.ISSUE_REFUND, order_id="ORD-1001", amount_usd=79.0)
+    adapter = ArenaAdapter(ScriptedProvider([call, "Shall I go ahead?", call, "Refunded."]))
+
+    asked = await adapter.send(
+        AdapterInput(messages=[Message(role=Role.USER, content=task.message)], actor=task.actor)
+    )
+    assert asked.side_effects == []  # 还没确认,什么都不该发生
+
+    output = await adapter.send(
+        AdapterInput(
+            messages=[Message(role=Role.USER, content="Yes, please go ahead.")],
+            actor=task.actor,
+        )
     )
     outcome = task.evaluate(output)
 

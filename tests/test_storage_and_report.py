@@ -9,6 +9,7 @@ from redcell.protocols import (
     AdapterOutput,
     Evidence,
     Finding,
+    ImpactBasis,
     ImpactStatus,
     ObservabilityLevel,
     ReproductionContext,
@@ -20,8 +21,9 @@ from redcell.protocols import (
     VulnerabilityCategory,
     build_attempt,
 )
-from redcell.protocols.run import Run, RunStatus
+from redcell.protocols.run import Run, RunEvent, RunEventType, RunStatus
 from redcell.report import DISCLAIMER, ReportData, to_html, to_json, write_report
+from redcell.search import ControllerDecision, ControllerDecisionOutcome
 from redcell.storage import RunStore
 
 
@@ -70,6 +72,13 @@ def _attempt(run_id: str, strategy_id: str, reward: float, *, turns: int = 1):
     )
 
 
+def _basis_for(impact: ImpactStatus) -> ImpactBasis | None:
+    """协议要求:断言了 impact 必须给证据来源,UNKNOWN 则必须没有。"""
+    if impact is ImpactStatus.UNKNOWN:
+        return None
+    return ImpactBasis.SIDE_EFFECT
+
+
 def _finding(attempt, impact: ImpactStatus, **kwargs) -> Finding:
     observability = kwargs.pop(
         "observability",
@@ -86,7 +95,11 @@ def _finding(attempt, impact: ImpactStatus, **kwargs) -> Finding:
         title="跨用户读取",
         actor="customer_a",
         strategy_id=attempt.strategy_id,
-        triad=ViolationTriad(attempted_action=True, realized_impact=impact),
+        triad=ViolationTriad(
+            attempted_action=True,
+            realized_impact=impact,
+            impact_basis=_basis_for(impact),
+        ),
         evidence=[
             Evidence(
                 description="以 customer_a 身份读取了 customer_b",
@@ -136,6 +149,78 @@ def test_save_is_idempotent(store: RunStore, run: Run) -> None:
     store.save_run(run)
     store.save_run(run.model_copy(update={"status": RunStatus.COMPLETED}))
     assert len(store.list_runs()) == 1
+
+
+def _completed_decision(strategy_id: str = "s1") -> ControllerDecision:
+    return ControllerDecision(
+        attempt_index=0,
+        controller="static",
+        available_strategy_ids=[strategy_id],
+        selected_strategy_id=strategy_id,
+        observed_score=1.0,
+        outcome=ControllerDecisionOutcome.COMPLETED,
+    )
+
+
+def test_atomic_attempt_commit_is_idempotent(store: RunStore, run: Run) -> None:
+    store.save_run(run)
+    attempt = _attempt(run.id, "s1", 1.0)
+    finding = _finding(attempt, ImpactStatus.REALIZED)
+    event = RunEvent(
+        run_id=run.id,
+        attempt_id=attempt.id,
+        event_type=RunEventType.ATTEMPT_COMMITTED,
+        sequence=0,
+    )
+
+    for _ in range(2):
+        store.commit_attempt_outcome(
+            run=run,
+            attempt=attempt,
+            findings=[finding],
+            decision=_completed_decision(),
+            run_event=event,
+        )
+
+    assert len(store.attempts_for(run.id)) == 1
+    assert len(store.findings_for(run.id)) == 1
+    assert len(store.decisions_for(run.id)) == 1
+    assert len(store.events_for(run.id)) == 1
+
+
+def test_atomic_attempt_commit_rolls_back_every_row(
+    store: RunStore,
+    run: Run,
+    monkeypatch,
+) -> None:
+    store.save_run(run)
+    attempt = _attempt(run.id, "s1", 1.0)
+    finding = _finding(attempt, ImpactStatus.REALIZED)
+    event = RunEvent(
+        run_id=run.id,
+        attempt_id=attempt.id,
+        event_type=RunEventType.ATTEMPT_COMMITTED,
+        sequence=0,
+    )
+
+    def fail_after_attempt_merge(_session, _finding) -> None:
+        raise RuntimeError("simulated disk failure")
+
+    monkeypatch.setattr(store, "_merge_finding", fail_after_attempt_merge)
+
+    with pytest.raises(RuntimeError, match="simulated disk failure"):
+        store.commit_attempt_outcome(
+            run=run,
+            attempt=attempt,
+            findings=[finding],
+            decision=_completed_decision(),
+            run_event=event,
+        )
+
+    assert store.attempts_for(run.id) == []
+    assert store.findings_for(run.id) == []
+    assert store.decisions_for(run.id) == []
+    assert store.events_for(run.id) == []
 
 
 def test_list_runs_filters_by_algorithm(store: RunStore, run: Run) -> None:
@@ -246,6 +331,31 @@ def test_report_computes_allocation_and_success(run: Run) -> None:
     assert data.budget_share["s1"] == pytest.approx(2 / 3)
     assert data.queries_to_first_attempt_success == 2
     assert data.queries_to_first_impact_success == 2
+    assert data.logical_attempts == data.total_attempts == 3
+    assert data.abandoned_attempts == 0
+    assert data.execution_retries == 0
+
+
+def test_report_surfaces_operational_failures(run: Run) -> None:
+    run_with_failures = run.model_copy(
+        update={
+            "usage": run.usage.model_copy(
+                update={
+                    "attempts": 4,
+                    "completed_attempts": 3,
+                    "abandoned_attempts": 1,
+                    "retries": 2,
+                }
+            )
+        }
+    )
+    data = _report(run_with_failures)
+
+    assert data.logical_attempts == 4
+    assert data.total_attempts == 3
+    assert data.abandoned_attempts == 1
+    assert data.execution_retries == 2
+    assert "excluded from ASR" in to_html(data)
 
 
 def test_report_reports_never_succeeded_as_null(run: Run) -> None:

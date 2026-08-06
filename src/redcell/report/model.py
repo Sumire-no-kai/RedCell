@@ -80,6 +80,9 @@ class ReportData(RedCellModel):
     """
 
     total_attempts: int = 0
+    logical_attempts: int = 0
+    abandoned_attempts: int = 0
+    execution_retries: int = 0
     disclaimer: str = DISCLAIMER
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -134,6 +137,9 @@ class ReportData(RedCellModel):
             queries_to_first_attempt_success=success.queries_to_first_attempt_success,
             queries_to_first_impact_success=success.queries_to_first_impact_success,
             total_attempts=total,
+            logical_attempts=max(run.usage.attempts, total),
+            abandoned_attempts=run.usage.abandoned_attempts,
+            execution_retries=run.usage.retries,
         )
 
     def covered_categories(self) -> set[VulnerabilityCategory]:

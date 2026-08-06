@@ -51,21 +51,57 @@ class ControllerDecision(RedCellModel):
 
 
 @dataclass(frozen=True)
-class _Selection:
+class Selection:
+    """`_choose` 的返回值:选中的 Strategy,以及写进决策审计的状态快照。"""
+
     strategy_id: str
     state: dict[str, Any]
 
 
 class SearchController(ABC):
-    """调用方只需学会 select/update/abandon;决策审计由基类统一保证。"""
+    """调用方只需学会 seed/select/update/abandon;决策审计由基类统一保证。"""
 
     def __init__(self) -> None:
         self._decisions: list[ControllerDecision] = []
         self._pending_index: int | None = None
+        self._controller_seed: int | None = None
 
     @property
     @abstractmethod
     def name(self) -> str: ...
+
+    @property
+    def requires_seed(self) -> bool:
+        """本 Controller 的选择是否依赖随机性。
+
+        Orchestrator 据此强制播种:非学习的 Static 不需要,
+        Random 与后续的 Thompson/UCB 需要。默认 False,子类显式声明。
+        """
+        return False
+
+    @property
+    def controller_seed(self) -> int | None:
+        """实际生效的种子。写进 ReproductionContext,必须与真实使用的一致。"""
+        return self._controller_seed
+
+    def seed(self, controller_seed: int) -> None:
+        """由 Orchestrator 从 Run 主种子派生后注入。
+
+        **不能让调用方自己播种。** Run 主种子可能是 Orchestrator 在
+        `_prepare_run` 里现生成的,调用方在构造 Controller 时根本还不知道它;
+        那样 ReproductionContext 里记的 controller_seed 会和真正驱动选择的
+        RNG 毫无关系,而这条不一致不会有任何报错 —— 只会在某天重放失败时才发现。
+        """
+        if controller_seed < 0:
+            raise ValueError("controller_seed 必须 >= 0")
+        if self._decisions:
+            raise ControllerProtocolError("已经开始决策的 Controller 不能重新播种")
+        self._controller_seed = controller_seed
+        self._on_seeded(controller_seed)
+
+    def _on_seeded(self, controller_seed: int) -> None:
+        """子类在此建立自己的私有 RNG。不需要随机性的实现无需覆写。"""
+        return None
 
     def select(self, available_strategy_ids: Sequence[str]) -> str:
         """从 Budget Manager 给出的可选列表中选一个。
@@ -143,10 +179,27 @@ class SearchController(ABC):
 
     @property
     def decisions(self) -> tuple[ControllerDecision, ...]:
+        """完整决策审计。深拷贝,调用方拿到的快照改不动内部状态。"""
         return tuple(decision.model_copy(deep=True) for decision in self._decisions)
 
+    @property
+    def latest_decision(self) -> ControllerDecision | None:
+        """最近一次决策。
+
+        Orchestrator 每轮要读好几次最近决策,走 `decisions[-1]` 会把整段历史
+        深拷贝一遍,开销随 Attempt 数增长。这里只拷一条。
+        """
+        if not self._decisions:
+            return None
+        return self._decisions[-1].model_copy(deep=True)
+
+    @property
+    def has_pending_decision(self) -> bool:
+        """是否有一次 select 尚未由 update / abandon 收尾。"""
+        return self._pending_index is not None
+
     @abstractmethod
-    def _choose(self, available_strategy_ids: tuple[str, ...]) -> _Selection: ...
+    def _choose(self, available_strategy_ids: tuple[str, ...]) -> Selection: ...
 
     def _learn(self, strategy_id: str, score: float) -> None:
         """非学习基线为空实现;Bandit 将在子类中覆盖。"""

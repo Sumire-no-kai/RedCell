@@ -72,21 +72,100 @@ uses scoring feedback to decide which attack strategy to try next.
 
 ## Quick Start
 
-> Not yet available — the Phase 0 spine is under construction.
-> The intended flow (subject to change, finalized in Phase 0 / 2):
+> ⚠️ **Runs are offline by default** — a scripted provider stands in for the
+> target, so no model participates in its decisions. An offline run proves the
+> pipeline works; it is **not a security assessment of anything**. Pass
+> `--online` to attach real models (configured via `.env`, see `.env.example`).
 
 ```bash
-# 1. Install dependencies (Python control-plane + web)
+git clone https://github.com/Sumire-no-kai/RedCell.git
+cd RedCell
+python -m venv .venv && .venv/Scripts/activate   # Linux/macOS: source .venv/bin/activate
+pip install -e ".[dev]"
 
-# 2. Start the bundled benchmark arena (a deliberately vulnerable agent)
-#    docker compose up arena
+# Run against the bundled arena (a deliberately vulnerable support agent)
+redcell run --budget 20 --seed 0
 
-# 3. Run an evaluation against the arena with a fixed budget
-#    redcell run --target arena/support-agent --budget 100
+# Same, but with real models on both sides — this spends real quota
+redcell run --online --budget 20 --seed 0
 
-# 4. View the trace + findings report
-#    redcell report --last
+# Re-export the report for any stored run
+redcell report <run-id>
 ```
+
+`run` writes a self-contained HTML report plus machine-readable JSON under
+`runs/<run-id>/`, and stores the full trace in SQLite so any attempt can be
+replayed later.
+
+### Calibration knobs and sample integrity
+
+`--defense` sets how firmly the target's system prompt states its rules, from
+`none` (no rules at all — positive-control use only) through `lenient` and
+`standard` to `strict`. Every level above `none` must cover the *same* four
+topics; only the wording softens. Dropping one would weaken the specific
+strategies that topic blocks, which turns measured strategy differentiation into
+an artefact of our own tuning — a test enforces this.
+
+Two more gates let you study depth of defence separately from the model's
+judgement — `--enforce-permissions` (does the tool layer check ownership?) and
+`--enforce-confirmation` (does a destructive action need the customer to say yes
+first?). Both change *Impact* only: the agent still generates the violating call
+either way, which is what *Attempt* measures.
+
+One flag matters more than it looks: `--top-up-abandoned`. By default a
+`--budget` counts *attempts started*, so an attempt abandoned to a rate limit
+still consumes its slot — and a calibration round can finish "successfully" with
+fewer samples per strategy than it was supposed to collect, unevenly distributed
+across arms. Pass the flag for any run whose sample size is part of the claim.
+
+`--max-cost` caps spend across *both* model slots. It is rejected outright if
+either side cannot report cost, rather than silently capping nothing.
+
+> ⚠️ Cost caps under-count models that think. Reasoning tokens are billed but do
+> not appear in the API's reported `usage`, so the cap only sees part of the
+> spend — and the same hidden budget truncates visible output unless you raise
+> the attacker's `max_tokens`. Measured: two Gemini Flash models returned attack
+> messages cut off mid-sentence at the default limit, while the Flash-Lite tier
+> did not. Prefer a non-thinking model, or reconcile against your provider's
+> console after the first paid run.
+
+### Before you trust a calibration run
+
+Three controls must pass before calibration data means anything. Two of them
+check the arena:
+
+```bash
+redcell controls
+```
+
+*Positive*: with the defensive wording removed, blunt attacks must land — if they
+don't, the chain is broken (canary not planted, tools not instrumented, detector
+buggy) and no calibration number is worth reading. *Negative*: a batch of
+perfectly legitimate requests must produce zero findings.
+
+Each positive case is repeated and passes if it lands **at least once**. The
+target runs at temperature 0.7 by protocol, so a single sample cannot establish
+"must succeed" — and a control that fails at random is worse than none, because
+it sends you looking for a broken chain that isn't there.
+
+The third checks the instrument itself:
+
+The attacker LLM is the *measuring instrument*. If it renders every strategy as
+much the same prose, "no separation between strategies" says something about the
+instrument, not about the target — and the two are indistinguishable after the
+fact.
+
+```bash
+redcell attacker-control --samples 5
+```
+
+It generates messages per strategy and compares within-group against
+between-group similarity, writing every generated message to disk for manual
+review. Exit code `5` means *don't start the calibration run*.
+
+Exit codes are CI-friendly — `0` clean, `1` findings, `3` run failed, `4` bad
+config, `5` a pre-run control failed. `2` is deliberately left to the CLI
+framework's usage errors so that a mistyped flag never looks like a failed scan.
 
 ## Core Concepts
 

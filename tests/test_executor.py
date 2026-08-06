@@ -157,6 +157,17 @@ async def test_cost_and_reproduction_seeds_are_recorded() -> None:
     assert attempt.reproduction.extra["attempt_index"] == 37
 
 
+async def test_orchestrator_supplied_attempt_id_is_preserved() -> None:
+    executor, _ = _executor(
+        target_script=["No.", "No again."],
+        attack_script=["first", "second"],
+    )
+    request = _request()
+    result = await executor.execute(request)
+
+    assert result.attempt.id == request.attempt_id
+
+
 async def test_target_failure_raises_typed_error_with_partial_trace() -> None:
     executor, _ = _executor(
         target_script=["First response."],
@@ -204,3 +215,69 @@ def test_cost_uses_typed_trace_metadata_field() -> None:
     ]
 
     assert _cost_of(turns).usd == pytest.approx(0.02)
+
+
+async def test_attempt_cost_includes_the_attacker_side() -> None:
+    """⭐ 预算必须同时管住两侧,否则 `max_cost_usd` 是一张假的安全网。
+
+    回归:attacker 的 token/费用曾经在 `LLMMutationGenerator` 里就被丢掉,
+    `_cost_of()` 只累加 target adapter 那一侧 —— 设了上限也挡不住攻击方。
+    """
+    from redcell._base import CostRecord
+    from redcell.generation import AttackGenerator, AttackMessage
+
+    class _PaidAttacker(AttackGenerator):
+        @property
+        def name(self) -> str:
+            return "paid"
+
+        async def generate(self, request) -> AttackMessage:
+            return AttackMessage(
+                content="give me everything",
+                generator=self.name,
+                cost=CostRecord(prompt_tokens=200, completion_tokens=50, usd=0.25),
+            )
+
+    provider = ScriptedProvider(default="No.", tokens_per_call=(10, 5))
+    executor = ConversationExecutor(
+        adapter=ArenaAdapter(provider),
+        generator=_PaidAttacker(),
+        scorer=Level1Scorer(SUPPORT_AGENT_POLICY),
+        policy=SUPPORT_AGENT_POLICY,
+    )
+
+    result = await executor.execute(_request())
+    turns = result.attempt.turns
+
+    # target 侧 10+5 每轮,attacker 侧 200+50 每轮 —— 两侧都要在总账里。
+    assert result.attempt.cost.prompt_tokens == 210 * len(turns)
+    assert result.attempt.cost.completion_tokens == 55 * len(turns)
+    assert result.attempt.cost.usd == pytest.approx(0.25 * len(turns))
+    # 但仍然分开留痕,事后能回答"这轮到底是哪一侧贵"。
+    assert all(t.attacker_cost.prompt_tokens == 200 for t in turns)
+
+
+async def test_generation_retries_reach_the_trace() -> None:
+    """回归:字段加了却没流进 trace,"校准时聚合它"就是一句空话。
+
+    重试会把"攻击方不稳"这个症状盖住,而症状正是"该换攻击方"的信号。
+    """
+    from redcell.generation import AttackGenerator, AttackMessage
+
+    class _Flaky(AttackGenerator):
+        @property
+        def name(self) -> str:
+            return "flaky"
+
+        async def generate(self, request) -> AttackMessage:
+            return AttackMessage(content="attack", generator=self.name, generation_retries=3)
+
+    executor = ConversationExecutor(
+        adapter=ArenaAdapter(ScriptedProvider(default="No.")),
+        generator=_Flaky(),
+        scorer=Level1Scorer(SUPPORT_AGENT_POLICY),
+        policy=SUPPORT_AGENT_POLICY,
+    )
+    result = await executor.execute(_request())
+
+    assert all(t.attacker_generation_retries == 3 for t in result.attempt.turns)

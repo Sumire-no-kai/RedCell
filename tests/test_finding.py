@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from redcell.protocols import (
     Evidence,
     Finding,
+    ImpactBasis,
     ImpactStatus,
     ObservabilityLevel,
     ToolCall,
@@ -25,6 +26,7 @@ def _finding(**overrides) -> Finding:
         "triad": ViolationTriad(
             attempted_action=True,
             realized_impact=ImpactStatus.REALIZED,
+            impact_basis=ImpactBasis.SIDE_EFFECT,
         ),
         "evidence": [
             Evidence(
@@ -64,6 +66,7 @@ def test_defense_in_depth_held_is_distinguishable() -> None:
         triad=ViolationTriad(
             attempted_action=True,
             realized_impact=ImpactStatus.NOT_REALIZED,
+            impact_basis=ImpactBasis.SIDE_EFFECT,
         )
     )
     assert finding.triad.defense_in_depth_held
@@ -85,24 +88,61 @@ def test_unknown_impact_autofills_caveat() -> None:
     "level",
     [ObservabilityLevel.PARTIAL, ObservabilityLevel.RESPONSE_ONLY],
 )
-def test_cannot_assert_impact_without_observability(level: ObservabilityLevel) -> None:
+def test_cannot_assert_side_effect_impact_without_observability(
+    level: ObservabilityLevel,
+) -> None:
     """把"未知"折叠成"没发生"会造成系统性漏报,这里直接在协议层拦死。"""
-    with pytest.raises(ValidationError, match="无法断言 Impact"):
-        _finding(
-            triad=ViolationTriad(
-                attempted_action=True,
-                realized_impact=ImpactStatus.NOT_REALIZED,
-            ),
-            observability=level,
-        )
+    for impact in (ImpactStatus.NOT_REALIZED, ImpactStatus.REALIZED):
+        with pytest.raises(ValidationError, match="无法断言 Impact"):
+            _finding(
+                triad=ViolationTriad(
+                    attempted_action=True,
+                    realized_impact=impact,
+                    impact_basis=ImpactBasis.SIDE_EFFECT,
+                ),
+                observability=level,
+            )
 
-    with pytest.raises(ValidationError, match="无法断言 Impact"):
-        _finding(
-            triad=ViolationTriad(
-                attempted_action=True,
-                realized_impact=ImpactStatus.REALIZED,
-            ),
-            observability=level,
+
+@pytest.mark.parametrize(
+    "level",
+    [ObservabilityLevel.PARTIAL, ObservabilityLevel.RESPONSE_ONLY],
+)
+def test_response_content_impact_survives_low_observability(
+    level: ObservabilityLevel,
+) -> None:
+    """canary 就印在回复正文里 —— 黑盒目标上这条结论照样成立。
+
+    统一按副作用门槛卡,会让最有价值的那类结论在远程目标上直接构造失败,
+    而失败点在评分器内部,表现为整个 Run 被判 FAILED。
+    """
+    finding = _finding(
+        category=VulnerabilityCategory.PROMPT_INJECTION,
+        triad=ViolationTriad(
+            attempted_action=True,
+            realized_impact=ImpactStatus.REALIZED,
+            impact_basis=ImpactBasis.RESPONSE_CONTENT,
+        ),
+        observability=level,
+    )
+    assert finding.triad.fully_compromised
+    assert finding.impact_is_verifiable
+    assert finding.impact_caveat is None
+
+
+def test_asserted_impact_requires_a_basis() -> None:
+    """断言了 impact 就必须说明凭什么断言,否则报告无法交代结论来源。"""
+    with pytest.raises(ValidationError, match="必须同时给出 impact_basis"):
+        ViolationTriad(attempted_action=True, realized_impact=ImpactStatus.REALIZED)
+
+
+def test_unknown_impact_must_not_carry_a_basis() -> None:
+    """什么都没观测到就没有证据来源;允许填会让 UNKNOWN 看起来像有依据。"""
+    with pytest.raises(ValidationError, match="不能有 impact_basis"):
+        ViolationTriad(
+            attempted_action=True,
+            realized_impact=ImpactStatus.UNKNOWN,
+            impact_basis=ImpactBasis.SIDE_EFFECT,
         )
 
 

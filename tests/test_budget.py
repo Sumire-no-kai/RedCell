@@ -107,3 +107,109 @@ def test_remaining_attempts() -> None:
     manager.record(strategy_id="s1")
     assert manager.remaining_attempts() == 2
     assert _manager(max_cost_usd=1.0).remaining_attempts() is None
+
+
+def test_logical_attempt_completion_abandonment_and_retries_are_distinct() -> None:
+    manager = _manager(max_attempts=3)
+
+    manager.reserve_attempt("s1")
+    manager.record_retry()
+    manager.record_usage(prompt_tokens=10, cost_usd=0.01)
+    manager.abandon_attempt()
+
+    manager.reserve_attempt("s2")
+    manager.record_usage(prompt_tokens=20, completion_tokens=5, cost_usd=0.02)
+    manager.complete_attempt("s2")
+
+    usage = manager.usage()
+    assert usage.attempts == 2
+    assert usage.completed_attempts == 1
+    assert usage.abandoned_attempts == 1
+    assert usage.retries == 1
+    assert usage.total_tokens == 35
+    assert usage.cost_usd == pytest.approx(0.03)
+    # 逻辑机会与有效样本按策略分开记:校准要知道 N 被吃掉在了哪个臂上。
+    assert usage.per_strategy_attempts == {"s1": 1, "s2": 1}
+    assert usage.per_strategy_completed == {"s2": 1}
+
+
+# ── 放弃的 attempt 会不会悄悄吃掉样本量 ─────────────────────────────────
+
+
+def test_abandoned_attempts_consume_the_budget_by_default() -> None:
+    """普通扫描:`--budget` 是成本闸门,故障也花掉了配额和时间。"""
+    manager = _manager(max_attempts=2)
+    for _ in range(2):
+        manager.reserve_attempt("s1")
+        manager.abandon_attempt()
+
+    assert manager.exhausted() is BudgetLimit.ATTEMPTS
+    assert manager.usage().completed_attempts == 0
+
+
+def test_top_up_mode_refuses_to_let_failures_shrink_the_sample() -> None:
+    """校准口径:预算按**完成数**结算,放弃的会被补跑。
+
+    否则 N=200 这个冻结的统计标准会被运行故障悄悄改小,而且缺口不均匀 ——
+    限流窗口里正在跑哪个臂,缺的就是哪个臂。
+    """
+    manager = BudgetManager(BudgetLimits(max_attempts=2, count_abandoned_against_attempts=False))
+    for _ in range(5):
+        manager.reserve_attempt("s1")
+        manager.abandon_attempt()
+
+    assert manager.exhausted() is None  # 一场都没跑成,预算不该被算作用掉
+
+    for _ in range(2):
+        manager.reserve_attempt("s1")
+        manager.complete_attempt("s1")
+
+    assert manager.exhausted() is BudgetLimit.ATTEMPTS
+    assert manager.usage().per_strategy_completed == {"s1": 2}
+
+
+def test_per_strategy_quota_refills_the_arm_that_lost_attempts() -> None:
+    """⭐ 补总数不等于补每臂 —— 实测 [9,9,10,10,10,11,11] 就是这么来的。
+
+    round-robin 在某臂被放弃后只是继续轮转,不会把那一臂补回来;
+    而校准冻结的是**每臂** N,190 与 210 并存会让成对比较不等权。
+    """
+    manager = BudgetManager(
+        BudgetLimits(
+            max_attempts=1000,  # 只当跑飞的兜底
+            max_completed_per_strategy=3,
+            count_abandoned_against_attempts=False,
+        )
+    )
+    arms = ["a", "b"]
+
+    # a 连丢两场,b 一路顺利。
+    for _ in range(2):
+        manager.reserve_attempt("a")
+        manager.abandon_attempt()
+    for _ in range(3):
+        manager.reserve_attempt("b")
+        manager.complete_attempt("b")
+
+    # b 已满额,退出候选;a 还欠着,必须还能继续跑。
+    assert manager.available_strategies(arms) == ["a"]
+
+    for _ in range(3):
+        manager.reserve_attempt("a")
+        manager.complete_attempt("a")
+
+    assert manager.available_strategies(arms) == []  # 全满 → orchestrator 正常收尾
+    assert manager.usage().per_strategy_completed == {"a": 3, "b": 3}
+
+
+def test_per_strategy_quota_refuses_a_config_that_would_silently_starve_arms() -> None:
+    """两者同时生效时,坏运气会先耗光总预算,每臂仍然跑不满 ——
+
+    而且**看起来是正常完成的**。不静默降级,当场拒绝。
+    """
+    with pytest.raises(ValidationError, match="count_abandoned_against_attempts"):
+        BudgetLimits(
+            max_attempts=100,
+            max_completed_per_strategy=10,
+            count_abandoned_against_attempts=True,
+        )

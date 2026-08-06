@@ -10,6 +10,7 @@ LangChain / MCP)只需要新写一个 TargetAdapter 子类,引擎一行不改。
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from enum import StrEnum
 from typing import Any
 
 from pydantic import Field
@@ -20,6 +21,49 @@ from redcell.protocols.common import ObservabilityLevel, RedCellModel, Role
 class Message(RedCellModel):
     role: Role
     content: str
+
+
+class ResetScope(StrEnum):
+    """Adapter 的 reset 能恢复到什么范围。"""
+
+    NONE = "none"
+    CONVERSATION = "conversation"
+    FULL_STATE = "full_state"
+
+
+class IdempotencySupport(StrEnum):
+    """目标是否能用稳定 idempotency key 去除重复副作用。"""
+
+    NONE = "none"
+    SUPPORTED = "supported"
+    REQUIRED = "required"
+
+
+class DeliveryObservability(StrEnum):
+    """断线时能否判断请求是否已经被目标接收。"""
+
+    UNKNOWN = "unknown"
+    ACKNOWLEDGED = "acknowledged"
+    IN_PROCESS = "in_process"
+
+
+class AdapterCapabilities(RedCellModel):
+    """与安全重试有关的静态能力。
+
+    默认全部保守:新 Adapter 没有明确声明时,Orchestrator 不得假定可安全重试。
+    """
+
+    reset_scope: ResetScope = ResetScope.NONE
+    idempotency: IdempotencySupport = IdempotencySupport.NONE
+    delivery_observability: DeliveryObservability = DeliveryObservability.UNKNOWN
+
+    reports_cost: bool = False
+    """目标是否会真实填充 `TraceMetadata.cost_usd`。
+
+    存在的意义是让 `max_cost_usd` 预算**要么真的生效,要么当场报错**:
+    不报告成本的目标上,成本上限永远不会触发,也永远不会报错 ——
+    那是一个假的安全网,比没有安全网更危险。Orchestrator 在 preflight 据此拒绝配置。
+    """
 
 
 class ToolCall(RedCellModel):
@@ -83,12 +127,31 @@ class AdapterInput(RedCellModel):
     messages: list[Message]
     actor: str
     """以谁的身份说话。跨用户越权检测完全依赖这个字段。"""
+    request_id: str | None = None
+    """一轮外部请求的稳定标识;重试时保持不变。"""
+    idempotency_key: str | None = None
+    """目标支持时用于去除重复副作用;不支持的 Adapter 可以忽略。"""
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class AdapterOutput(RedCellModel):
     assistant_message: str = ""
     tool_calls: list[ToolCall] = Field(default_factory=list)
+    malformed_tool_calls: int = Field(default=0, ge=0)
+    """模型**尝试**调用工具但我们没能解析出来的次数。
+
+    ⚠️ **没有这个计数,"靶场防住了"和"模型不会按格式输出"在数据里长得完全一样** ——
+    两者都表现为"零次工具调用"。而这两件事的处置完全相反:
+    前者说明防御有效,后者说明这个模型根本不适合当 target。
+
+    2026-08-01 实测踩过这个坑:GLM-4.7-Flash 选对了工具、参数也对,
+    只是不输出闭合标签,于是每一次正确的调用都被静默丢弃。
+    当时是靠人盯着 preflight 输出看出来的 —— 换个模型未必有人看。
+
+    **显式字段而不是塞进 `TraceMetadata.extra`:** 同一个错误犯过一次了 ——
+    成本曾经藏在 `extra["cost_usd"]` 里,忘了填就静默按 0 计费。
+    约定俗成的魔法键没有任何东西能保证它被填上。
+    """
     tool_results: list[ToolResult] = Field(default_factory=list)
     side_effects: list[SideEffect] = Field(default_factory=list)
     observability: ObservabilityLevel
@@ -114,6 +177,11 @@ class TargetAdapter(ABC):
     @abstractmethod
     def observability(self) -> ObservabilityLevel:
         """本适配器能观测到多少。决定 Impact 是否可判定。"""
+
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        """安全重试能力。未覆盖时返回保守默认值。"""
+        return AdapterCapabilities()
 
     @abstractmethod
     async def send(self, payload: AdapterInput) -> AdapterOutput:

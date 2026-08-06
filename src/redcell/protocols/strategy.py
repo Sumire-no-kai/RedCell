@@ -50,28 +50,26 @@ class TemplateSlot(StrEnum):
 
 
 class PredictedStrength(StrEnum):
-    """预注册的预期强度。
+    """预注册预测的**粗标签**,给人读的。⚠️ 不参与任何判定。
 
-    带数值区间是为了让预测**可以被打脸** ——"强"不可证伪,"30–50%"可以。
-    校准跑完后逐条对照,不符的地方如实报告(见 docs/CALIBRATION.md §11)。
+    ## 为什么它不再带 ASR 区间(2026-08-01 变更)
+
+    原先每档挂一个绝对 ASR 区间(strong [30%,50%) 等),并有 `matches()`
+    判定实测值落没落进区间。**已删除**,理由有两条:
+
+    1. **三档表达不了已定稿的排序。** 作者要求 Confirmation Bypass 落在
+       「④ 与 ②③ 之间」,而 medium 上界与 strong 下界都是 30% —— 中间没有空隙。
+       每加一个策略就要重划一次边界,而每条边界都是拍出来的。
+    2. **绝对区间从来没有被任何检验程序用到。** `STRATEGIES.md` §4.1 定稿的
+       检验方法是**成对比较 + 三分类判决**,用的量是**相对秩**;
+       `matches()` 是一段没有调用方的判定逻辑,留着只会让人以为判据有两套。
+
+    → 判据是 `Strategy.predicted_rank`。本枚举只做速查标签。
     """
 
     STRONG = "strong"
     MEDIUM = "medium"
     WEAK = "weak"
-
-    @property
-    def predicted_asr_range(self) -> tuple[float, float]:
-        """预测的 Attempt ASR 区间(闭区间下界,开区间上界)。"""
-        return {
-            PredictedStrength.STRONG: (0.30, 0.50),
-            PredictedStrength.MEDIUM: (0.10, 0.30),
-            PredictedStrength.WEAK: (0.00, 0.10),
-        }[self]
-
-    def matches(self, observed_asr: float) -> bool:
-        low, high = self.predicted_asr_range
-        return low <= observed_asr < high
 
 
 class MutationOperator(StrEnum):
@@ -152,7 +150,32 @@ class Strategy(RedCellModel):
     seed_template: str
     mutation_operators: list[MutationOperator] = Field(min_length=1)
     max_turns: int = Field(ge=1, le=MAX_TURNS_CEILING)
+
+    predicted_rank: float = Field(gt=0)
+    """预注册预测:本策略 Attempt ASR 在策略集内的**秩**,1 = 最弱。⭐
+
+    这是预测的**唯一判据**(`predicted_strength` 只是给人读的标签)。
+
+    **并列取平均秩** —— 两个策略并列第 3–4 名,都写 3.5。
+    这不是记号上的讲究:平均秩表示"我们不断言这两者的方向",
+    而检验程序会**跳过**没有方向的对(见 `predicted_pairs`)。
+    若强行给并列者排出先后,就等于凭空多出一条从没做过的预测,
+    而它有 50% 的概率"蒙对"。
+
+    **为什么是秩不是绝对 ASR 区间:** 见 `PredictedStrength` 的说明,
+    以及 `docs/STRATEGIES.md` §4.1。
+
+    ⚠️ **本字段是预注册内容,一经提交进 git 即冻结。**
+    看到校准结果之后修改它,预注册就名存实亡。
+    """
+
     predicted_strength: PredictedStrength
+    """速查用的粗标签。**不参与判定** —— 判据是 `predicted_rank`。
+
+    仍然要求显式填写:让"这个策略预期强还是弱"在库文件里一眼可见,
+    比只有一个 3.5 好读。一致性由测试兜住(秩更高者标签不得更弱)。
+    """
+
     requirements: StrategyRequirements = Field(default_factory=StrategyRequirements)
 
     @model_validator(mode="after")
@@ -162,7 +185,7 @@ class Strategy(RedCellModel):
         unknown = used - valid
         if unknown:
             raise ValueError(
-                f"策略 '{self.id}' 的模板含未知槽位 {sorted(unknown)};" f"可用槽位:{sorted(valid)}"
+                f"策略 '{self.id}' 的模板含未知槽位 {sorted(unknown)};可用槽位:{sorted(valid)}"
             )
         return self
 
@@ -205,6 +228,28 @@ class Strategy(RedCellModel):
 
     def uses_prior_attempts(self) -> bool:
         return any(op.reads_prior_attempts for op in self.mutation_operators)
+
+
+def predicted_pairs(strategies: list[Strategy]) -> list[tuple[str, str]]:
+    """列出预测**有方向**的策略对,每对为 `(预测更强者, 预测更弱者)`。
+
+    这是 `STRATEGIES.md` §4.1 那张「成对比较判决表」的机器生成版本。
+    校准跑完后逐对填入实测差值与 CI,判为 符合 / 相反 / 分辨不出。
+
+    **并列的对不出现在结果里** —— 秩相同意味着我们没有断言方向,
+    事后再给它判一个"符合"或"相反"都是无中生有。§4.1 的"21 对里有 19 对"
+    正是这么来的(七个策略两两 21 对,减去 ①④ 与 ②③ 两组并列)。
+
+    刻意从 `predicted_rank` 现算而不是维护一张手写表:手写表会和秩各自漂移,
+    而"预测到底是什么"必须只有一个来源 —— 否则冻结的是哪一份都说不清。
+    """
+    ordered = sorted(strategies, key=lambda s: (s.predicted_rank, s.id))
+    return [
+        (stronger.id, weaker.id)
+        for i, weaker in enumerate(ordered)
+        for stronger in ordered[i + 1 :]
+        if stronger.predicted_rank != weaker.predicted_rank
+    ]
 
 
 def select_applicable(

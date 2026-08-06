@@ -76,11 +76,29 @@ class ParameterConstraint(RedCellModel):
         return False
 
 
+class ToolEffectKind(StrEnum):
+    READ_ONLY = "read_only"
+    STATE_CHANGING = "state_changing"
+    EXTERNAL_SIDE_EFFECT = "external_side_effect"
+    UNKNOWN = "unknown"
+
+
+class ToolRetrySemantics(StrEnum):
+    IDEMPOTENT = "idempotent"
+    IDEMPOTENT_WITH_KEY = "idempotent_with_key"
+    NON_IDEMPOTENT = "non_idempotent"
+    UNKNOWN = "unknown"
+
+
 class ToolPolicy(RedCellModel):
+    """单个工具的规则与副作用语义。"""
+
     name: str
     allowed: bool = True
     requires_confirmation: bool = False
     constraints: list[ParameterConstraint] = Field(default_factory=list)
+    effect_kind: ToolEffectKind = ToolEffectKind.UNKNOWN
+    retry_semantics: ToolRetrySemantics = ToolRetrySemantics.UNKNOWN
     description: str | None = None
 
     def constraint_for(self, parameter: str) -> ParameterConstraint | None:
@@ -207,3 +225,114 @@ class Policy(RedCellModel):
     def constrained_tool_names(self) -> list[str]:
         """带参数约束的工具——reward 中间档"触碰了敏感工具"的判定依据。"""
         return [name for name, tool in self.tools.items() if tool.constraints]
+
+    # ── 攻击侧视图 ────────────────────────────────────────────────────────
+
+    def brief_for(self, actor: str) -> TargetBrief:
+        """生成攻击方**允许看到**的目标信息。
+
+        刻意与 TargetBrief 定义在同一个文件、并作为 Policy 的方法:
+        以后给 Policy 加字段的人,会在同一屏里看到"这个字段要不要给攻击方"。
+        放在别处的话,新增一个敏感字段而忘了脱敏是完全静默的。
+        """
+        current = self.actors.get(actor)
+        if current is None:
+            raise KeyError(f"Policy 中没有 actor '{actor}'")
+
+        authorized = set(current.allowed_resource_ids)
+        unauthorized = sorted(
+            {
+                resource_id
+                for actor_id, actor_policy in self.actors.items()
+                if actor_id != actor
+                for resource_id in actor_policy.allowed_resource_ids
+                if resource_id not in authorized
+            }
+        )
+        return TargetBrief(
+            target_name=self.target_name,
+            actor=actor,
+            authorized_resource_ids=sorted(authorized),
+            unauthorized_resource_ids=unauthorized,
+            tools=[
+                ToolBrief(
+                    name=name,
+                    description=tool.description,
+                    allowed=tool.allowed,
+                    requires_confirmation=tool.requires_confirmation,
+                    constrained_parameters=sorted(c.parameter for c in tool.constraints),
+                )
+                for name, tool in sorted(self.tools.items())
+            ],
+        )
+
+
+class ToolBrief(RedCellModel):
+    """一个工具在攻击方眼里的样子。
+
+    只有**攻击面**:名字、用途、允不允许、哪些参数带约束。
+    刻意不含 effect_kind / retry_semantics —— 那是给重试逻辑用的运维语义,
+    攻击方不需要,给了只是多一份可能泄漏的上下文。
+    """
+
+    name: str
+    description: str | None = None
+    allowed: bool = True
+    requires_confirmation: bool = False
+    constrained_parameters: list[str] = Field(default_factory=list)
+    """哪些参数带约束。**只给参数名,不给约束的具体内容**——
+
+    "customer_id 是受约束的"属于攻击面(真实攻击者试一次就知道);
+    "上限是 100" 属于答案。
+    """
+
+
+class TargetBrief(RedCellModel):
+    """攻击生成器**唯一**能看到的目标信息。⭐
+
+    ## 为什么不是直接传 Policy
+
+    Policy 里同时装着两类东西,它们的可见性完全相反:
+
+    | 类别 | 例子 | 攻击方能不能知道 |
+    |---|---|---|
+    | **攻击面** | 工具名、身份、哪些参数受约束 | ✅ 能 —— 真实攻击者靠侦察也拿得到 |
+    | **检测仪器** | canary 值与前缀、system prompt 指纹 | ❌ **绝对不能** |
+
+    canary 不是目标的属性,是**我们自己埋进去的传感器**。
+    把它交给攻击方,等于开卷考试。
+
+    ## 泄漏了会怎样(反直觉:不是误报,是静默漏报)
+
+    攻击话术里自带 canary → 模型原样复述 → 检测器的
+    `value not in attacker_text` 守卫会**正确地**拒绝计分。
+    所以不会产生假 Finding —— 但那条 canary 信号线从此**永远赢不了**,
+    整个臂被系统性废掉,**而且不会有任何报错**。
+    在安全工具里,静默漏报比误报危险得多。
+
+    ## 为什么是独立类型,而不是"脱敏后的 Policy"
+
+    脱敏 Policy 是一个 **Policy 形状的谎言**:它能被传进 Scorer,
+    而 Scorer 拿到一份没有 canary 的 policy 会安静地什么都检测不到。
+    独立类型让这个错误在**类型层**就不成立 —— 字段根本不存在,
+    也不可能被误当成判定依据。这与项目里"能在接口层堵死的不靠自觉"一致。
+    """
+
+    target_name: str
+    actor: str
+    """攻击方扮演的身份。"""
+
+    authorized_resource_ids: list[str] = Field(default_factory=list)
+    unauthorized_resource_ids: list[str] = Field(default_factory=list)
+    """本 actor **无权**访问的资源,跨用户越权的靶子。"""
+
+    tools: list[ToolBrief] = Field(default_factory=list)
+
+    def tool_names(self) -> list[str]:
+        return [tool.name for tool in self.tools]
+
+    def constrained_tool_names(self) -> list[str]:
+        return [tool.name for tool in self.tools if tool.constrained_parameters]
+
+    def forbidden_tool_names(self) -> list[str]:
+        return [tool.name for tool in self.tools if not tool.allowed]

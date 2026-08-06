@@ -30,6 +30,14 @@ class LLMResponse(RedCellModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     latency_ms: float = 0.0
+    cost_usd: float = Field(default=0.0, ge=0.0)
+    """本次调用的美元成本。
+
+    定价知识属于 provider(它才知道自己用的是哪个模型、哪档价格),
+    所以由这一层填充,再由 Adapter 汇总进 TraceMetadata。
+    只声明 `reports_cost = True` 的 provider 才允许把它当作可信数值。
+    """
+
     raw: dict[str, Any] = Field(default_factory=dict)
 
     @property
@@ -42,6 +50,16 @@ class LLMProvider(ABC):
     @abstractmethod
     def name(self) -> str:
         """写进 trace,用于复现时确认当时用的是哪个 provider。"""
+
+    @property
+    def reports_cost(self) -> bool:
+        """本 provider 是否真实填充 `LLMResponse.cost_usd`。
+
+        默认 False,保守:没有明确声明的 provider 一律按"成本不可观测"处理。
+        反过来默认 True 的话,一个忘了填成本的 provider 会让 `max_cost_usd`
+        变成永不触发、也永不报错的假上限。
+        """
+        return False
 
     @abstractmethod
     async def complete(

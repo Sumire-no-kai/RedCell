@@ -14,6 +14,7 @@ from typing import Any
 
 from pydantic import Field, model_validator
 
+from redcell._base import CostRecord
 from redcell.protocols.adapter import AdapterOutput
 from redcell.protocols.common import (
     REDCELL_PROTOCOL_VERSION,
@@ -29,13 +30,19 @@ class AttemptStopReason(StrEnum):
     """一场 Attempt 为什么停止。
 
     不能只记 `stopped_early: bool`:同样是只跑了一轮,可能是已经确认漏洞,
-    也可能是执行报错或被人工中止。原因不同,实验含义完全不同。
+    也可能是跑满了计划轮数。原因不同,实验含义完全不同。
+
+    ⚠️ **只列举得到的两种。** 这里刻意没有 `execution_error` / `aborted` ——
+    因为 Attempt 对象只为**完整执行完的会话**而存在:执行失败或被取消时,
+    Executor 抛 AttemptExecutionError,Orchestrator 走 abandon 路径,
+    事实记在 FailureRecord 与 RunEvent 里,**不会构造出一个 Attempt**。
+    列一个永远取不到的值,会让读代码的人以为存在一条根本不存在的分支。
+
+    将来若 resume 需要持久化部分执行的 Attempt,再随那次改动一起加回。
     """
 
     ATTEMPT_SUCCESS = "attempt_success"
     MAX_TURNS = "max_turns"
-    EXECUTION_ERROR = "execution_error"
-    ABORTED = "aborted"
 
 
 class Turn(RedCellModel):
@@ -44,6 +51,22 @@ class Turn(RedCellModel):
     index: int
     attacker_message: str
     output: AdapterOutput
+
+    attacker_generation_retries: int = 0
+    """生成这句话术时额外重采样了几次。
+
+    ⚠️ **不落进 trace 就等于没记。** `AttackMessage.generation_retries` 加上之后
+    我曾写下"校准时应当聚合这个数",但它当时只活在内存里 —— 聚合不了。
+    重试会把"攻击方不稳"这个症状盖住,而症状正是"该换攻击方"的信号。
+    """
+
+    attacker_cost: CostRecord = Field(default_factory=CostRecord)
+    """生成这句攻击话术花掉的用量。**与 target 侧分开记,但一起计入预算。**
+
+    分开记是 CONCEPTS §14.4 的要求(两个模型位必须分别记录 model/temperature/cost),
+    这样事后能回答"这轮到底是哪一侧贵";一起计入是因为**预算约束的是整场实验的
+    总开销**,漏掉任何一侧都会让上限失真。
+    """
 
 
 class SignalScore(RedCellModel):
@@ -63,15 +86,9 @@ class SignalScore(RedCellModel):
     """具体匹配到了什么,供人工复核。"""
 
 
-class CostRecord(RedCellModel):
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    usd: float = 0.0
-    wall_ms: float = 0.0
-
-    @property
-    def total_tokens(self) -> int:
-        return self.prompt_tokens + self.completion_tokens
+# `CostRecord` 现在定义在 `redcell._base` —— 因为 `failures.py` 也要用它,
+# 而 failures 不能依赖 protocols(会形成循环导入,见 `_base.py` 文档)。
+# 这里 re-export,既有的 `from redcell.protocols.trace import CostRecord` 不受影响。
 
 
 class ReproductionContext(RedCellModel):

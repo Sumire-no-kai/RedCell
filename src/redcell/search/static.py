@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from redcell.search.base import NoAvailableStrategiesError, SearchController, _Selection
+from redcell.search.base import NoAvailableStrategiesError, SearchController, Selection
 
 
 class StaticController(SearchController):
@@ -19,7 +19,7 @@ class StaticController(SearchController):
     def name(self) -> str:
         return "static"
 
-    def _choose(self, available_strategy_ids: tuple[str, ...]) -> _Selection:
+    def _choose(self, available_strategy_ids: tuple[str, ...]) -> Selection:
         available = set(available_strategy_ids)
         cursor_before = self._cursor
 
@@ -30,7 +30,7 @@ class StaticController(SearchController):
                 continue
 
             self._cursor = (order_index + 1) % len(self._order)
-            return _Selection(
+            return Selection(
                 strategy_id=candidate,
                 state={
                     "cursor_before": cursor_before,

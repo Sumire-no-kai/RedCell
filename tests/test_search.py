@@ -123,3 +123,52 @@ def test_unknown_static_candidates_fail_loudly() -> None:
     controller = StaticController(["a"])
     with pytest.raises(NoAvailableStrategiesError, match="冻结顺序"):
         controller.select(["outside"])
+
+
+def test_latest_decision_matches_the_full_audit_trail() -> None:
+    """Orchestrator 每轮要读好几次最近决策,不该为此深拷贝整段历史。"""
+    controller = StaticController(["a", "b"])
+    assert controller.latest_decision is None
+    assert not controller.has_pending_decision
+
+    controller.select(["a", "b"])
+    assert controller.has_pending_decision
+    assert controller.latest_decision == controller.decisions[-1]
+
+    controller.update("a", 0.5)
+    assert not controller.has_pending_decision
+    assert controller.latest_decision.outcome is ControllerDecisionOutcome.COMPLETED
+
+
+def test_seeding_is_rejected_once_decisions_exist() -> None:
+    """中途换种子会让记录下来的 controller_seed 解释不了已经发生的选择。"""
+    controller = RandomController()
+    controller.seed(controller_seed_for(1))
+    controller.select(["a", "b"])
+
+    with pytest.raises(ControllerProtocolError, match="不能重新播种"):
+        controller.seed(controller_seed_for(2))
+
+
+def test_seed_drives_the_same_choices_as_an_injected_rng() -> None:
+    """seed() 建立的 RNG 必须与显式注入等价,否则两条路径会给出不同实验。"""
+    seed = controller_seed_for(2026)
+    seeded = RandomController()
+    seeded.seed(seed)
+    injected = RandomController(random.Random(seed))
+
+    options = ["a", "b", "c", "d"]
+    for controller in (seeded, injected):
+        for _ in range(5):
+            chosen = controller.select(options)
+            controller.update(chosen, 0.0)
+
+    assert [d.selected_strategy_id for d in seeded.decisions] == [
+        d.selected_strategy_id for d in injected.decisions
+    ]
+
+
+def test_static_controller_does_not_require_a_seed() -> None:
+    """非学习基线没有随机性,不该被强制要求种子。"""
+    assert not StaticController(["a"]).requires_seed
+    assert RandomController().requires_seed

@@ -7,6 +7,7 @@ from redcell.protocols import (
     AdapterOutput,
     Message,
     ObservabilityLevel,
+    ResetScope,
     Role,
     SideEffect,
     TargetAdapter,
@@ -66,8 +67,11 @@ def test_adapter_input_carries_actor() -> None:
     payload = AdapterInput(
         messages=[Message(role=Role.USER, content="把 customer_b 的资料调出来")],
         actor="customer_a",
+        request_id="attempt-1:turn:0",
+        idempotency_key="attempt-1:turn:0",
     )
     assert payload.actor == "customer_a"
+    assert payload.request_id == payload.idempotency_key
 
 
 def test_trace_metadata_totals() -> None:
@@ -105,6 +109,7 @@ async def test_concrete_adapter_satisfies_protocol() -> None:
             self.reset_calls += 1
 
     adapter = StubAdapter()
+    assert adapter.capabilities.reset_scope is ResetScope.NONE
     await adapter.reset()
     result = await adapter.send(
         AdapterInput(messages=[Message(role=Role.USER, content="hi")], actor="customer_a")

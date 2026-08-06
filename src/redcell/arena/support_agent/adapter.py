@@ -16,8 +16,12 @@ from redcell.arena.support_agent.prompts import DefenseLevel, build_system_promp
 from redcell.arena.support_agent.tools import SupportAgentTools, ToolExecution
 from redcell.llm.base import LLMMessage, LLMProvider
 from redcell.protocols.adapter import (
+    AdapterCapabilities,
     AdapterInput,
     AdapterOutput,
+    DeliveryObservability,
+    IdempotencySupport,
+    ResetScope,
     SideEffect,
     TargetAdapter,
     ToolCall,
@@ -49,6 +53,7 @@ class ArenaAdapter(TargetAdapter):
         *,
         defense: DefenseLevel = DefenseLevel.STANDARD,
         enforce_permissions: bool = True,
+        enforce_confirmation: bool = True,
         codec: ToolCallCodec | None = None,
         model: str | None = None,
         temperature: float = 0.7,
@@ -60,7 +65,10 @@ class ArenaAdapter(TargetAdapter):
         self._model = model
         self._temperature = temperature
         self._max_tool_iterations = max_tool_iterations
-        self._tools = SupportAgentTools(enforce_permissions=enforce_permissions)
+        self._tools = SupportAgentTools(
+            enforce_permissions=enforce_permissions,
+            enforce_confirmation=enforce_confirmation,
+        )
 
     # ── TargetAdapter 接口 ───────────────────────────────────────────────
 
@@ -77,6 +85,19 @@ class ArenaAdapter(TargetAdapter):
         return ObservabilityLevel.FULL
 
     @property
+    def capabilities(self) -> AdapterCapabilities:
+        """进程内靶场可完整复位,请求投递也不存在远程不确定窗口。"""
+        return AdapterCapabilities(
+            reset_scope=ResetScope.FULL_STATE,
+            idempotency=IdempotencySupport.NONE,
+            delivery_observability=DeliveryObservability.IN_PROCESS,
+            # 成本可观测性由底层 provider 决定,不由靶场决定:
+            # 同一个靶场接 ScriptedProvider 时成本恒为 0(真实且无意义),
+            # 接真实 API 时才有可用的成本数字。
+            reports_cost=self._provider.reports_cost,
+        )
+
+    @property
     def tools(self) -> SupportAgentTools:
         return self._tools
 
@@ -89,12 +110,18 @@ class ArenaAdapter(TargetAdapter):
 
     async def send(self, payload: AdapterInput) -> AdapterOutput:
         started = time.perf_counter()
+        # ⚠️ 一次 send = 一个对话回合。确认状态机以此为界:上一回合挂起的确认
+        # 从现在起可以兑现,因为用户确实又说了一句话 —— 叫停的机会存在过。
+        # 下面的工具循环全部发生在**同一回合内**,在那里自问自答就是绕过。
+        self._tools.begin_turn()
         messages = self._build_messages(payload)
 
         tool_calls: list[ToolCall] = []
         tool_results: list[ToolResult] = []
         side_effects: list[SideEffect] = []
         prompt_tokens = completion_tokens = 0
+        cost_usd = 0.0
+        malformed_tool_calls = 0
         visible = ""
         model_name = self._model
 
@@ -106,13 +133,17 @@ class ArenaAdapter(TargetAdapter):
             )
             prompt_tokens += response.prompt_tokens
             completion_tokens += response.completion_tokens
+            cost_usd += response.cost_usd
             model_name = response.model
 
-            visible, calls = self._codec.decode(response)
-            if not calls:
+            decoded = self._codec.decode(response)
+            visible = decoded.visible
+            # 跨轮累加:一轮里格式坏掉、下一轮改对了,两次尝试都要留痕。
+            malformed_tool_calls += decoded.malformed
+            if not decoded.calls:
                 break
 
-            executed = self._execute(calls, actor=payload.actor)
+            executed = self._execute(decoded.calls, actor=payload.actor)
             for call, result in executed:
                 tool_calls.append(call)
                 tool_results.append(
@@ -136,12 +167,14 @@ class ArenaAdapter(TargetAdapter):
         return AdapterOutput(
             assistant_message=visible,
             tool_calls=tool_calls,
+            malformed_tool_calls=malformed_tool_calls,
             tool_results=tool_results,
             side_effects=side_effects,
             observability=self.observability,
             trace_metadata=TraceMetadata(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
+                cost_usd=cost_usd,
                 latency_ms=(time.perf_counter() - started) * 1000,
                 model=model_name,
                 temperature=self._temperature,
