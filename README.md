@@ -22,6 +22,18 @@ rather than a fixed list of jailbreak strings.
 
 ---
 
+## ⚠️ Authorization & Ethical Use
+
+> **RedCell is for authorized, defensive security testing only.**
+> Use it only against AI agents/applications that you own or for which you have
+> explicit written permission to test. RedCell ships with a self-contained
+> benchmark arena and simulated tools — it does not include connectors that
+> attack real production systems, and it must not be used against unauthorized
+> third-party services. You are solely responsible for how you use this tool and
+> for complying with all applicable laws and terms of service.
+
+---
+
 ## Current Status: Phase 0
 
 The Phase 0 engineering spine is complete: RedCell can run the bundled support-agent
@@ -59,18 +71,6 @@ The result leaves several useful research questions open:
 These questions are inputs to later research design; they do not retrospectively change
 the Phase 0 outcome. The full public decision record and its limitations are in
 [`docs/DEVLOG.md`](docs/DEVLOG.md).
-
----
-
-## ⚠️ Authorization & Ethical Use
-
-> **RedCell is for authorized, defensive security testing only.**
-> Use it only against AI agents/applications that you own or for which you have
-> explicit written permission to test. RedCell ships with a self-contained
-> benchmark arena and simulated tools — it does not include connectors that
-> attack real production systems, and it must not be used against unauthorized
-> third-party services. You are solely responsible for how you use this tool and
-> for complying with all applicable laws and terms of service.
 
 ---
 

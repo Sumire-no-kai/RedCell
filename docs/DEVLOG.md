@@ -5,6 +5,20 @@
 
 ---
 
+## 2026-08-07 11:05 AEST · Step 02 · 授权与伦理声明恢复到进度信息之前
+
+- 进度:将 README 的 `Authorization & Ethical Use` 恢复到项目简介后的第一节，
+  `Current Status: Phase 0` 顺延到授权声明之后；两节正文内容均未改。
+- 决策与理由:授权范围与禁止未授权测试是安全工具的入口条件，信息优先级高于研究
+  进度、实验结果与功能介绍，不能因新增 Phase 0 状态而下移。
+- 遇到的问题:新增状态区块时按普通内容顺序插入，意外把安全边界挤到第二节。
+- 解决方式:只调整 Markdown 章节顺序，不更改 Phase 0 结论或 Phase 1–3 路线。
+- 验证证据:`Authorization & Ethical Use` 位于 `Current Status: Phase 0` 之前；
+  提交前执行空白与本地链接检查。
+- 剩余状态:DONE。
+
+---
+
 ## 2026-08-07 11:01 AEST · Step 01 · README 同步 Phase 0 结果与开放研究问题
 
 - 进度:在 README 增加 Phase 0 当前状态，记录工程脊椎已完成、18/18 online Pilot、
