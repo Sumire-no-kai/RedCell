@@ -5,6 +5,28 @@
 
 ---
 
+## 2026-08-07 11:01 AEST · Step 01 · README 同步 Phase 0 结果与开放研究问题
+
+- 进度:在 README 增加 Phase 0 当前状态，记录工程脊椎已完成、18/18 online Pilot、
+  1080 attempts、零 abandoned，以及低预算首次 Finding 的 Static 5 / Random 3 /
+  Thompson 4 中位数；同步项目 Gate 的 `NOT SUPPORTED` 结论。
+- 决策与理由:Phase 1–3 的既定目标与路线保持不变。只修正 Adaptive 搜索的现时表述，
+  避免在 Phase 0 未支持主要假设后继续暗示 Bandit 已证明优于 Static/Random；Phase 2
+  benchmark 仍按原路线保留。
+- 决策与理由:README 同时明确证据边界——Pilot 早于完整预注册启动，Gate 使用了
+  Pilot-informed simulation 而非新 seed online confirmatory matrix，因此当前结论不能
+  包装成 publication-grade 证据。开放问题单列为未来研究输入，不回溯改变 Phase 0 判定。
+- 遇到的问题:本次判定既有项目级 `NOT SUPPORTED` 状态，也有未满足标准 Gate 流程的
+  证据限制；若只写前者会过度陈述，若只写后者又会掩盖已经做出的保守退出决定。
+- 解决方式:采用“双层表述”——项目 Gate 状态照实写为 `NOT SUPPORTED`，并紧邻说明
+  confirmatory evidence 仍需新 seed、删失统计协议与在线矩阵。
+- 验证证据:README 的 Phase 1–3 Roadmap 标题逐字对比未改；Phase 0 Pilot 数字与
+  本日志同日消融记录一致；`git diff --check` 通过，README 本地链接目标检查通过。
+- 剩余状态:DONE。按作者明确要求，本次文档更新直接提交到 `master`，作为通常 PR
+  分支工作流的显式例外。
+
+---
+
 ## 2026-08-06 · Phase 0 Gate 正式判定:`NOT SUPPORTED`,并把指标批判拆成独立提案
 
 **承接同日「消融矩阵实跑」条目**(原始 pilot 数据、时间线事故、冷启动排查都在那条,

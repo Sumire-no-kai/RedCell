@@ -22,6 +22,46 @@ rather than a fixed list of jailbreak strings.
 
 ---
 
+## Current Status: Phase 0
+
+The Phase 0 engineering spine is complete: RedCell can run the bundled support-agent
+arena end to end with real or scripted models, deterministic Level-1 scoring,
+Static/Random/Thompson controllers, budget and reliability guards, auditable experiment
+fingerprints, crash-safe resume, and JSON/HTML reports.
+
+The first research hypothesis was **not supported**. It asked whether Thompson Sampling
+would trigger the first Level-1 Finding at least 20–30% earlier than both Static and
+Random under a low attempt budget. A same-fingerprint online pilot completed 18/18 runs
+(3 controllers × 2 budgets × 3 seeds), recording 1,080 attempts and zero abandoned
+attempts. At budget 20, the observed median attempts to first Finding were Static 5,
+Random 3, and Thompson 4. Subsequent model-based analysis also did not show the
+project's required improvement, so the project records the Phase 0 gate as
+**`NOT SUPPORTED`** and does not claim that the bandit is superior.
+
+This is a conservative engineering decision, not publication-grade confirmatory
+evidence. The pilot began before the minimum effect and censoring analysis were frozen,
+and the gate was closed using pilot-informed simulation rather than a new-seed online
+confirmatory matrix. A formal external research claim would therefore require a new
+pre-registered run with an auditable analysis protocol.
+
+The result leaves several useful research questions open:
+
+- Is time-to-first-Finding the right primary outcome for adaptive red teaming, or should
+  fixed-budget cumulative discovery, distinct coverage, and cost efficiency take
+  priority in a separately pre-registered experiment?
+- How much does an arbitrary Static strategy order affect an early-event comparison,
+  and should a future baseline counterbalance that order?
+- Do shaped intermediate rewards reliably predict later Findings, or can they steer an
+  adaptive controller toward progress signals that do not become vulnerabilities?
+- What new-seed sample size and censoring-aware statistic would make a confirmatory
+  comparison credible under live-model non-determinism?
+
+These questions are inputs to later research design; they do not retrospectively change
+the Phase 0 outcome. The full public decision record and its limitations are in
+[`docs/DEVLOG.md`](docs/DEVLOG.md).
+
+---
+
 ## ⚠️ Authorization & Ethical Use
 
 > **RedCell is for authorized, defensive security testing only.**
@@ -37,8 +77,9 @@ rather than a fixed list of jailbreak strings.
 ## Key Features
 
 - **Adaptive, budget-constrained attack search** — bandit-guided strategy
-  selection + LLM-based prompt mutation, designed to find more vulnerabilities
-  per query/dollar than static or random suites.
+  selection + LLM-based prompt mutation for testing whether adaptive allocation
+  improves on static or random suites. Phase 0 did not support an earlier-first-Finding
+  advantage; cumulative and cost-sensitive outcomes remain open research questions.
 - **Deterministic ground-truth detection** — canary strings, tool-permission
   checks, cross-user access, and parameter-constraint violations are judged by
   instrumentation, not by an LLM, wherever possible.
@@ -180,20 +221,23 @@ framework's usage errors so that a mistyped flag never looks like a failed scan.
 
 ## Benchmark & Results
 
-_Results will be published with Phase 2._ RedCell includes an **Arena** of
-deliberately vulnerable tool-using agents with deterministic ground truth
-(canaries, permission matrices, forbidden tools, parameter constraints). Planned
-headline metric:
+The Phase 0 result and its evidence limitations are summarized in
+[Current Status](#current-status-phase-0). A broader benchmark remains planned for
+Phase 2. RedCell includes an **Arena** of deliberately vulnerable tool-using agents
+with deterministic ground truth (canaries, permission matrices, forbidden tools,
+parameter constraints). The broader benchmark will evaluate:
 
-> *Improvement in vulnerability discovery under a fixed query budget vs. static
-> attack suites, and reduction in median queries-to-first-success across N
-> instrumented agent targets.*
+- fixed-budget vulnerability discovery against Static and Random baselines;
+- time-to-first-Finding with censoring-aware analysis;
+- distinct vulnerability coverage and cost/turn/token efficiency across multiple
+  instrumented agent targets.
 
 ## Roadmap
 
-- **Phase 0 — Spine.** One arena target, two deterministic vulnerability classes
-  (canary leak via prompt injection; unauthorized / cross-user tool call), single-
-  and multi-turn executor, Static/Random baselines + one bandit, first hard number.
+- **Phase 0 — Spine (engineering complete; research hypothesis `NOT SUPPORTED`).**
+  One arena target, two deterministic vulnerability classes (canary leak via prompt
+  injection; unauthorized / cross-user tool call), single- and multi-turn executor,
+  Static/Random baselines + one bandit, first hard number.
 - **Phase 1 — Coverage + reward.** Indirect (document) injection, sensitive-data
   disclosure, 1–2 more targets, shaped reward design, layered scoring.
 - **Phase 2 — Product + benchmark.** Web UI (projects / targets / runs / findings /
