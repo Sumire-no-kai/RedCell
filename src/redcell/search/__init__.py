@@ -1,5 +1,6 @@
-"""Phase 0 SearchController 与非学习基线。"""
+"""Phase 0 SearchController:静态/随机基线 + Thompson Sampling。"""
 
+from redcell.search.bandit import ThompsonSamplingController
 from redcell.search.base import (
     ControllerDecision,
     ControllerDecisionOutcome,
@@ -20,4 +21,5 @@ __all__ = [
     "SearchController",
     "Selection",
     "StaticController",
+    "ThompsonSamplingController",
 ]

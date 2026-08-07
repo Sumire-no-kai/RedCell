@@ -47,7 +47,15 @@ from redcell.protocols.policy import (
     ToolPolicy,
     ToolRetrySemantics,
 )
-from redcell.protocols.run import Run, RunEvent, RunEventType, RunStatus
+from redcell.protocols.run import (
+    ArenaRunConfiguration,
+    ExperimentConditions,
+    ProviderRunConfiguration,
+    Run,
+    RunEvent,
+    RunEventType,
+    RunStatus,
+)
 from redcell.protocols.strategy import (
     MAX_TURNS_CEILING,
     MEMORYLESS_OPERATORS,
@@ -78,12 +86,14 @@ __all__ = [
     "AdapterCapabilities",
     "AdapterInput",
     "AdapterOutput",
+    "ArenaRunConfiguration",
     "Attempt",
     "AttemptStopReason",
     "ConstraintKind",
     "CostRecord",
     "DeliveryObservability",
     "Evidence",
+    "ExperimentConditions",
     "Finding",
     "FindingStatus",
     "IdempotencySupport",
@@ -97,6 +107,7 @@ __all__ = [
     "PredictedStrength",
     "ProtectedDataKind",
     "ProtectedDatum",
+    "ProviderRunConfiguration",
     "RedCellModel",
     "ReproductionContext",
     "ResetScope",

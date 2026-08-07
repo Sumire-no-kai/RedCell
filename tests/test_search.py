@@ -12,6 +12,7 @@ from redcell.search import (
     NoAvailableStrategiesError,
     RandomController,
     StaticController,
+    ThompsonSamplingController,
 )
 
 STRATEGIES = [f"s{i}" for i in range(6)]
@@ -172,3 +173,72 @@ def test_static_controller_does_not_require_a_seed() -> None:
     """非学习基线没有随机性,不该被强制要求种子。"""
     assert not StaticController(["a"]).requires_seed
     assert RandomController().requires_seed
+
+
+def test_thompson_controller_requires_a_seed_before_selecting() -> None:
+    with pytest.raises(ValueError, match="尚未播种"):
+        ThompsonSamplingController().select(STRATEGIES)
+
+
+def test_thompson_controller_is_reproducible_from_injected_rng() -> None:
+    seed = controller_seed_for(42)
+    first = ThompsonSamplingController(random.Random(seed))
+    second = ThompsonSamplingController(random.Random(seed))
+    scores = [0.0, 0.2, 0.4, 0.5, 0.6, 0.7, 1.0] * 3
+
+    first_choices = [_select_and_update(first, STRATEGIES, score=score) for score in scores]
+    # 干扰全局 RNG 不应影响两个 Controller 的私有 RNG。
+    for _ in range(100):
+        random.random()
+    second_choices = [_select_and_update(second, STRATEGIES, score=score) for score in scores]
+
+    assert first_choices == second_choices
+    assert first.decisions == second.decisions
+
+
+def test_thompson_seed_matches_an_injected_rng() -> None:
+    seed = controller_seed_for(2026)
+    seeded = ThompsonSamplingController()
+    seeded.seed(seed)
+    injected = ThompsonSamplingController(random.Random(seed))
+
+    for controller in (seeded, injected):
+        for score in (0.0, 0.4, 0.7, 1.0, 0.2):
+            _select_and_update(controller, ["a", "b", "c"], score=score)
+
+    assert seeded.decisions == injected.decisions
+
+
+def test_thompson_decision_state_records_sampling_and_learning() -> None:
+    controller = ThompsonSamplingController(random.Random(7))
+    selected = controller.select(["a", "b"])
+    controller.update(selected, 0.7)
+
+    decision = controller.decisions[0]
+    assert set(decision.decision_state) == {
+        "posteriors_before",
+        "samples",
+        "selected_sample",
+        "posterior_update",
+    }
+    samples = decision.decision_state["samples"]
+    assert decision.decision_state["selected_sample"] == samples[selected]
+    assert set(decision.decision_state["posteriors_before"]["a"]) == {"alpha", "beta"}
+    assert set(decision.decision_state["posteriors_before"]["b"]) == {"alpha", "beta"}
+    assert decision.decision_state["posterior_update"]["outcome"] in (0, 1)
+
+
+def test_thompson_updates_posteriors_with_beta_bernoulli_feedback() -> None:
+    success = ThompsonSamplingController(random.Random(1))
+    selected = success.select(["only"])
+    success.update(selected, 1.0)
+    assert success._posteriors["only"] == (2.0, 1.0)
+
+    failure = ThompsonSamplingController(random.Random(1))
+    selected = failure.select(["only"])
+    failure.update(selected, 0.0)
+    assert failure._posteriors["only"] == (1.0, 2.0)
+
+
+def test_thompson_controller_requires_a_seed() -> None:
+    assert ThompsonSamplingController().requires_seed

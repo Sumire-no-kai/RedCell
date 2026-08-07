@@ -8,10 +8,13 @@ Run 把**目标版本、policy 版本、算法、预算、随机种子**绑在�
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Any
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from redcell.budget import BudgetLimit, BudgetLimits, BudgetUsage
 from redcell.failures import FailureRecord
@@ -39,6 +42,7 @@ class RunEventType(StrEnum):
     RETRY_SCHEDULED = "retry_scheduled"
     ATTEMPT_COMMITTED = "attempt_committed"
     ATTEMPT_ABANDONED = "attempt_abandoned"
+    RUN_RESUMED = "run_resumed"
     RUN_COMPLETED = "run_completed"
     RUN_FAILED = "run_failed"
     RUN_ABORTED = "run_aborted"
@@ -54,6 +58,45 @@ class RunEvent(RedCellModel):
     sequence: int = Field(ge=0)
     payload: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class ProviderRunConfiguration(RedCellModel):
+    """不含凭据、但足以复核模型行为与节流条件的 provider 快照。"""
+
+    provider: str
+    base_url: str
+    model: str
+    temperature: float
+    max_tokens: int = Field(ge=1)
+    rpm: float = Field(ge=0.0)
+    max_concurrency: int = Field(ge=0)
+    input_usd_per_mtok: float = Field(ge=0.0)
+    output_usd_per_mtok: float = Field(ge=0.0)
+    extra_body: dict[str, Any] = Field(default_factory=dict)
+
+
+class ArenaRunConfiguration(RedCellModel):
+    """会改变靶场难度或副作用语义的所有 Phase 0 旋钮。"""
+
+    defense: str
+    enforce_permissions: bool
+    enforce_confirmation: bool
+
+
+class ExperimentConditions(RedCellModel):
+    """一次 Run 的可比较实验条件；不含 API key 等凭据。"""
+
+    online: bool
+    actor: str
+    target: ProviderRunConfiguration
+    attacker: ProviderRunConfiguration
+    arena: ArenaRunConfiguration
+
+    def fingerprint(self) -> str:
+        payload = json.dumps(
+            self.model_dump(mode="json"), ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
 
 
 class Run(RedCellModel):
@@ -83,6 +126,10 @@ class Run(RedCellModel):
     target_model: str | None = None
     target_temperature: float | None = None
     attacker_model: str | None = None
+    attacker_temperature: float | None = None
+    experiment_conditions: ExperimentConditions | None = None
+    experiment_fingerprint: str | None = None
+    """由 experiment_conditions 派生的 SHA-256；同一实验矩阵必须一致。"""
     strategy_ids: list[str] = Field(default_factory=list)
     protocol_version: str = REDCELL_PROTOCOL_VERSION
     notes: str | None = None
@@ -91,6 +138,23 @@ class Run(RedCellModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     started_at: datetime | None = None
     completed_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def _bind_experiment_fingerprint(self) -> Run:
+        if self.experiment_conditions is None:
+            if self.experiment_fingerprint is not None:
+                raise ValueError("experiment_fingerprint 需要 experiment_conditions")
+            return self
+        expected = self.experiment_conditions.fingerprint()
+        if self.experiment_fingerprint is None:
+            self.__dict__["experiment_fingerprint"] = expected
+        elif self.experiment_fingerprint != expected:
+            raise ValueError("experiment_fingerprint 与 experiment_conditions 不一致")
+        return self
+
+    @property
+    def has_auditable_conditions(self) -> bool:
+        return self.experiment_conditions is not None and self.experiment_fingerprint is not None
 
     @property
     def is_conclusive(self) -> bool:

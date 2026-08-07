@@ -41,13 +41,25 @@ from redcell.orchestrator import (
     RunExecutionRequest,
     RunFailedError,
     RunOrchestrator,
+    RunResumeError,
 )
-from redcell.protocols.run import Run, RunStatus
+from redcell.protocols.run import (
+    ArenaRunConfiguration,
+    ExperimentConditions,
+    ProviderRunConfiguration,
+    Run,
+    RunStatus,
+)
 from redcell.protocols.strategy import select_applicable
 from redcell.randomness import controller_seed_for
 from redcell.report import ReportData, write_report
 from redcell.scoring.level1 import Level1Scorer
-from redcell.search import RandomController, SearchController, StaticController
+from redcell.search import (
+    RandomController,
+    SearchController,
+    StaticController,
+    ThompsonSamplingController,
+)
 from redcell.storage import DEFAULT_URL, RunStore
 from redcell.strategies import PHASE_0_STRATEGIES
 
@@ -108,7 +120,11 @@ def _controller(algorithm: str, seed: int) -> SearchController:
 
         # 私有 RNG:全局 random 会被任何其他代码干扰,复现直接报废。
         return RandomController(random.Random(controller_seed_for(seed)))
-    raise typer.BadParameter(f"未知算法 '{algorithm}';可选:static / random")
+    if algorithm == "thompson":
+        import random as _random
+
+        return ThompsonSamplingController(_random.Random(controller_seed_for(seed)))
+    raise typer.BadParameter(f"未知算法 '{algorithm}';可选:static / random / thompson")
 
 
 def _providers(
@@ -130,14 +146,64 @@ def _providers(
     generator = LLMMutationGenerator(
         pair.attacker,
         model=pair.attacker.model,
+        temperature=pair.attacker_configuration.temperature,
         max_tokens=pair.attacker_max_tokens,
     )
     return pair.target, generator, pair
 
 
+def _experiment_conditions(
+    *,
+    online: bool,
+    providers: ProviderPair | None,
+    actor: str,
+    defense: DefenseLevel,
+    enforce_permissions: bool,
+    enforce_confirmation: bool,
+) -> ExperimentConditions:
+    """把会影响结论的配置冻结进 Run；绝不把凭据写入 SQLite。"""
+    if providers is None:
+        target = ProviderRunConfiguration(
+            provider="scripted",
+            base_url="",
+            model="scripted",
+            temperature=0.0,
+            max_tokens=1,
+            rpm=0.0,
+            max_concurrency=0,
+            input_usd_per_mtok=0.0,
+            output_usd_per_mtok=0.0,
+        )
+        attacker = ProviderRunConfiguration(
+            provider="template",
+            base_url="",
+            model="template",
+            temperature=0.0,
+            max_tokens=1,
+            rpm=0.0,
+            max_concurrency=0,
+            input_usd_per_mtok=0.0,
+            output_usd_per_mtok=0.0,
+        )
+    else:
+        target = providers.target_configuration
+        attacker = providers.attacker_configuration
+    return ExperimentConditions(
+        online=online,
+        actor=actor,
+        target=target,
+        attacker=attacker,
+        arena=ArenaRunConfiguration(
+            defense=defense.value,
+            enforce_permissions=enforce_permissions,
+            enforce_confirmation=enforce_confirmation,
+        ),
+    )
+
+
 @app.command()
 def run(
-    algorithm: Annotated[str, typer.Option(help="搜索算法:static / random")] = "static",
+    algorithm: Annotated[str, typer.Option(help="搜索算法:static / random / thompson")] = "static",
     budget: Annotated[int, typer.Option(help="最大 attempt 数")] = 20,
     seed: Annotated[int, typer.Option(help="实验种子;同一 seed 结果可复现")] = 0,
     actor: Annotated[str, typer.Option(help="攻击时扮演的身份")] = "customer_a",
@@ -167,7 +233,7 @@ def run(
     online: Annotated[
         bool,
         typer.Option(
-            help="接真实模型跑(target=GLM / attacker=Gemini,从 .env 读)。" "默认离线,只验证流水线。"
+            help="接真实模型跑(target=GLM / attacker=Gemini,从 .env 读)。默认离线,只验证流水线。"
         ),
     ] = False,
     max_tokens: Annotated[int | None, typer.Option(help="token 上限(两侧合计)")] = None,
@@ -218,6 +284,14 @@ def run(
         enforce_permissions=enforce_permissions,
         enforce_confirmation=enforce_confirmation,
     )
+    conditions = _experiment_conditions(
+        online=online,
+        providers=providers,
+        actor=actor,
+        defense=defense,
+        enforce_permissions=enforce_permissions,
+        enforce_confirmation=enforce_confirmation,
+    )
 
     run_record = Run(
         target_name=policy.target_name,
@@ -226,6 +300,12 @@ def run(
         algorithm=algorithm,
         limits=limits,
         seed=seed,
+        target_model=conditions.target.model,
+        target_temperature=conditions.target.temperature,
+        attacker_model=conditions.attacker.model,
+        attacker_temperature=conditions.attacker.temperature,
+        experiment_conditions=conditions,
+        experiment_fingerprint=conditions.fingerprint(),
         strategy_ids=[s.id for s in strategies],
         notes=None if online else OFFLINE_NOTICE,
     )
@@ -275,6 +355,104 @@ def run(
     except ValueError as exc:
         typer.secho(f"配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(ExitCode.BAD_CONFIG) from exc
+    finally:
+        store.close()
+
+    paths = _emit(result.run, result.attempts, result.findings, out)
+    _summarise(result.run, result.findings, paths)
+    raise typer.Exit(ExitCode.FINDINGS if result.findings else ExitCode.CLEAN)
+
+
+@app.command()
+def resume(
+    run_id: Annotated[str, typer.Argument(help="要从 attempt 边界恢复的 RUNNING run id")],
+    actor: Annotated[str, typer.Option(help="攻击时扮演的身份;必须与原 run 一致")] = "customer_a",
+    db: Annotated[str, typer.Option(help="SQLite 连接串")] = DEFAULT_URL,
+    out: Annotated[Path, typer.Option(help="报告输出目录")] = Path("runs"),
+) -> None:
+    """恢复意外中断的 Run，绝不重放尚未原子提交结果的 attempt。"""
+    store = RunStore(db)
+    stored = store.get_run(run_id)
+    if stored is None:
+        store.close()
+        typer.secho(f"找不到 run '{run_id}'。", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG)
+    if stored.status is not RunStatus.RUNNING:
+        store.close()
+        typer.secho("只有状态为 RUNNING 的 run 可以恢复。", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG)
+    if not stored.has_auditable_conditions or stored.experiment_conditions is None:
+        store.close()
+        typer.secho(
+            "该 run 没有可审计的实验条件快照，拒绝在未知模型/靶场条件下恢复。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(ExitCode.BAD_CONFIG)
+
+    policy = SUPPORT_AGENT_POLICY
+    strategies = select_applicable(list(PHASE_0_STRATEGIES), policy)
+    conditions = stored.experiment_conditions
+    try:
+        target_provider, generator, providers = _providers(conditions.online)
+        defense = DefenseLevel(conditions.arena.defense)
+        current_conditions = _experiment_conditions(
+            online=conditions.online,
+            providers=providers,
+            actor=actor,
+            defense=defense,
+            enforce_permissions=conditions.arena.enforce_permissions,
+            enforce_confirmation=conditions.arena.enforce_confirmation,
+        )
+        if current_conditions.fingerprint() != stored.experiment_fingerprint:
+            raise ValueError(
+                "当前 provider / temperature / attacker / actor 或靶场开关与原 Run 不一致"
+            )
+    except (ProviderConfigError, ValueError) as exc:
+        if "providers" in locals() and providers is not None:
+            asyncio.run(providers.aclose())
+        store.close()
+        typer.secho(f"恢复配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG) from exc
+
+    adapter = ArenaAdapter(
+        target_provider,
+        defense=defense,
+        enforce_permissions=conditions.arena.enforce_permissions,
+        enforce_confirmation=conditions.arena.enforce_confirmation,
+    )
+    orchestrator = RunOrchestrator(
+        executor=ConversationExecutor(
+            adapter=adapter,
+            generator=generator,
+            scorer=Level1Scorer(policy),
+            policy=policy,
+        ),
+        controller=_controller(stored.algorithm, stored.seed or 0),
+        store=store,
+    )
+
+    async def _resume_and_close():
+        try:
+            return await orchestrator.resume(
+                RunExecutionRequest(run=stored, strategies=strategies, actor=actor)
+            )
+        finally:
+            if providers is not None:
+                await providers.aclose()
+
+    try:
+        result = asyncio.run(_resume_and_close())
+    except (RunResumeError, ValueError) as exc:
+        typer.secho(f"恢复配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG) from exc
+    except RunFailedError as exc:
+        typer.secho(
+            f"Run {exc.run.id} 恢复后失败:{exc.failure.code} — {exc.failure.message}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(ExitCode.RUN_FAILED) from exc
     finally:
         store.close()
 
