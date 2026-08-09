@@ -7,6 +7,15 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 18:50 AEST · Step 06 · 确定性 bounded-relevant-v1 history projector
+
+- **进度:** 新增 `redcell.history`，将已提交的完整 Attempt 投影为 Generator memory：固定选择最近两场、当前 Strategy 的最高 reward 场与最近场，按 Attempt ID 去重并按执行顺序渲染；每条和总历史均按冻结上限裁剪、标记 `[TRUNCATED]` 并计算 SHA-256 digest。新增稳定的每 Strategy 聚合，按 ID 排序且不包含原始消息。
+- **决策与理由:** Projector 是原始 Trace 与 LLM 输入之间的唯一 seam。它不接收 Policy、Finding 或 Scorer，避免给模型检测答案；也不使用 LLM summary，避免摘要模型把处理条件变成未冻结的随机变量。Orchestrator 后续只把已经原子提交的 Attempt 传入，partial/abandoned trace 不会被当成学习材料。
+- **遇到的问题:** 初始实现遗漏返回类型方括号，pytest collection 立即报告 SyntaxError；没有运行时或数据语义异常。
+- **解决方式:** 修正类型声明和格式化长行后重跑；同时让 Ruff 自动整理测试 import。
+- **验证证据:** `pytest tests/test_history.py -p no:cacheprovider` 为 **2 passed**；相关 Ruff/Black 均通过。
+- **剩余状态:** DONE（独立 deterministic projector）；TODO 为 Controller 专用的“最近两场+跨策略最高两场”投影、abandoned 聚合、Orchestrator memory 接线与恢复 digest 核对。未调用 Provider。
+
 ### 2026-08-09 18:39 AEST · Step 05 · 当前实现切片全量验证与远端分支同步
 
 - **进度:** 已提交并推送四个小步实现提交至 `feat/phase-0-5-runtime`：处理条件/双层指纹、统一 Driver/LLM JSON Adapter、Controller Invocation 持久化、类型化 Generator memory 入口。
