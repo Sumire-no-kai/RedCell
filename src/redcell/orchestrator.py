@@ -447,6 +447,12 @@ class RunOrchestrator:
                     completion_tokens=result.attempt.cost.completion_tokens,
                     cost_usd=result.attempt.cost.usd,
                 )
+                for role, cost in _attempt_role_costs(result.attempt):
+                    budget.record_usage(
+                        prompt_tokens=cost.prompt_tokens,
+                        completion_tokens=cost.completion_tokens,
+                        role=role,
+                    )
                 budget.complete_attempt(strategy_id)
                 self._complete_selection(strategy_id, result.attempt.reward)
                 consecutive_abandoned = 0
@@ -980,6 +986,7 @@ class RunOrchestrator:
                 prompt_tokens=invocation.cost.prompt_tokens,
                 completion_tokens=invocation.cost.completion_tokens,
                 cost_usd=invocation.cost.usd,
+                role="controller",
             )
             raise
         if selection.invocation is not None:
@@ -990,6 +997,7 @@ class RunOrchestrator:
                 prompt_tokens=selection.invocation.cost.prompt_tokens,
                 completion_tokens=selection.invocation.cost.completion_tokens,
                 cost_usd=selection.invocation.cost.usd,
+                role="controller",
             )
         decision = ControllerDecision(
             attempt_index=budget.usage().attempts,
@@ -1121,6 +1129,21 @@ class RunOrchestrator:
 
 def _failure_reason(failure: FailureRecord) -> str:
     return f"{failure.kind.value}:{failure.code}"
+
+
+def _attempt_role_costs(attempt: Attempt) -> list[tuple[str, CostRecord]]:
+    """Split committed Attempt usage without changing its single total budget."""
+    generator = CostRecord(
+        prompt_tokens=sum(turn.attacker_cost.prompt_tokens for turn in attempt.turns),
+        completion_tokens=sum(turn.attacker_cost.completion_tokens for turn in attempt.turns),
+    )
+    target = CostRecord(
+        prompt_tokens=sum(turn.output.trace_metadata.prompt_tokens for turn in attempt.turns),
+        completion_tokens=sum(
+            turn.output.trace_metadata.completion_tokens for turn in attempt.turns
+        ),
+    )
+    return [("generator", generator), ("target", target)]
 
 
 def _trailing_abandoned(decisions: Sequence[ControllerDecision]) -> int:

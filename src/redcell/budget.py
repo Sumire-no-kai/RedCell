@@ -121,6 +121,12 @@ class BudgetUsage(RedCellModel):
     completion_tokens: int = 0
     cost_usd: float = 0.0
     wall_seconds: float = 0.0
+    controller_prompt_tokens: int = 0
+    controller_completion_tokens: int = 0
+    generator_prompt_tokens: int = 0
+    generator_completion_tokens: int = 0
+    target_prompt_tokens: int = 0
+    target_completion_tokens: int = 0
     per_strategy_attempts: dict[str, int] = Field(default_factory=dict)
     per_strategy_completed: dict[str, int] = Field(default_factory=dict)
     """每个策略**跑完**了多少场。
@@ -132,6 +138,19 @@ class BudgetUsage(RedCellModel):
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
+
+    @property
+    def role_total_tokens(self) -> int:
+        return sum(
+            (
+                self.controller_prompt_tokens,
+                self.controller_completion_tokens,
+                self.generator_prompt_tokens,
+                self.generator_completion_tokens,
+                self.target_prompt_tokens,
+                self.target_completion_tokens,
+            )
+        )
 
 
 class BudgetManager:
@@ -282,15 +301,24 @@ class BudgetManager:
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
         cost_usd: float = 0.0,
+        role: str | None = None,
     ) -> None:
         """追加真实资源消耗;失败请求也必须调用。"""
-        self._usage = self._usage.model_copy(
-            update={
-                "prompt_tokens": self._usage.prompt_tokens + prompt_tokens,
-                "completion_tokens": self._usage.completion_tokens + completion_tokens,
-                "cost_usd": self._usage.cost_usd + cost_usd,
-            }
-        )
+        update = {
+            "prompt_tokens": self._usage.prompt_tokens + prompt_tokens,
+            "completion_tokens": self._usage.completion_tokens + completion_tokens,
+            "cost_usd": self._usage.cost_usd + cost_usd,
+        }
+        if role is not None:
+            if role not in {"controller", "generator", "target"}:
+                raise ValueError("role 必须为 controller / generator / target")
+            update[f"{role}_prompt_tokens"] = (
+                getattr(self._usage, f"{role}_prompt_tokens") + prompt_tokens
+            )
+            update[f"{role}_completion_tokens"] = (
+                getattr(self._usage, f"{role}_completion_tokens") + completion_tokens
+            )
+        self._usage = self._usage.model_copy(update=update)
 
     def complete_attempt(self, strategy_id: str) -> None:
         """记一场**有效样本**。

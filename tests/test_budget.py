@@ -133,6 +133,16 @@ def test_logical_attempt_completion_abandonment_and_retries_are_distinct() -> No
     assert usage.per_strategy_completed == {"s2": 1}
 
 
+def test_role_token_breakdown_is_a_projection_of_the_single_budget() -> None:
+    manager = _manager(max_attempts=1)
+    manager.record_usage(prompt_tokens=2, completion_tokens=1, role="controller")
+    manager.record_usage(prompt_tokens=3, completion_tokens=4, role="generator")
+    manager.record_usage(prompt_tokens=5, completion_tokens=6, role="target")
+
+    usage = manager.usage()
+    assert usage.total_tokens == usage.role_total_tokens == 21
+
+
 # ── 放弃的 attempt 会不会悄悄吃掉样本量 ─────────────────────────────────
 
 

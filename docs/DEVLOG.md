@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 20:18 AEST · Step 19 · 三角色 Token 分栏账本
+
+- **进度:** `BudgetUsage` 保留唯一的总 Token/美元硬预算，同时新增 Controller、Generator、Target 的输入/输出 Token 分栏。LLM Controller Invocation 在成功、repair 后成功或已知失败时按 Controller 角色记账；完整 Attempt 从已保存 Turn 的 attacker/target usage 确定性投影到 Generator/Target 分栏。
+- **决策与理由:** Gate 比较只允许使用一个总 Token 预算，否则三套账本会各自漏记；但不分角色又无法审计 memory/Controller 的资源增量。因此角色分栏是总账的可核对投影，而不是第二个预算管理器。
+- **验证证据:** `pytest tests/test_budget.py tests/test_orchestrator.py -p no:cacheprovider` 为 **34 passed**；新增测试确认三角色 Token 和严格等于总 Token。Ruff/Black 通过。
+- **剩余状态:** DONE（已知完成调用的三角色分栏）；TODO 为失败 partial turn 的精确角色分摊、Token 前缀/Gate matrix 分析、Validator 与完整 Gate 报告。
+
 ### 2026-08-09 20:02 AEST · Step 18 · 当前 Phase 0.5 切片全量回归
 
 - **进度:** 对当前功能分支上的条件协议、LLM Controller、请求审计/恢复、历史投影、CLI、contract controls 与报告身份聚合运行全量验证；工作树在验证结束时无未提交变更。
