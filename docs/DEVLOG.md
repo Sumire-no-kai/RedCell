@@ -7,6 +7,12 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 21:45 AEST · Step 26 · Validator 正向重放链路 fixture
+
+- **进度:** 为 replay Validator 增加 Support Agent 靶场的正向 fixture：先生成已记录的一轮 canary Finding，再只用 Attempt 中的 attacker 文本进行两次重放并确认同一 attack-path 均被重新检测到。
+- **验证证据:** `pytest tests/test_validator.py -p no:cacheprovider` 为 **3 passed**；断言底层 scripted provider 总调用数为初始记录 1 次加 replay 2 次，证明验证没有调用 Generator/Controller。
+- **剩余状态:** DONE（Validator 正向重放覆盖）；TODO 为 Gate 保护线/汇总报告、全量审计与 PR。
+
 ### 2026-08-09 21:32 AEST · Step 25 · 真实持久化事件的 Token 前缀集成覆盖
 
 - **进度:** 增加从真实 `redcell run` SQLite 产物读取 Run/Event/Finding 并构造三个 TokenPrefix 的集成测试，覆盖实际条件映射为 `static-off` 与冻结的 64k/160k/320k checkpoint 顺序。
