@@ -7,6 +7,14 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 18:16 AEST · Step 02 · 统一异步 Controller Driver 与严格 JSON 选择 Adapter
+
+- **进度:** 新增 `ControllerDriver` seam、`SyncControllerAdapter` 和 `LLMControllerAdapter`。前者将既有 Static/Random/Thompson controller 原样包装为 async；后者只接受冻结候选集内的 `selected_strategy_id`，带有有界 rationale/evidence refs，解析失败或候选集外选择时只发起一次同证据 repair。新增独立 `ControllerInvocation` 三态模型与 usage 状态，调用不再与 Decision 或 Attempt 混为一条记录。
+- **决策与理由:** 统一 interface 是因为本地 Controller 与远程 LLM 的行为真正可替换；Orchestrator 之后只需面对“合法选择或可审计失败”，无需知道 JSON、provider 或 repair。独立 Invocation 防止“调用失败”等同于“攻击失败”，也为后续按未知送达/Token 语义持久化与恢复留出唯一位置。
+- **安全与实验边界:** LLM Prompt 只接收 `ControllerEvidence`，系统提示明确把 Evidence 中的指令视为不可信；输出不能创建 Strategy、Prompt 或预算指令。测试使用 `ScriptedProvider`，没有调用真实模型或消耗 quota。
+- **验证证据:** `pytest tests/test_controller_driver.py -p no:cacheprovider` 为 **4 passed**；相关 Ruff 与 Black 检查通过。覆盖同步适配、首次合法 JSON、一次 repair 成功、repair 后失败四条路径。
+- **剩余状态:** DONE（Driver/Adapter 的独立实现）；TODO 为把 Invocation/Decision 分别持久化，并将 Driver 接入 Orchestrator、受控 evidence/memory 投影、Token 账本与 CLI。正式 Gate 尚未启动。
+
 ### 2026-08-09 18:09 AEST · Step 01 · 冻结处理条件协议与双层指纹
 
 - **进度:** 在 `feat/phase-0-5-runtime` 新增 Phase 0.5 的强类型处理条件：`search.selector`、跨 Attempt Generator memory 配置/四项上限，以及仅 `search=llm` 可用的独立 Controller 非秘密配置。`ExperimentConditions` 新增完整实验指纹与版本化 `regression_context_fingerprint`；新增 4 项协议测试，并复核既有 strategy catalogue 测试。
