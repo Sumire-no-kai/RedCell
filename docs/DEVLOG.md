@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 18:39 AEST · Step 05 · 当前实现切片全量验证与远端分支同步
+
+- **进度:** 已提交并推送四个小步实现提交至 `feat/phase-0-5-runtime`：处理条件/双层指纹、统一 Driver/LLM JSON Adapter、Controller Invocation 持久化、类型化 Generator memory 入口。
+- **验证证据:** 全量 `pytest -p no:cacheprovider` 为 **511 passed in 27.22s**；`ruff check .`、`ruff format --check .` 与 `black --check src tests` 均通过；`git diff --check` 通过。未调用真实 LLM Provider、未创建 Gate seed 或实验结果。
+- **Git 状态:** `git push -u origin feat/phase-0-5-runtime` 成功，远端已建立同名分支。按工作流准备创建 Draft PR 时，`gh auth status` 显示当前 GitHub token 无效；因此 PR **BLOCKED（认证）**，不是代码或测试失败。SSH remote 的 push 不受影响。
+- **剩余状态:** 当前切片已安全提交/推送；Phase 0.5 runtime 仍 **IN PROGRESS**，尚未接入 Orchestrator、确定性 history projector、三角色 Token accounting、CLI/preflight/controls、Gate runner、signature/validator/report。恢复 PR 流程前需重新认证 GitHub CLI。
+
 ### 2026-08-09 18:31 AEST · Step 04 · 打开受类型约束的跨 Attempt Generator memory 入口
 
 - **进度:** `AttackGenerationRequest` 与 `ExecutionRequest` 现在可携带 `GenerationMemory`，其中强制记录 policy version、选择的 Attempt refs、渲染 digest、截断标记及精确字符数；Executor 将其传给每轮 Generator。`LLMMutationGenerator` 只在首轮接收该有界上下文，并明确把历史内容标为 evidence 而非指令；默认 off 时仍没有历史消息。
