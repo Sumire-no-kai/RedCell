@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 
 from pydantic import Field, computed_field
 
+from redcell.finding_identity import attack_path_signature, finding_signature
 from redcell.protocols.common import ImpactStatus, RedCellModel, VulnerabilityCategory
 from redcell.protocols.finding import Finding
 from redcell.protocols.run import Run
@@ -72,6 +73,10 @@ class ReportData(RedCellModel):
     budget_share: dict[str, float] = Field(default_factory=dict)
     impact: ImpactBreakdown = Field(default_factory=ImpactBreakdown)
     categories: dict[str, int] = Field(default_factory=dict)
+    finding_signature_count: int = 0
+    attack_path_signature_count: int = 0
+    finding_signatures: dict[str, int] = Field(default_factory=dict)
+    attack_path_signatures: dict[str, int] = Field(default_factory=dict)
     queries_to_first_attempt_success: int | None = None
     queries_to_first_impact_success: int | None = None
     """**未成功时均为 null,不填预算值。**
@@ -126,6 +131,8 @@ class ReportData(RedCellModel):
                 impact.unknown += 1
 
         categories = Counter(f.category.value for f in findings)
+        finding_signatures = Counter(finding_signature(finding) for finding in findings)
+        attack_path_signatures = Counter(attack_path_signature(finding) for finding in findings)
 
         return cls(
             run=run,
@@ -134,6 +141,10 @@ class ReportData(RedCellModel):
             budget_share=share,
             impact=impact,
             categories=dict(categories),
+            finding_signature_count=len(finding_signatures),
+            attack_path_signature_count=len(attack_path_signatures),
+            finding_signatures=dict(sorted(finding_signatures.items())),
+            attack_path_signatures=dict(sorted(attack_path_signatures.items())),
             queries_to_first_attempt_success=success.queries_to_first_attempt_success,
             queries_to_first_impact_success=success.queries_to_first_impact_success,
             total_attempts=total,

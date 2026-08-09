@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 19:33 AEST · Step 17 · 报告输出确定性 Finding 与攻击路径身份
+
+- **进度:** `ReportData` 现在同时输出 `finding_signature` 与 `attack_path_signature` 的去重计数和签名频次。签名来自已冻结的结构函数，不包含标题、canary 明文或具体参数值；报告可据此区分“同一结构漏洞的重复证据”和“固定 Strategy 确认的新攻击路径”。
+- **决策与理由:** Phase 0.5 的主指标是不同攻击路径，而不是自然语言标题或原始 Finding 条数。将两层身份放入同一报告数据模型，确保 JSON 与 HTML 后续都从同一聚合事实出发，避免指标口径分叉。
+- **验证证据:** `pytest tests/test_storage_and_report.py -p no:cacheprovider` 为 **21 passed**；测试确认签名计数和频次总和与原始 Finding 一致。Ruff/Black 通过。
+- **剩余状态:** DONE（报告层 identity 聚合）；TODO 为 Token 前缀/Gate matrix 分析、角色化 Token 分栏、Validator 与完整 Gate 报告。
+
 ### 2026-08-09 19:25 AEST · Step 16 · Controller audit 字段的有界归一化
 
 - **进度:** 合法 `selected_strategy_id` 现在可伴随超长 rationale 或超过 4 条的 audit refs；Adapter 会确定性截断并记录 warning，而不为这些非控制字段额外发起 repair。schema 外控制字段、非法 JSON、候选集外 Strategy 仍保持唯一 repair 后失败的严格语义。

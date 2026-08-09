@@ -360,6 +360,9 @@ def test_report_computes_allocation_and_success(run: Run) -> None:
     assert data.logical_attempts == data.total_attempts == 3
     assert data.abandoned_attempts == 0
     assert data.execution_retries == 0
+    assert data.finding_signature_count >= 1
+    assert data.attack_path_signature_count >= 1
+    assert sum(data.attack_path_signatures.values()) == len(data.findings)
 
 
 def test_report_surfaces_operational_failures(run: Run) -> None:
