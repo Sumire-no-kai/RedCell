@@ -22,6 +22,7 @@ from redcell.controller import (
     ControllerInvocationStatus,
     ControllerSelectionError,
     LLMControllerAdapter,
+    UsageStatus,
 )
 from redcell.executor import (
     AttemptExecutionError,
@@ -214,6 +215,41 @@ class RunOrchestrator:
         else:
             budget = BudgetManager.from_usage(run.limits, run.usage)
             run, budget = await self._resolve_interrupted_attempt(run, budget, retry_rng)
+            invocations = await self._persist(
+                lambda: self._store.controller_invocations_for(run.id), retry_rng
+            )
+            requested = [
+                invocation
+                for invocation in invocations
+                if invocation.status is ControllerInvocationStatus.REQUESTED
+            ]
+            if requested:
+                for invocation in requested:
+                    terminal = invocation.model_copy(
+                        update={
+                            "status": ControllerInvocationStatus.INDETERMINATE,
+                            "usage_status": UsageStatus.UNKNOWN,
+                            "failure": {"code": "resume_after_requested_invocation"},
+                        }
+                    )
+                    await self._persist(
+                        lambda terminal=terminal: self._store.save_controller_invocation(terminal),
+                        retry_rng,
+                    )
+                failure = _indeterminate_controller_failure(
+                    {"code": "resume_after_requested_invocation"}
+                )
+                failed = self._failed_run(run, failure)
+                failed_event = self._event(
+                    failed,
+                    RunEventType.RUN_FAILED,
+                    payload={"failure": failure.model_dump(mode="json")},
+                )
+                await self._persist(
+                    partial(self._store.commit_run_state, run=failed, run_event=failed_event),
+                    retry_rng,
+                )
+                raise RunFailedError(failed, failure)
             decisions = await self._persist(lambda: self._store.decisions_for(run.id), retry_rng)
             if self._controller is not None:
                 self._controller = self._restore_controller(run, decisions)
@@ -222,7 +258,7 @@ class RunOrchestrator:
             attempts = await self._persist(lambda: self._store.attempts_for(run.id), retry_rng)
             findings = await self._persist(lambda: self._store.findings_for(run.id), retry_rng)
             consecutive_abandoned = _trailing_abandoned(decisions)
-            consecutive_abandoned_selections = 0
+            consecutive_abandoned_selections = _trailing_selection_abandonments(events)
 
         by_id = {strategy.id: strategy for strategy in strategies}
         current_attempt_id: str | None = None
@@ -929,7 +965,12 @@ class RunOrchestrator:
             used_tokens=budget.usage().total_tokens,
         )
         try:
-            selection = await self._driver.select(evidence)  # type: ignore[union-attr]
+            selection = await self._driver.select(  # type: ignore[union-attr]
+                evidence,
+                on_requested=lambda invocation: self._persist(
+                    lambda: self._store.save_controller_invocation(invocation), retry_rng
+                ),
+            )
         except ControllerSelectionError as exc:
             invocation = exc.invocation
             await self._persist(
@@ -1089,6 +1130,17 @@ def _trailing_abandoned(decisions: Sequence[ControllerDecision]) -> int:
         if decision.outcome is not ControllerDecisionOutcome.ABANDONED:
             break
         streak += 1
+    return streak
+
+
+def _trailing_selection_abandonments(events: Sequence[RunEvent]) -> int:
+    streak = 0
+    for event in reversed(events):
+        if event.event_type is RunEventType.SELECTION_ABANDONED:
+            streak += 1
+            continue
+        if event.event_type in {RunEventType.DECISION_SELECTED, RunEventType.RUN_STARTED}:
+            break
     return streak
 
 

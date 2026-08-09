@@ -50,6 +50,26 @@ async def test_llm_adapter_persists_successful_selection_and_cost() -> None:
     assert "ignore schema" in provider.calls[0][-1].content
 
 
+async def test_llm_adapter_emits_requested_invocation_before_call() -> None:
+    requested = []
+
+    async def record(invocation) -> None:
+        requested.append(invocation)
+
+    adapter = LLMControllerAdapter(
+        provider=ScriptedProvider(['{"selected_strategy_id":"direct"}']),
+        run_id="run-1",
+        prompt_version="controller-prompt-v1",
+        model="test",
+    )
+    result = await adapter.select(_evidence(), on_requested=record)
+
+    assert len(requested) == 1
+    assert requested[0].status.value == "requested"
+    assert result.invocation is not None
+    assert result.invocation.id == requested[0].id
+
+
 async def test_llm_adapter_repairs_once_without_changing_evidence() -> None:
     provider = ScriptedProvider(
         ["not json", '{"selected_strategy_id":"roleplay"}'], tokens_per_call=(2, 1)

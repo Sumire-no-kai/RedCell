@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 19:08 AEST · Step 14 · Controller 请求前落盘与崩溃窗口保守恢复
+
+- **进度:** LLM Driver 在网络调用前创建并经 Orchestrator 持久化 `REQUESTED` Invocation，响应后以相同 ID 更新为 `SUCCEEDED`、`FAILED` 或 `INDETERMINATE`；由此不会把同一次外部请求拆成两条审计记录。恢复时若发现仍为 `REQUESTED` 的调用，系统不重调 Controller，而是转为 `INDETERMINATE` 并以 `EXPERIMENT_INVALID` 结束该 Gate Run。连续 Selection Abandonment 的事件尾部也在恢复时重建。
+- **决策与理由:** 进程可恰好在“请求已发出、响应尚未写入”之间死亡。重调会改变模型输出、费用和历史，猜测它没送达又会遗漏真实 Token；因此把该窗口保守视为未知，并让原始 Run 留作删失证据。`REQUESTED` 先写入是唯一能区分“从未发请求”与“无法确认请求状态”的方式。
+- **验证证据:** `pytest tests/test_controller_driver.py tests/test_orchestrator.py tests/test_cli.py -p no:cacheprovider` 为 **47 passed**；新增 Driver 回调测试确认 provider 调用前已发出 `REQUESTED` 且终态复用同一 invocation ID。Ruff 与 Black 通过。
+- **剩余状态:** DONE（Invocation 请求前持久化与恢复保守性）；TODO 为角色化 Token 分栏、Controller contract controls、Gate runner、Validator 与报告聚合。
+
 ### 2026-08-09 18:55 AEST · Step 13 · Resume 按落盘的 Phase 0.5 条件重建 Controller
 
 - **进度:** `redcell resume` 现在从已存 `ExperimentConditions` 读取 selector、memory、策略目录与 Controller 协议版本；当且仅当原 Run 为 `search=llm` 时，重新装配独立 `REDCELL_CONTROLLER_*` 连接并比较完整指纹，再创建 `LLMControllerAdapter`。本地 selector 仍按原有私有 seed 控制器恢复。

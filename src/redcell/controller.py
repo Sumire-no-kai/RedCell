@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from enum import StrEnum
 
@@ -127,7 +128,12 @@ class ControllerDriver(ABC):
     def name(self) -> str: ...
 
     @abstractmethod
-    async def select(self, evidence: ControllerEvidence) -> ControllerSelection: ...
+    async def select(
+        self,
+        evidence: ControllerEvidence,
+        *,
+        on_requested: Callable[[ControllerInvocation], Awaitable[None]] | None = None,
+    ) -> ControllerSelection: ...
 
 
 class SyncControllerAdapter(ControllerDriver):
@@ -140,7 +146,12 @@ class SyncControllerAdapter(ControllerDriver):
     def name(self) -> str:
         return self._controller.name
 
-    async def select(self, evidence: ControllerEvidence) -> ControllerSelection:
+    async def select(
+        self,
+        evidence: ControllerEvidence,
+        *,
+        on_requested: Callable[[ControllerInvocation], Awaitable[None]] | None = None,
+    ) -> ControllerSelection:
         selected = self._controller.select(evidence.available_strategy_ids)
         return ControllerSelection(choice=ControllerChoice(selected_strategy_id=selected))
 
@@ -176,21 +187,29 @@ class LLMControllerAdapter(ControllerDriver):
             raise ValueError("next_selection_index 必须 >= 0")
         self._selection_index = next_selection_index
 
-    async def select(self, evidence: ControllerEvidence) -> ControllerSelection:
+    async def select(
+        self,
+        evidence: ControllerEvidence,
+        *,
+        on_requested: Callable[[ControllerInvocation], Awaitable[None]] | None = None,
+    ) -> ControllerSelection:
         index = self._selection_index
         self._selection_index += 1
+        requested = self._requested_invocation(index, evidence)
+        if on_requested is not None:
+            await on_requested(requested)
         try:
             raw, cost = await self._complete(self._messages(evidence))
         except Exception as exc:
             raise ControllerSelectionError(
-                self._indeterminate_invocation(index, 0, evidence, exc),
+                self._indeterminate_invocation(requested, exc),
                 "Controller request delivery or usage is indeterminate",
             ) from exc
         parsed = self._parse(raw, evidence.available_strategy_ids)
         if parsed is not None:
             return ControllerSelection(
                 choice=parsed,
-                invocation=self._invocation(index, 0, evidence, raw, cost),
+                invocation=self._invocation(requested, 0, raw, cost),
             )
 
         repair_messages = [
@@ -207,7 +226,7 @@ class LLMControllerAdapter(ControllerDriver):
             repair_raw, repair_cost = await self._complete(repair_messages)
         except Exception as exc:
             raise ControllerSelectionError(
-                self._indeterminate_invocation(index, 1, evidence, exc),
+                self._indeterminate_invocation(requested, exc, retry_index=1),
                 "Controller repair delivery or usage is indeterminate",
             ) from exc
         repaired = self._parse(repair_raw, evidence.available_strategy_ids)
@@ -220,20 +239,18 @@ class LLMControllerAdapter(ControllerDriver):
         if repaired is not None:
             return ControllerSelection(
                 choice=repaired,
-                invocation=self._invocation(index, 1, evidence, repair_raw, total),
+                invocation=self._invocation(requested, 1, repair_raw, total),
                 repaired=True,
             )
-        failed = ControllerInvocation(
-            run_id=self._run_id,
-            logical_selection_index=index,
-            retry_index=1,
-            status=ControllerInvocationStatus.FAILED,
-            usage_status=UsageStatus.KNOWN,
-            cost=total,
-            evidence_digest=evidence.history_digest,
-            prompt_version=self._prompt_version,
-            response_digest=_digest(repair_raw),
-            failure={"code": "invalid_controller_choice"},
+        failed = requested.model_copy(
+            update={
+                "retry_index": 1,
+                "status": ControllerInvocationStatus.FAILED,
+                "usage_status": UsageStatus.KNOWN,
+                "cost": total,
+                "response_digest": _digest(repair_raw),
+                "failure": {"code": "invalid_controller_choice"},
+            }
         )
         raise ControllerSelectionError(failed, "Controller 在一次 repair 后仍未返回合法 Strategy")
 
@@ -282,45 +299,53 @@ class LLMControllerAdapter(ControllerDriver):
             return None
         return choice
 
-    def _invocation(
-        self,
-        index: int,
-        retry_index: int,
-        evidence: ControllerEvidence,
-        raw: str,
-        cost: CostRecord,
+    def _requested_invocation(
+        self, index: int, evidence: ControllerEvidence
     ) -> ControllerInvocation:
         return ControllerInvocation(
             run_id=self._run_id,
             logical_selection_index=index,
-            retry_index=retry_index,
-            status=ControllerInvocationStatus.SUCCEEDED,
-            usage_status=UsageStatus.KNOWN,
-            cost=cost,
+            retry_index=0,
+            status=ControllerInvocationStatus.REQUESTED,
+            usage_status=UsageStatus.UNKNOWN,
             evidence_digest=evidence.history_digest,
             prompt_version=self._prompt_version,
-            response_digest=_digest(raw),
+        )
+
+    def _invocation(
+        self,
+        requested: ControllerInvocation,
+        retry_index: int,
+        raw: str,
+        cost: CostRecord,
+    ) -> ControllerInvocation:
+        return requested.model_copy(
+            update={
+                "retry_index": retry_index,
+                "status": ControllerInvocationStatus.SUCCEEDED,
+                "usage_status": UsageStatus.KNOWN,
+                "cost": cost,
+                "response_digest": _digest(raw),
+            }
         )
 
     def _indeterminate_invocation(
         self,
-        index: int,
-        retry_index: int,
-        evidence: ControllerEvidence,
+        requested: ControllerInvocation,
         exc: Exception,
+        *,
+        retry_index: int = 0,
     ) -> ControllerInvocation:
-        return ControllerInvocation(
-            run_id=self._run_id,
-            logical_selection_index=index,
-            retry_index=retry_index,
-            status=ControllerInvocationStatus.INDETERMINATE,
-            usage_status=UsageStatus.UNKNOWN,
-            evidence_digest=evidence.history_digest,
-            prompt_version=self._prompt_version,
-            failure={
-                "code": type(exc).__name__,
-                "message": safe_error_message(exc),
-            },
+        return requested.model_copy(
+            update={
+                "retry_index": retry_index,
+                "status": ControllerInvocationStatus.INDETERMINATE,
+                "usage_status": UsageStatus.UNKNOWN,
+                "failure": {
+                    "code": type(exc).__name__,
+                    "message": safe_error_message(exc),
+                },
+            }
         )
 
 
