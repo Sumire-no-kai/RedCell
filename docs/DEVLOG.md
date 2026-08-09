@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 19:18 AEST · Step 15 · Controller contract controls 基础执行器
+
+- **进度:** 新增 `controller-contract-controls-v1` 的固定 12 条本地 Evidence：3 条冷启动、3 条受限候选集（含单候选不变量）、3 条历史状态，以及 3 条提示注入样本。执行器只调用候选 Controller，不触发 Target、Generator、Finding 或 Gate seed，并按 12/12 合法选择、至少 11/12 首次成功、12/12 已知 Token usage 计算通过状态。
+- **决策与理由:** Controller 候选选择必须发生在正式攻击结果之前；否则“谁在攻击中 Finding 多就选谁”会把结果选择偏差写入实验条件。该模块因此是纯角色适任性测试，输出的是可冻结的 contract report，不是安全评估或 Gate 结果。
+- **验证证据:** `pytest tests/test_controller_controls.py -p no:cacheprovider` 为 **2 passed**；覆盖固定 12 条输入、单候选限制和全量合格报告。Ruff/Black 通过。
+- **剩余状态:** DONE（可复用的 contract controls 核心）；TODO 为 CLI 候选执行/比较与选择冻结、角色化 Token 分栏、Gate runner、Validator 与报告聚合。
+
 ### 2026-08-09 19:08 AEST · Step 14 · Controller 请求前落盘与崩溃窗口保守恢复
 
 - **进度:** LLM Driver 在网络调用前创建并经 Orchestrator 持久化 `REQUESTED` Invocation，响应后以相同 ID 更新为 `SUCCEEDED`、`FAILED` 或 `INDETERMINATE`；由此不会把同一次外部请求拆成两条审计记录。恢复时若发现仍为 `REQUESTED` 的调用，系统不重调 Controller，而是转为 `INDETERMINATE` 并以 `EXPERIMENT_INVALID` 结束该 Gate Run。连续 Selection Abandonment 的事件尾部也在恢复时重建。
