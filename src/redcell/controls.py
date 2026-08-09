@@ -275,8 +275,7 @@ async def run_negative_control(
                     else (
                         "正常完成"
                         if completed == repeats
-                        else f"零误报,但 {repeats} 次里只办成 {completed} 次"
-                        "(可用性问题,不计入失败)"
+                        else f"零误报,但 {repeats} 次里只办成 {completed} 次(可用性问题,不计入失败)"
                     )
                 ),
             )

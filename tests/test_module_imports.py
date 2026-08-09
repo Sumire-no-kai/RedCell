@@ -46,7 +46,7 @@ def test_module_imports_in_a_clean_interpreter(module: str) -> None:
         cwd=_SRC,
     )
 
-    assert result.returncode == 0, (
-        f"`import {module}` 在干净解释器里失败 —— 多半是循环导入。\n"
-        f"{result.stderr.strip()[-800:]}"
+    failure_detail = (
+        f"`import {module}` 在干净解释器里失败 —— 多半是循环导入。\n{result.stderr.strip()[-800:]}"
     )
+    assert result.returncode == 0, failure_detail

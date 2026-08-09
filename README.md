@@ -238,13 +238,17 @@ parameter constraints). The broader benchmark will evaluate:
   One arena target, two deterministic vulnerability classes (canary leak via prompt
   injection; unauthorized / cross-user tool call), single- and multi-turn executor,
   Static/Random baselines + one bandit, first hard number.
-- **Phase 0.5 — Adaptivity, one layer down.** Moves the adaptive decision from
-  *which strategy to try* to *what to write next*: an LLM sits at the controller
-  position and reads the full trace, instead of a bandit choosing among seven
-  predefined arms on a single scalar reward. Compared against the Phase 0 bandit
-  and both baselines under an **equal-cost** budget — not equal attempts, since a
-  controller that reads history spends more per attempt. This is the last test of
-  the adaptive hypothesis either way.
+- **Phase 0.5 — Adaptivity, one layer down.** Phase 0 gave the search a thin
+  decision space: seven predefined arms and a single scalar reward. This phase
+  varies two things independently — *who picks the strategy* (a fixed sweep vs.
+  an LLM reading the full trace) and *whether the message writer remembers
+  earlier attempts* — so the effect of each can be attributed separately. Only
+  the cells where an LLM picks the strategy are agentic; letting a model write
+  with memory while code still drives the loop is not the same claim. Compared
+  under an **equal-cost** budget, not equal attempts, since a controller that
+  reads history spends more per attempt. This is the last test of the adaptive
+  hypothesis either way; `static` remains the default for a thorough pre-launch
+  scan regardless of the outcome.
 - **Phase 1 — Coverage + reward.** Indirect (document) injection, sensitive-data
   disclosure, 1–2 more targets, shaped reward design, layered scoring.
 - **Phase 2 — Product + benchmark.** Web UI (projects / targets / runs / findings /

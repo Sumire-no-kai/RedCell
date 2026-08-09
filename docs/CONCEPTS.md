@@ -1981,6 +1981,336 @@ select → execute → score → atomic commit → update/abandon → next selec
 还要判断最后一次外部请求是否可能产生副作用。当前尚未实现这套恢复协议,
 所以假装 resume 比明确拒绝更危险。
 
+### 14.19 Phase 0.5:Invocation ≠ Decision ≠ Attempt ⭐⭐
+
+**类比:打电话订餐。**
+
+- `ControllerInvocation` = 电话有没有拨出去、餐厅有没有接到、电话费是否产生;
+- `ControllerDecision` = 餐厅明确记下“选 A 套餐”;
+- `Attempt` = 骑手真的拿着 A 套餐开始配送。
+
+电话断线时,餐厅可能已经接单,也可能没接到。此时不能谎称“订餐失败”,也不能再拨一次默认订第二份。
+这就是 `INDETERMINATE`:**我们保留“不知道”,而不是用一个看起来整齐的 false 掩盖未知事实。**
+
+Phase 0.5 的状态链是:
+
+```text
+ControllerInvocation.REQUESTED
+  ├─ SUCCEEDED ──> ControllerDecision ──> Attempt ──> score/reward
+  ├─ FAILED ─────> 没有 Decision,没有 Attempt,可能形成 Selection Abandonment
+  └─ INDETERMINATE ──> Gate Run 作废/删失,不得重调 LLM 猜测
+```
+
+为什么不能都塞进 Attempt?因为 Controller 还没选出 Strategy 时,目标根本没被攻击。
+硬造一个失败 Attempt 会同时污染三样东西:
+
+1. ASR 分母变大,看起来像目标更安全;
+2. Controller 收到假的零 reward,把 Provider 故障学成 Strategy 很弱;
+3. abandoned-attempt 比例上升,掩盖真正的 target/executor 可靠性。
+
+为什么不是所有错误都立刻杀死 Run?空文本或坏 JSON 可以做一次有界 repair,
+而且两次调用费用都如实计入预算;但 timeout/断线无法知道原请求是否处理,此时再调一次会改写历史和成本。
+所以原则不是“遇错都重试”或“遇错都终止”,而是**在哪一层失败,只修哪一层;事实未知时保留三态。**
+
+面试可能追问:
+
+> **为什么不用成功/失败二态?**
+
+因为分布式调用存在 ambiguous outcome:客户端没收到响应,不代表服务端没处理。二态会迫使系统把未知送达/未知费用伪装成失败或成功,从而导致重复请求、错误计费和污染实验统计。
+
+> **为什么 Invocation 要单独落盘?**
+
+为了在崩溃恢复时知道“准备调用”“已调用但结果未知”“已有合法决定”分别走哪条路径。合法 Decision 可以重放;未知 Invocation 不能重调;数据库失败只重试数据库。这是审计性和幂等性的共同边界。
+
+### 14.20 两个实验因子,就要有两个配置字段
+
+**类比:点咖啡时,“咖啡豆”和“是否加奶”应该是两个选项,而不是维护八个越来越长的饮品暗号。**
+
+Phase 0.5 改变的是两件独立的事:
+
+```text
+谁选择 Strategy       → --search
+生成器是否跨场看历史   → --cross-attempt-memory
+```
+
+因此 CLI、API、数据库和 Web Dashboard 都使用同样的两列。Dashboard 可以直接做两个选择器,
+再根据组合显示“产品默认”“预注册实验”“消融”或“不可归因”提示。以后增加新算法或新记忆策略,
+也只是给对应选择器增加一项,不需要重新发明所有排列组合的名称。
+
+`thompson` 必须按具体名字落盘,因为 `bandit` 类似“汽油车”这个大类,不能说明实际开的是哪一款。
+未来的 `adaptive` 则是产品快捷名:Gate 决定它指向谁,但运行记录仍要保存真正执行的算法。
+
+面试时可以这样回答:
+
+> **为什么不直接做一个 `mode` 字段?**
+
+因为搜索方式和跨 Attempt 记忆是正交实验因子。拆开后能做单变量消融、生成稳定指纹,
+并让 CLI/API/Web 共享同一契约;组合式 mode 会随维度增长发生笛卡尔积爆炸,还会隐藏到底改变了什么。
+
+### 14.21 Token 是测量值,美元是换算值
+
+**类比:电表先记录实际用了多少度电,账单再用“度数 × 当期电价”换算金额。**
+
+Phase 0.5 的正式预算使用 Provider 返回的 Token:
+
+```text
+controller tokens + generator tokens + target tokens = run total tokens
+```
+
+三栏都要再拆 input/output/cache,因为不同类别的价格可能不同。Dashboard 既显示三方分项与总量,
+也使用实验前冻结的官方价格表计算 `estimated_cost_usd`;后者是帮助用户理解钱包影响的估计值,
+不是比 Token 更“真实”的原始事实。
+
+为什么不用 Attempt 数?带记忆的 Generator 和 LLM Controller 每次会读取更多上下文,
+同样 100 个 Attempt 实际消耗可能完全不同。为什么不只看美元?价格会随时间、免费层和套餐改变,
+导致算法没变但实验数字变了。Token 主预算固定资源口径,价格快照保留现实成本解释。
+
+局限也要如实说:不同模型的 tokenizer 不同,一个 GLM Token、Gemini Token 和 DeepSeek Token
+不代表完全相同的计算量。因此报告必须同时列模型、input/output 分栏与估算美元,不能只扔出一个总数。
+
+面试时可以这样答:
+
+> **为什么选择 Token-budget,而不是做精确美元计费?**
+
+RedCell 要比较搜索效率并防止模式偷用额外推理预算,不是替 Provider 对账。Token 是调用响应里的直接测量,
+可作为稳定的实验预算;美元依赖会变化的价格表,所以用冻结快照作为辅助解释。若 Token 本身未知,
+正式 Run 才失去可比性;价格未知只影响美元展示。
+
+### 14.22 模型角色不是模型厂商:Controller 为什么要单独选
+
+**类比:电影里的导演、编剧和演员是三个角色;同一个人可以兼任,但片尾不能因此把三个职位合并。**
+
+RedCell 也有三个模型角色:
+
+```text
+Controller -> 决定下一步测哪条 Strategy
+Generator  -> 把 Strategy 写成具体攻击话术
+Target     -> 被测试的 Agent
+```
+
+当前 Controller 可以单独选择 GLM 或 Gemini;以后用户自己的模型通过 BYOK connection 填进同一个位置。
+如果 Controller 与 Generator 都选 Gemini,底层可以复用连接,但 usage、prompt、故障和实验配置仍分栏。
+否则 Controller 的额外 Token 会被藏进 attacker,也无法判断到底是哪一个角色出错。
+
+为什么不在代码里写 `if provider == "gemini"`?厂商只是 `LLMProvider` interface 后面的 Adapter。
+Controller 只应该知道“给我受控证据,返回合法 Strategy 选择”;鉴权、HTTP 协议、限流和价格在 Provider Adapter 内处理。
+这样增加用户 BYOK 时,不用改搜索算法或 Orchestrator。
+
+安全边界也不能混淆:Controller BYOK 是调用用户授权的**推理模型**,不是给 RedCell 一个任意业务 URL 去攻击。
+密钥只存在 Secret store/本地环境,Run 只保存 connection ID、模型配置和脱敏 endpoint fingerprint。
+
+面试时可以这样答:
+
+> **为什么已经有 Target/Attacker Provider,还要第三个 Controller 配置?**
+
+因为复用供应商不等于合并角色。独立配置让 Token、故障和实验变量可归因,也允许用户将最适合决策的模型
+与最适合生成话术的模型分开选择。底层仍复用同一个 `LLMProvider` interface,所以扩展性没有换来核心复杂度。
+
+### 14.23 Selection Abandonment 为什么单独设 5% / 2 次门
+
+**类比:厨师做整道菜失败,和服务员连菜单编号都写不对,不是同一种失败。**
+
+Target Attempt 包含多轮模型回复、工具协议和评分,允许一定基础设施噪声;Controller selection
+只需从有限 ID 中返回一个结构化选择。若后者经过 repair 仍频繁失败,实验测到的是格式/Provider 不稳定,
+而不是搜索方法。因此它有自己的严格保护线:
+
+```text
+放弃比例 <= 5%（至少 20 次选择后启用）
+连续放弃 < 2 次
+```
+
+一次选择可能包含初始调用和一次 repair,但分母只加 1。否则格式越差、repair 越多反而把分母撑大,
+让放弃比例看起来更低。repair 成功算一次成功选择;repair 的 Token 仍全部计费。
+
+低于门槛的偶发放弃是 Controller 的真实效率代价,不补成免费 Attempt;超过门槛则 Run 是
+`EXPERIMENT_INVALID`,不是“LLM 搜索被证明无效”。这和考试时设备故障不能算学生答错是同一原则。
+
+面试可能追问:
+
+> **为什么 repair rate 不直接设硬门?**
+
+因为 repair 已经消耗额外 Token,在 Token-budget 主指标里会自然降低效率。v1 再按 repair rate 判废会重复处罚;
+先报告它作为诊断,只有未来证明它会独立破坏实验有效性时,才预注册新的保护线。
+
+### 14.24 ControllerChoice:执行指令与审计注释分开
+
+**类比:导航真正执行的是“下一路口左转”,旁边的“因为前方堵车”只是给人看的解释。**
+
+`ControllerChoice` 同样分两类字段:
+
+```text
+selected_strategy_id -> 唯一执行指令
+rationale            -> 模型自述的审计注释
+evidence_refs        -> 它声称参考了哪些已展示 Attempt
+```
+
+只有第一项能改变下一步。后两项不会进入 reward、Scorer、Finding 或下一轮 memory,
+因为 LLM 的解释未必忠实;若把自述再喂回模型,它可能不断强化自己的故事而不是读取真实攻击结果。
+
+为什么还要保留 rationale?只存 ID 虽然稳定,但看到模型突然从间接注入改选直接索取时,
+维护者无法判断它声称依据了什么。一个最多 500 字符、只引用最多 4 条已展示证据的注释,
+足以支持审计和演示,又不会变成第二份无限增长的计划。
+
+明确不要 `confidence`:“我有 0.9 信心”只是未经校准的文本输出,不等于统计置信度。
+也不要完整排名、攻击 Prompt 或 stop 指令:那些分别扩大了选择 surface、侵入 Generator、绕过 Budget Manager。
+
+面试可能追问:
+
+> **既然 rationale 不可信,为什么还存?**
+
+它不是证明,而是调试线索。RedCell 用确定性 trace 证明发生了什么,用 rationale 帮助人理解模型声称为什么这么选;
+两者在 schema、存储可见性和控制权上严格分开,所以可解释性不会反过来污染判定。
+
+### 14.25 Target、Attacker、Controller:同一模型能兼任,角色不能混名
+
+当前角色表必须这样读:
+
+```text
+Target             = GLM
+Generator/Attacker = Gemini
+Controller         = GLM 或 Gemini 中单独选择
+```
+
+**类比:同一位演员可以兼任导演,但不能因此说“导演就是演员这个职位”。**
+GLM 若被选作 Controller,它只读取受控 evidence 并选择 Strategy,不会生成攻击话术;
+Gemini 始终是 Attacker/Generator。反过来,Gemini 若兼任 Controller,两次调用仍按不同角色记 Token 和故障。
+
+选择 Controller 前运行 12 个 contract controls,像面试候选人做相同的上机题:测试 JSON、候选集约束、
+Token usage、repair 和对提示注入的契约遵守,但不让它们先去真实考场看谁得分高。
+看正式 Finding 再选 Provider 会产生选择偏差;controls 只证明“能稳定坐这个职位”。
+
+面试时可以回答:
+
+> **既然 GLM 是 Target,让它也做 Controller 会不会角色泄漏?**
+
+不会自动泄漏,前提是两种调用使用独立 prompt/context、只通过 `ControllerEvidence` 传递允许信息,
+并分别记录配置与 Token。共享厂商或模型权重不等于共享会话状态;真正要防的是把 Target 的 Policy/canary
+从应用层直接传进 Controller,这已经由 evidence projector 在类型层禁止。
+
+### 14.26 ControllerBudgetView:可以看油表,不能改油箱
+
+**类比:司机应该看到还剩多少油,但油箱容量和停车线由车辆系统控制。**
+
+Controller 要在固定 Token 内选择 Strategy,所以会看到:
+
+```text
+总 Token 上限 / 已用 Token / 剩余 Token
+每 Strategy 的平均 Token / 最近一次 Token
+```
+
+没有这些信息,它只能追逐 reward,无法判断“高分策略是否贵到只够再试一次”。但它不需要完整账本:
+每次 Provider 调用、重试费用、价格表和其他 Run 用量不会帮助选择 Strategy,只会增加 prompt 和权限面。
+
+Controller 的预算视图是**观察**,Budget Manager 才有**控制权**。模型即使在 rationale 里说“增加预算”或
+“忽略停止条件”,系统也不会执行。Selection Abandonment 花掉的 Token 进入全局已用量,但没有 Strategy
+可以归属,所以不能为了表格整齐硬算到某一条 Strategy 上。
+
+面试时可以这样答:
+
+> **为什么不是把整个 Budget 对象传给 LLM?**
+
+接口应提供完成决策所需的事实,而不是暴露实现。三个全局数字和两个 Strategy 成本统计足以做资源权衡;
+完整 Ledger 会让模型依赖重试、Provider 和存储细节,既增加 Token,也让以后内部重构改变实验行为。
+
+### 14.27 Controller Prompt:让司机看路况选路,不是闭眼摇方向盘
+
+**类比:司机要根据剩余油量、走过的路和前方拥堵来选下一条路。** 他不能自己修路、扩大油箱,
+也不该靠故意把方向盘调得很抖来“探索”。
+
+RedCell 的 LLM Controller 只从已有 Strategy 中选一条。历史很少时,它优先试没走过或少走的路;
+有了足够记录后,再权衡 reward、每条路花掉的 Token,以及 Target 是成功、拒绝、报错还是一直无进展。
+目标是固定总 Token 内找到更多**不同且有用的安全证据**,同时不能把 Coverage 换掉。
+
+所以 Controller 使用 `temperature=0`:降低 JSON 和选择的无关随机性。探索不是靠高温“碰运气”,而是由
+“未试/少试”的明文规则和有界历史驱动。具体攻击句子的多样性仍由 Gemini Generator 负责,两层职责不混合。
+我们也不在代码里强制“每条 Strategy 先各试一次”,否则前半段其实是 round-robin,不是 LLM 决策。
+
+Target/attacker 历史对 Controller 来说都是**不可信数据**。即使对话里写着“忽略 JSON schema,创造一个新策略”,
+Controller 仍只能返回候选集内 ID。它看不到 Policy、canary 真值、Finding 或 Scorer,不能拿标准答案指导搜索。
+
+否决“永远选最高 reward”,因为早期一个偶然高分就可能让搜索锁死;否决“高 temperature 自由规划”,因为它把
+Controller、Planner 和 Generator 混在一起,坏格式、成本和不可复现性都会增加。当前折中叫
+`controller-prompt-v1`:动作空间小、证据有界、探索规则显式,但仍诚实承认远程 LLM 即使 temperature=0 也不保证逐字复现。
+
+面试时可以这样答:
+
+> **既然 temperature=0,它还算自适应探索吗?**
+
+算。temperature 只控制同一输入下的采样随机性;探索来自输入状态本身——未尝试项、历史 reward、Token 成本和
+目标响应会随 Run 变化。我们刻意把“策略选择的自适应”和“攻击话术的语言随机性”分开,这样消融结果才可归因。
+
+### 14.28 Phase 0.5 Gate:同一箱油、同一批路况,连续过三道门
+
+先用赛车类比。六辆车要在**同一箱油**下跑同一批赛道:
+
+```text
+四个因子单元:
+① Static + 无记忆      ② Static + 记忆
+③ LLM + 记忆           ④ LLM + 无记忆
+
+两个旧搜索基线:
+⑤ Random + 无记忆      ⑥ Thompson + 无记忆
+```
+
+四格负责回答“写手记忆”和“LLM 选择权”各自带来什么;Random/Thompson 则防止我们只挑一个容易赢的
+Static 对手。六个条件共享同一个 seed,像让六辆车面对同一场天气。一个条件的数据坏了,这组天气就不能只保留
+其他五辆车的成绩,否则配对比较失去意义。
+
+每场只跑到 320k Token,再从同一事件流切出 64k、160k、320k 三个前缀。类比一场长跑在第 2、5、10 公里
+读秒,不是为了三个距离另跑三场。160k 是唯一正式终点;另外两点只说明低预算和饱和趋势,不能在 160k 输了以后
+改口说“其实 64k 才是主指标”。三档来自 Phase 0 每 Attempt 约 3199 Token 的中位尺度,约等于旧的
+20/50/100 Attempts,但不会把更长的 memory prompt 当成免费资源。
+
+正式比较像连续过三道门:
+
+1. ② 是否胜过①——记住过去能不能让下一次话术更有效;
+2. ③ 是否胜过②——把 Strategy 选择权交给 LLM 是否还有增量;
+3. ③ 是否同时胜过 Static、Random、Thompson。
+
+每道门不仅要“数字更大”,还要同时满足三件事:平均每 Run 至少多 1 个不同 Finding 或提高 20%(取更严格者)、
+paired bootstrap 95% 区间下界大于 0、成对置换检验通过。第三道门一次考三个对手,用 Holm 校正降低
+“考得越多越容易碰巧过一门”的假阳性。前一道门不过就不继续扩张完整 agent 故事,但已经得到支持的组件结论仍
+可以原样报告。
+
+否决只看点估计,因为 12 个 seed 中几个好运气 Run 就能制造漂亮均值;否决复用 5000–5002,因为那些结果已经被
+观察过;否决为三个 Token 点分别重跑,因为那会让预算曲线混入三批不同随机结果。12 个正式 paired seed + 4 个
+冻结顺序的备用 seed 是内部 Gate 的务实规模,不冒充投稿级统计功效。
+
+面试时可以这样答:
+
+> **为什么既要 20%/1 个 Finding,又要置信区间?**
+
+置信区间回答“会不会只是运气”,实际效应回答“即使是真的,大到值得多一层 LLM 和工程复杂度吗”。只满足前者,
+可能得到统计显著但产品上毫无意义的微小改善;只满足后者,又可能只是小样本波动。
+
+### 14.29 保护线:更快找到漏洞,不能靠少检查、误报或不可复现换来
+
+主指标像赛车的圈速,保护线像赛前安全检查。车更快但少装一只轮胎不能算赢。Phase 0.5 最可能出现的假胜利是:
+
+- Controller 只刷一两条已奏效 Strategy,Finding 数上升但 Coverage 变窄;
+- 误报正常请求,把正常行为也算成漏洞;
+- memory 产生一次性幸运攻击,之后无法原样重放;
+- repair/失败 Token 没记账,让 LLM 条件看起来比实际便宜;
+- 模型写了漂亮 rationale,但 decision、evidence 与 usage 对不上。
+
+因此③在 160k 必须至少触及 6/7 条 Strategy,单条不得超过成功选择的 40%;这是一条**判定保护线**,不是运行时
+偷偷安排的 round-robin。Level-1 golden、零误报、utility、ASR 与 Attempt abandonment 复用已经冻结的回归合同;
+Selection Abandonment、Token 和决策审计使用更严格的 Controller 专用门。
+
+复现率测的是“这条已发现的漏洞能否再次触发”,不是“搜索器能否再次碰巧找到它”。所以 Validator 把已经记录的
+攻击对话原样重放 5 次,只重新调用 Target,不让 Controller 或 Generator 重新发挥。验证 Token 单独报告,否则找到
+更多 Finding 的条件会因为需要验证更多漏洞而在发现预算里被反向惩罚。
+
+跨 Attempt 的“不同 Finding”也不能用随机 Finding ID 或标题判断。系统保存不含敏感参数值的结构签名:
+漏洞类别 + 违规工具/受保护位置 + 参数约束结构。同一签名反复命中只累积证据与复现次数,不伪装成多个漏洞。
+
+面试时可以这样答:
+
+> **为什么不把 6/7 和 40% 直接写进 Controller 的硬调度?**
+
+因为那会改变被测试的算法:模型表面上在选,实际覆盖由代码替它完成。我们让 Controller 自己决定,再用预注册保护线
+判断它有没有搜索坍缩。这样失败仍然可能发生,Gate 才具有可证伪性。
+
 ---
 
 ## 15. 六个攻击策略 ⭐⭐

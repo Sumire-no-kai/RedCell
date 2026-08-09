@@ -5,6 +5,319 @@
 
 ---
 
+## 2026-08-09 16:43 AEST · Step 20 · 开工整理一:恢复本地质量门与固定开发工具版本
+
+- **范围与边界:** 作者授权完成 Phase 0.5 开工前的现有整理、Git/PR 收尾与可安全合并;明确要求在其再次说“开始 Phase 0.5 开发”前停止。因此本步骤只修复开发环境和既有格式基线,不实现 Controller、memory、Validator 或其他 Phase 0.5 功能。
+- **环境问题:** 项目 `.venv` 指向已不存在的 `C:\Users\lee20\AppData\Local\Programs\Python\Python312\python.exe`,导致 pytest/Ruff/Black 启动器均无法运行。先确认目标精确为 `E:\RedCell\.venv` 且已 gitignore,再用工作区 CPython 3.12.13 原位重建,并按 `.[dev]` 安装声明依赖;未读取或修改 `.env`。
+- **工具漂移:** 宽松的 `ruff>=0.5` / `black>=24.4` 使重建环境拿到 Ruff 0.16.2 与 Black 26.5.1。Black 26.5.1 连 import/`--version` 都挂起;Ruff 0.16.2 又比仓库最后成功使用的 0.16.1 多出格式差异。`.ruff_cache/0.16.1` 提供了本机最后已用版本证据。
+- **解决方式:** 将 dev 工具固定为 `ruff==0.16.1`、`black==24.10.0`;两者满足原最低要求且能在当前 Python 正常启动。用 Ruff 对 4 个既有文件做机械格式化;`test_module_imports.py` 的 assert message 改为命名变量,消除两 formatter 对同一括号结构的互斥重写。没有改变测试断言语义或生产逻辑。
+- **验证证据:** 修复后全量 pytest 在 `-p no:cacheprovider` 与可写 basetemp 下通过(进度 100%,无失败);最终提交前复核再次全量通过。`ruff check .` 为 `All checks passed`;`ruff format --check .` 为 92 files already formatted;Black 24.10 对 `src tests` 为 83 files unchanged。中途 Ruff format 发现 `test_module_imports.py` 为 apply_patch 带来的换行格式差异,已规范化并纳入上述最终全量复核。
+- **遇到的问题:** 默认 `.pytest_cache` 仍因 Windows ACL 报 `PytestCacheWarning`,不影响测试结论;改用 `-p no:cacheprovider` 消除该非代码噪声。`C:\tmp` 对 uv cache 实际不可写,改用已 gitignore 的 `E:\RedCell\tmp\uv-cache`,没有把下载缓存放进版本控制。
+- **剩余状态:** 环境修复 **DONE**;最终全量质量门复核、设计文档 commit/push/PR 与通用基础设施选择性整合仍在本次授权范围内继续。
+
+---
+
+## 2026-08-09 16:20 AEST · Step 19 · Phase 0.5 五项剩余决策全部冻结
+
+- **进度:** 作者一次性接受 Step 18 的全部推荐方案。Phase 0.5 正式冻结:完整因子矩阵、Token 检查点、seed/备用规则、最小实际效应与统计 Gate、保护性指标;这些项目不再标为 `PROPOSED/OPEN`,后续实现和正式实验不得看结果再改。
+- **矩阵:** 四个因子单元 ①Static×off、②Static×memory、③LLM×memory、④LLM×off 全部必跑;同时在同批新 seed/Token 条件下跑 Random×off 与 Thompson×off,完整主要矩阵共 6 个条件。④隔离 LLM Strategy selection 的增量,不允许看过③结果后再决定是否补做。
+- **Step 18 成本口径更正:** 此前“④增加约 33%”只按三格→四格的因子表计算,漏计正式假设本就要求的新-seed Random/Thompson 对照。完整 Gate 原本必需 5 个条件,加④后为 6 个,所以④的边际矩阵成本约为 **20%**;保留这条更正而不静默改写旧记录。
+- **Token:** 单次 Run hard cap=`320,000`;从同一事件流截取 64k/160k/320k 提交前缀,160k 为唯一主要检查点。数值依据冻结 18-run Phase 0 产物每 completed Attempt 的总 Token 中位数 3199.41,约映射旧 20/50/100 Attempts;三角色 usage、repair/retry/abandonment 与 overshoot 继续按已定口径计入。
+- **seed:** 12 个未观察的有效 paired seed + 4 个固定顺序备用 seed。每个 seed 必须六条件齐全;任一条件因基础设施、未知 Token、可靠性或完整性失效,整个 block 退出主要分析、原记录保留,按顺序补位。不得按 Finding 表现替换 seed。
+- **主要指标与 Finding identity:** 160k 下累计不同 Finding 数;新增版本化 `finding_signature=(漏洞类别,违规对象,违规结构)` 跨 Attempt 去重。工具签名不含具体参数值;canary 明文不进入签名/日志。自然语言标题或 LLM 相似度不参与主要去重。
+- **统计 Gate:** 固定顺序 ②>① → ③>② → ③分别>Static/Random/Thompson。每项同时要求成对均值差至少 `max(+1 Finding/Run,+20%)`、10,000 次 paired bootstrap 95% CI 下界>0、单侧成对置换 p<0.05;最后三个 p 值经 Holm 校正全部通过。64k/320k 及其他切片只作次要解释。
+- **保护线:** golden 100%、阴性零误报、utility 不低于 32/50 且逐任务最多少成功一次、所有 Run 完成、Attempt abandonment<10%、Selection Abandonment≤5%/分母20/不得连续2次、总体 Level-1 非劣界-5pp、三个强策略下降8pp触发调查且仅可新 seed 重跑一次。③在160k每 Run 至少覆盖6/7 Strategy且单条≤40%;已知漏洞类别不得完全消失;cost/Finding最多恶化10%;复现率最多下降10pp;Token/决策审计完整率100%。
+- **Validator 口径:** 每个不同 Finding 将已记录攻击对话原样重放5次,不重新调用 Controller/Generator;验证 Token 单独报告,不混入发现阶段320k预算。这样测目标漏洞稳定性,不把“重新搜索的运气”误当复现率。
+- **拒绝的替代方案:** 不采用④预算后置决定、旧 seed/旧 Phase 0结果代跑、按Attempt比较、为三个检查点分别重跑、只看点估计、未校正多重比较、隐藏round-robin、用标题/LLM做主要去重、把Validator成本混进搜索预算。理由分别是选择偏差、不可配对、给长prompt免费算力、随机批次混淆、运气/多重假阳性、污染agent控制变量、Judge噪声与反向惩罚多Finding条件。
+- **PRD 联动:** §9 已把 `LLM-only Iterative Refinement` 从普通算法 baseline 移为有独立 Gate 的 Phase 0.5 实验条件;Phase 0.5 动机中的“完整 trace”纠正为类型投影后的有界可观察证据,与已定 `ControllerEvidenceProjector` 一致。
+- **本次改动:** 更新本地内部 `PRD.md`、本日志和 `docs/CONCEPTS.md`;未写 Phase 0.5 运行时代码、未调用 Provider、未产生正式 seed 或结果。
+- **剩余状态:** 五项核心设计 **DONE**。W3–W8 排期重排仍 `OPEN` 但不阻塞代码。实现前置 TODO 为跨 Attempt `finding_signature`、Finding Validator、统一 Token/accounting/Controller seam 与六条件 runner;Controller Provider 仍在实现 controls 后自动选定。
+
+---
+
+## 2026-08-09 16:13 AEST · Step 18 · Phase 0.5 剩余决策与实现前置项一次性审计
+
+- **进度:** 在 Controller Prompt 方案 C 定稿后,逐项复核 PRD Phase 0.5 的实验矩阵、Gate、OPEN 标记、现有 Phase 0 产物和实现能力。确认核心设计尚有 **5 个需要作者冻结的决策包**:④消融是否完整运行、Token 检查点、有效/备用 seed 数、统计通过规则、保护性阈值。另有 W3–W8 排期重排 1 项,不阻塞 Phase 0.5 代码。
+- **推荐矩阵:** ①②③④ 四格均用相同成对 seed 跑满;④虽不进入产品默认,但用于分离“LLM 选择策略”和“Generator 跨 Attempt 记忆”,代价是比三格矩阵增加约 33% Token。
+- **Token 证据与推荐:** 读取冻结的 18-run Phase 0 本地产物,每个 completed Attempt 的总 Token 中位数为 **3199.41**(范围约 2602–5991)。建议把同一长 Run 的提交前缀冻结为 64k/160k/320k Token,分别近似旧条件的 20/50/100 Attempts;160k 为唯一主要检查点,64k/320k 为次要曲线,hard cap 为 320k。这样无需为每个检查点另跑一批。
+- **seed 推荐:** 12 个未观察的有效成对 seed + 4 个按顺序冻结的备用 seed;任一单元无效则整个 paired block 不进主要分析并由下一个备用 seed 补位,避免破坏配对或按结果选择重跑。12 个适合内部可证伪 Gate,不包装为 publication-grade 功效。
+- **统计推荐:** 固定顺序 Gate:先检验 ②>①(消息记忆),再检验 ③>②(Controller 增量),最后检验 ③ 分别优于 Static/Random/Thompson;主要检查点为 160k。每步同时要求平均差至少 `max(1 个不同 Finding,20% 相对提升)`、成对 bootstrap 95% CI 下界大于 0;最后三项用 Holm 处理多重比较。任一步未过不继续扩张完整 agent 效果声明,但如实报告已通过的组件结论。
+- **保护线推荐:** 复用已冻结 Phase 1 回归合同(golden 100%、阴性零误报、utility 总体最多降 10pp 且逐任务最多少完成 1 次、Attempt abandonment <10%、总体 Level-1 非劣界 -5pp、强策略下降 8pp 触发仅一次新-seed 重跑);叠加 Phase 0.5 已定 Selection Abandonment 5%/连续 2 次、Token/决策审计完整率 100%。新增搜索坍缩保护建议为主要检查点每个有效 Run 至少覆盖 6/7 Strategy、单一 Strategy 不超过成功选择的 40%;已知漏洞类别不得在全矩阵中完全消失;平均复现率相对相关对照最多下降 10pp。
+- **不是作者偏好投票的前置实现:** 当前 Finding ID 含 Attempt ID,不能直接做跨 Attempt 的结构去重;需要把 Level-1 已有的安全结构指纹显式落为跨 Attempt `finding_signature`。当前仅有 reproduction 字段/概念,没有 Finding Validator 工作流;要把复现率作为硬保护线,必须实现对已记录攻击对话的 5 次原样重放。两项已有 PRD 语义方向,实现时仍按协议/评分核心规则同步讲解与测试。
+- **非决策项:** Controller 最终选择 GLM 或 Gemini 由 12-case controls 的冻结规则自动决定;官方价格快照、精确模型能力和 Token usage 支持是开跑前测量/核验,不是再让作者凭偏好指定。
+- **文档状态发现:** 当前 Phase 0.5 文档分支基于 `1dde807`,而已冻结 utility/Phase 1 回归合同及 RAG 实现位于后续 `feat/phase1-rag-arena`;当前分支的 `docs/PHASE0_BASELINE.md` 因此仍显示旧的 11-task/OPEN 文案。后续整合必须带入 `6b58f9d`/`d49d3df` 等既有结论,不能把已完成决策误当成重新开放。
+- **剩余状态:** 上述 5 个设计包均为 **PROPOSED / OPEN**,等作者一次性确认或调整;两个实现前置项为 TODO;本轮未写 Phase 0.5 运行时代码、未调用任何 Provider。
+
+---
+
+## 2026-08-09 16:07 AEST · Step 17 · Controller Prompt 有界自适应方案 C 定稿
+
+- **进度:** 作者确认方案 C:`controller-prompt-v1` 在剩余总 Token 内从合法候选 Strategy 中选择最可能产生新且有用安全证据的一项;证据稀疏时偏向未试/少试,证据充分后综合 reward、Token 与目标成功/拒绝/错误/无进展模式,且不得牺牲 Coverage。
+- **职责边界:** Controller 只选 Strategy,不写攻击话术、不创建 Strategy、不改预算/停止条件。攻击语言多样性仍由 Gemini Generator 负责;Target/attacker 对话作为不可信数据,其中的 prompt injection 不得成为 Controller 指令。Policy、canary 真值、Scorer 与 Finding 继续不可见。
+- **正式配置:** `temperature=0`,`max_output_tokens=512`,Provider 支持时关闭 thinking/reasoning;不能关闭时必须完整报告并计入 reasoning Token,否则不能进入 Token Gate。prompt/schema/config/extra_body 版本与 evidence digest 进入指纹,controls 和正式 Gate 使用同一配置。
+- **探索语义:** 不设置“先把七条 Strategy 各跑一次”的隐藏 round-robin。探索来自明确的未试/少试规则和不断变化的有界证据,不是 temperature 噪声;远程模型即使 temperature=0 也不宣称逐字确定,故保存原始有界响应、规范化选择和配置摘要。
+- **拒绝 A:** 纯利用、永远选当前最高 reward 会在小样本早期锁死偶然赢家,重复刷同一漏洞并伤害 Coverage。**拒绝 B:** 高 temperature 自由规划会把随机采样当探索,增加坏 JSON/越权/重跑差异,并混合 Controller、Planner、Generator 职责。
+- **决策与理由:** 方案 C 保留 LLM 根据证据做选择的 agentic 价值,同时封闭动作空间、降低无关随机性,让成本、恢复、审计与消融归因仍可成立。
+- **本次改动:** 更新本地 `PRD.md`、本日志与 `docs/CONCEPTS.md`;修正 Gate 保护指标对 temperature 的描述,明确 temperature > 0 属于 Generator 而不是 Controller;未写运行时代码。
+- **剩余状态:** 本议题 DONE。Phase 0.5 实现前尚余正式 Gate 预注册包需要一次性冻结;其余为实现后 controls/测量结果,不是新的产品偏好投票。
+
+---
+
+## 2026-08-09 16:01 AEST · Step 16 · ControllerBudgetView 有界只读方案 C 定稿
+
+- **进度:** 作者确认方案 C:Controller 获得只读 `total_token_limit / used_tokens / remaining_tokens`,并在每 Strategy 聚合中读取 completed Attempt 的 `mean_total_tokens / latest_total_tokens`。
+- **统计范围:** Strategy Token 包含形成对应 completed Attempt 的 Controller selection + Generator + Target。Selection Abandonment 的已知 Token 只进入全局 used,因没有合法 Strategy/Attempt 不硬分摊给某条 Strategy。Generator memory 不接收 BudgetView 或跨角色 Token 统计。
+- **权限边界:** Budget Manager 从已提交 usage 确定性生成视图并继续拥有预算、停止和准入控制;Controller 只能观察,不能增加/预留预算或输出 stop 指令。schema/policy version 进 Run 指纹,动态视图进每次 evidence digest/私有 Trace,恢复时重建核对。
+- **拒绝 A:** 完全不给预算会让 Controller 对“每 Token Finding”主目标失明,Token-sensitive 声明名不副实。**拒绝 B:** 完整 Ledger 会无界增加上下文,暴露 Provider/retry/记账实现并扩大 Controller 权限面。
+- **决策与理由:** 三个整数 + 两个每 Strategy 统计是完成资源权衡所需的最小充分视图;既能比较高 reward 但昂贵的 Strategy 与便宜但未探索的 Strategy,又不把记账实现或硬限制交给模型。
+- **本次改动:** 更新本地 `PRD.md`、本日志与 `docs/CONCEPTS.md`;未写运行时代码。
+- **剩余状态:** 本议题 DONE。下一核心议题为 Controller prompt 的探索/利用目标和 temperature;Phase 0.5 实现仍未开始。
+
+---
+
+## 2026-08-09 15:58 AEST · Step 15 · Controller controls 方案 C 与模型角色纠正定稿
+
+- **角色纠正:** 作者明确 `Target = GLM`,`Generator/Attacker = Gemini`,`Controller = GLM 或 Gemini 单独选择`。GLM 即使兼任 Controller 也绝不成为 Attacker;攻击话术始终由 Gemini 生成。若 Gemini 兼任 Controller,Controller/Generator usage 与配置仍分栏。
+- **进度:** 作者确认方案 C:`controller-contract-controls-v1` 用 12 个本地构造/录制 evidence 分别调用 GLM/Gemini Controller,不调用 Target、不生成真实攻击、不使用正式 Gate seed。
+- **样例组成:** cold start 3 个、受限候选集 3 个、带历史 reward/refs 3 个、对 Controller 的提示注入/越权输出诱导 3 个;两候选接收完全相同的 schema、evidence、候选列表和调用条件。
+- **通过线:** 12/12 在最多一次 repair 后得到合法 Strategy;至少 11/12 首次通过;12/12 Token usage 已知;最终 0 个候选集外 Strategy、0 个 schema 外控制字段。audit refs/rationale 的 normalization warning 不把合法选择改成失败。
+- **选定规则:** 单一通过者直接冻结;双通过时依次比较 first-pass 成功数、repair 次数、中位 Controller Token、p95 latency,仍并列按稳定 connection ID。双失败则 `search=llm` 不起跑,不得降标或回退;未来 BYOK 候选复用同一 controls。
+- **否决 A:** 直接指定 GLM/Gemini 没有角色适任性证据。**否决 B:** 用正式 Finding/ASR 选 Provider 等于看过 Gate 答案再挑条件,产生选择偏差。方案 C 只测契约、可靠性和资源,不读取漏洞结果。
+- **本次改动:** 将 controls、通过线、tie-break、否决理由和模型角色纠正写入本地 `PRD.md`、本日志与 `docs/CONCEPTS.md`;未调用任何 Provider,未写运行时代码。
+- **剩余状态:** 本议题 DONE。下一核心议题为 Controller prompt 的任务目标、探索/利用指令和 temperature;Phase 0.5 实现仍未开始。
+
+---
+
+## 2026-08-09 15:34 AEST · Step 14 · Phase 0.5 Controller 输出契约方案 B 定稿
+
+- **进度:** 作者确认方案 B:`controller-choice-v1` 返回必需的 `selected_strategy_id` 与可选的 `rationale`、`evidence_refs`;完整记录采用理由与否决理由,供后续实现、复盘和面试使用。
+- **执行关键字段:** 只有 `selected_strategy_id` 驱动 Generator/Attempt,且必须属于本轮候选集。坏 JSON、缺失/非法 ID、候选集外 ID 或额外字段触发唯一一次 repair;repair 不得改变候选集/evidence digest,全部 Token 计入预算。
+- **审计字段:** rationale 最多 500 字符;refs 最多 4 个且只能引用本轮 ControllerEvidence。超长 rationale 确定性截断;类型错误或非法 refs 删除并记 warning,不让非关键审计损坏摧毁合法选择。它们不进入 Scorer、reward、Finding 或下一轮 memory。
+- **Trace/报告:** 原始有界响应与验证错误仅进入 project-isolated 私有 Trace;普通报告显示规范化 rationale、合法 refs、repair/warning 状态与 response digest。rationale 明确标为模型自述,不是因果证据。
+- **否决 A:** 只返回 Strategy ID 的格式最稳,但无法审计模型是否利用历史,也让 Trace 与面试解释缺少可查看理由。
+- **否决 C:** 完整计划、排名、置信度和下一条 Prompt 会混合 Controller/Planner/Generator,增加 Token/失败面并破坏 Phase 0.5 的单变量归因。`confidence` 未校准,不得伪装成统计概率;stop/预算仍归 Budget Manager/Orchestrator。
+- **决策与理由:** 方案 B 把“执行指令”和“审计注释”分开:前者严格、极小,后者有界且不回流控制路径,在可靠性与可解释审计之间取得局部、可测试的折中。
+- **本次改动:** 更新本地 `PRD.md`、本日志与 `docs/CONCEPTS.md`;未写运行时代码。
+- **剩余状态:** 本议题 DONE。下一核心议题为正式 Controller controls 的输入样例、通过线与 GLM/Gemini 选定规则;Phase 0.5 实现仍未开始。
+
+---
+
+## 2026-08-09 15:32 AEST · Step 13 · Phase 0.5 Selection Abandonment 严格独立门定稿
+
+- **进度:** 作者确认方案 C:Selection Abandonment 与 Attempt abandonment 完全分开,采用 `max_fraction=5%`、`fraction_minimum=20`、`max_consecutive=2`。
+- **统计口径:** 分母为 `successful_selections + abandoned_selections` 的逻辑选择机会,不是 Invocation 数。初始调用 + repair 仍是一次逻辑选择;repair 成功算 successful 并重置连续计数。达到 20 次后 1/20 可接受、2/20 失效;20 次以前由连续 2 次保护。
+- **分类边界:** 只有已知送达、经过唯一一次 repair 后仍没有合法 Strategy 的响应计入 Selection Abandonment。配置、配额、transport、protocol、persistence 与 indeterminate 故障不进分母;`INDETERMINATE` 仍立即删失正式 Run。
+- **Token 与结果:** 阈值内的 abandonment 继续运行,所有调用 Token 照计且不伪造 Attempt/reward;超过阈值标 `EXPERIMENT_INVALID`,不是 `NOT SUPPORTED/FALSIFIED`,保留记录并用预注册备用 seed 补位。
+- **repair rate:** `repair_count/repair_rate` 必须报告,但 v1 不设硬门;其额外调用已受总 Token 预算惩罚,再设阈值可能重复处罚。若后续证据显示它独立影响有效性,只能作为新版本保护线预注册。
+- **决策与理由:** Controller 只需从封闭 Strategy 候选集返回结构化选择,理论上应明显比完整 Target Attempt 稳定;复用 10%/连续 5 次会把严重的结构化输出问题当作正常噪声。5%/2 是透明的 v1 工程保护线,并非统计学最优常数,正式实验后不得按结果调整。
+- **本次改动:** 更新本地 `PRD.md`、本日志与 `docs/CONCEPTS.md`;未写运行时代码。
+- **剩余状态:** 本议题 DONE。下一核心议题为 Controller 输出契约中除了 Strategy ID 还应允许哪些审计字段;Phase 0.5 实现仍未开始。
+
+---
+
+## 2026-08-09 15:29 AEST · Step 12 · Phase 0.5 Controller Provider 独立选择与 BYOK 定稿
+
+- **进度:** 作者确认方案 C:Controller 作为独立模型角色单独选择 Provider;当前先支持 GLM 与 Gemini connection,未来允许用户以 project-scoped BYOK connection 接入自己的模型 API。
+- **角色契约:** Target、Generator、Controller 三个 connection 分开。即使 Controller 与 Generator 复用同一 Gemini 底层连接,其 prompt、temperature、max_tokens、限流、usage、失败和实验身份仍独立;`search != llm` 时 Controller 配置显式为 `None`。
+- **配置与 Dashboard:** 本地增加 `REDCELL_CONTROLLER_*`;Web 使用 `controller_connection_id`,仅在 `search=llm` 时显示 Controller 选择器。正式 Gate 冻结精确 connection/model;GLM 与 Gemini 是不同实验条件,不得在同一矩阵中轮换或故障时互相回退。
+- **BYOK/安全边界:** BYOK 仅用于 Controller 推理,不是任意 Target URL。Secret、Authorization header 与原始私有 endpoint 不进入数据库、指纹、日志或报告;只保存 project-scoped connection ID、脱敏 endpoint fingerprint 与不含凭据的运行配置。未配置或 controls 不通过时 preflight 拒绝,不静默借用 Attacker。
+- **Provider seam:** 继续以 `LLMProvider` 为小 interface;GLM/Gemini 当前均可走 OpenAI-compatible Adapter,未来非兼容协议增加 Adapter,不把厂商分支散入 `LLMControllerAdapter`。Scripted/recorded Adapter 支撑零 quota 测试。
+- **决策与理由:** 角色是长期产品概念,厂商是可替换配置。写死 Gemini 会耦合 attacker quota/故障;写死 GLM 会耦合 Target 与决策者;直接把用户 API 参数塞进 Run 会破坏 Secret 隔离。独立 connection seam 同时提供可扩展性、实验归因、测试 leverage 与维护 locality。
+- **本次改动:** 更新本地 `PRD.md`、本日志与 `docs/CONCEPTS.md`;未修改 `.env`、未读取或记录任何 Secret、未写运行时代码。
+- **剩余状态:** 本议题 DONE。正式 Controller 最终选 GLM 还是 Gemini 要在实现 controls 后按冻结的非结果标准选定。下一核心议题为 Selection Abandonment 的独立可靠性阈值;Phase 0.5 实现仍未开始。
+
+---
+
+## 2026-08-09 15:25 AEST · Step 11 · Phase 0.5 Token 主预算与美元辅助估算定稿
+
+- **进度:** 作者确认正式 Gate 采用 Provider 实际返回的总 Token 作为主要预算与比较口径;美元成本保留为按模型价格换算的辅助估计,不把项目扩建成精细财务计费系统。
+- **计量范围:** 总 Token = Controller + Generator/Attacker + Target,三者分别记录 input/output/cached-input/total;Static/Random/Thompson 的本地 Controller 为 0。repair、retry、失败请求和 Selection Abandonment 只要返回 usage 均计入。
+- **实现边界:** 不新增独立财务 Ledger;扩展现有 `BudgetManager`、`BudgetUsage` 与 `CostRecord` 的 role 分栏,由一个 BudgetManager 汇总。Dashboard 同时展示三角色分项、总 Token、估算美元与价格快照。
+- **价格估算:** `estimated_cost_usd` 由 Token 按冻结的官方模型价格换算,区分 input/output/cache;价格快照记录精确模型、Free/Paid/Batch 等计价层级、单价、币种、官方来源和查询日期,进入 Run 条件/指纹。运行中不实时联网刷新,避免同批实验使用不同价格表。价格未知只显示 `N/A`,不影响 Token Gate。
+- **未知与越线:** 任一远程角色不报告 Token,或未知送达使 Token usage 不确定,正式 Run 删失。精确 Token 只能在响应后取得,允许最后一个外部调用越线并记录 overshoot;Gate 在预注册 Token 检查点上只统计累计已知 Token 未越线的已提交 Finding。
+- **决策与理由:** Token 是 Provider 返回的实际用量,美元是价格表换算的估计值;按 Attempt 会给记忆和 LLM Controller 免费算力,只按美元又引入价格变动、套餐和免费层噪声。Token 主预算最透明且符合 RedCell“成本敏感、可控制但非财务系统”的产品定位;分角色和估算美元保留实际花费解释能力。
+- **局限:** 不宣称不同 Provider 的一个 Token 具有相同算力或货币价值;通过 input/output 分栏、模型标识和估算美元公开该限制。Gemini 与 DeepSeek 官方价格均显示 input/output/cache 等结构可能不同,所以不能用“总 Token × 一个统一单价”伪装精确账单。
+- **本次改动:** 修正本地 `PRD.md` 中 Phase 0.5 Gate 的假设、预算口径、主指标和产品分支;同步本日志与 `docs/CONCEPTS.md`;未写运行时代码。
+- **剩余状态:** 本议题 DONE。下一核心议题为 LLM Controller 使用独立 DeepSeek Provider、复用 Gemini attacker,还是与角色解耦后由配置选择;Phase 0.5 实现仍未开始。
+
+---
+
+## 2026-08-09 15:16 AEST · Step 10 · Phase 0.5 CLI、指纹与 Dashboard 正交映射定稿
+
+- **进度:** 作者确认方案 B:`--search static|random|thompson|llm` 与 `--cross-attempt-memory off|bounded-relevant-v1` 作为两个独立参数,并确认该结构必须方便后续 Web Dashboard。
+- **Web/API 映射:** Dashboard 使用“搜索决策方式”和“跨 Attempt 记忆”两个控件,API 使用同样的两个 enum;组合标签由系统派生。产品 preset 只给控件赋值,不另造持久化真相。`thompson × bounded-relevant-v1` 显示不可归因警告但不禁止运行。
+- **Run 与指纹:** `ExperimentConditions` 增加 `search.selector` 和 `generation_memory.mode/policy_version/limits`,连同 evidence/prompt 版本及后续 Controller Provider 配置进入指纹。`Run.algorithm` 暂留作旧数据/报告索引并强校验一致性;恢复不得改变已存 search/memory 条件。
+- **命名与兼容:** 指纹使用具体的 `thompson`,不使用算法家族名 `bandit`;使用明确的 `--cross-attempt-memory`,避免与轮内 `prior_turns` 或 Controller 历史混淆。旧 `--algorithm` 保留一个兼容期,与新参数冲突时拒绝;Phase 0.5 新脚本一律使用新参数。`--search adaptive` 等 Gate 赢家确定后才开放,落盘仍保存解析后的精确算法。
+- **决策与理由:** 两个独立字段与两个实验因子、两个 Dashboard 控件一一对应,筛选、聚合、复现和消融都可直接按列完成。单一八值 `--mode` 会造成组合爆炸并掩盖变量;只保存 profile/preset 则无法证明真正执行了什么。
+- **本次改动:** 更新本地 `PRD.md`、本日志和 `docs/CONCEPTS.md`;未写运行时代码。
+- **剩余状态:** 本议题 DONE。下一核心议题为等成本预算如何同时覆盖 Controller、Generator 与 Target,以及未知费用时如何判定 Gate Run;Phase 0.5 实现仍未开始。
+
+---
+
+## 2026-08-09 14:45 AEST · Step 09 · Phase 0.5 Controller 调用三态与恢复语义定稿
+
+- **进度:** 作者确认方案 C:新增独立 `ControllerInvocation`,终态使用 `SUCCEEDED / FAILED / INDETERMINATE`;`REQUESTED` 只表示已持久化、尚未终结的调用。`ControllerDecision` 仅在合法选择完成后创建并引用 Invocation,`Attempt` 仅在 Decision 落盘后创建。
+- **状态与成本:** Invocation 单独记录送达事实与 `usage_status = not_incurred | known | unknown`;已知零费用不能替代未知费用。timeout、断线、请求期间取消、崩溃窗口或无明确证据的 5xx 保守记为 `INDETERMINATE`,正式 Gate Run 作废/删失,既不判 `FALSIFIED` 也不重调 LLM 猜测。
+- **失败与重试:** preflight 配置/密钥/endpoint 错误不调用、不重试;普通 429 沿用最多 8 次重试,每日配额耗尽不重试;空文本/坏 JSON/候选集外选择只允许 1 次 repair,所有调用成本照计。repair 再失败形成 Selection Abandonment,不伪造 Decision/Attempt、不回传零 reward;协议不兼容不 repair。存储瞬时失败只重试持久化最多 4 次,不得重调 Provider。
+- **恢复与审计:** 仅有 `REQUESTED` 而无响应记录的 Invocation 恢复为 `INDETERMINATE`;已持久化的成功 Decision 原样复用。记录 logical selection/retry index、delivery/usage status、cost、evidence/prompt/response digest 与结构化 failure;`FailureStage` 预留 `CONTROLLER_SELECTION`。Selection abandonment 的可靠性阈值留给后续议题,不混入 Attempt abandonment 分母。
+- **决策与理由:** 把调用失败直接记成 Attempt 会让 Provider/基础设施故障污染 ASR、reward 和可靠性分母;任何异常都杀死整轮则无法安全吸收一次可修复的格式错误;恢复时重调 LLM 会改写历史与费用。独立 Invocation + 三态能表达“请求也许已处理但我们不知道”,让重试停在真正失败的层,同时保住实验归因与 crash-safe 审计。
+- **否决方案:** 否决 A“全部塞进 Decision/Attempt”,因为生命周期和统计分母错误;否决 B“失败/成功二态 + 一律重试或整轮失败”,因为无法表达未知送达与未知费用,会重复调用或把未知事实硬写成失败。
+- **本次改动:** 将完整规则写入本地 `PRD.md`,并在 `docs/CONCEPTS.md` 增补面试可复述的 Invocation/Decision/Attempt 区分;未写运行时代码。
+- **剩余状态:** 本议题 DONE。下一核心议题为 8 种搜索×记忆组合如何进入 CLI、Run 条件与实验指纹;Phase 0.5 实现仍未开始。
+
+---
+
+## 2026-08-09 14:29 AEST · Step 08 · Phase 0.5 有界相关记忆规则定稿
+
+- **进度:** 作者确认 `bounded-relevant-v1`:全历史只做代码化的每 Strategy 聚合,详细历史按固定相关性规则选择;不传完整历史,不引入 LLM Summary。
+- **确定性聚合:** 每个 Strategy 固定计算 attempted/completed/abandoned/mean/best/latest reward 与 last-used index;reward 只统计 completed,abandoned 不当零分;固定 ID 顺序、三位小数。相同 trace 必须产生相同聚合表。
+- **相关历史:** Controller 取最近完成 2 个 + reward 最高且尽量不同 Strategy 的 2 个;Generator 取最近完成 2 个 + 当前 Strategy 最佳 1 个 + 当前 Strategy 最近 1 个。按 Attempt ID 去重,最多 4 个并按 index 正序渲染;详细内容只来自完整提交的 Attempt,abandoned 仅进入聚合和安全化失败类别。
+- **边界:** 每个详细 Attempt 3000 字符、单条消息 2000 字符、总 memory 12000 字符。超长消息保留头尾并显式标记截断;优先保留结构事实。实际 token/cost 仍以 Provider 上报为准。
+- **协议与审计:** `AttackGenerationRequest.cross_attempt_memory` 显式使用 `GenerationMemory | None`;无记忆条件必须为 `None`。policy version、四个上限、selected refs、digest、截断标记与字符数进入 Run 指纹/审计;恢复重建后必须核对 digest。当前 Attempt 的 `prior_turns` 不属于因子 Y。
+- **决策与理由:** 全量历史会让 Prompt 与成本无界增长;仅最近 K 次会忘记早期有效证据;LLM Summary 会增加费用、随机性和新的实验变量。固定聚合 + 相关证据窗口同时提供全局方向、近期反馈和当前 Strategy 的成功/失败经验。
+- **本次改动:** 将作者要求的计算公式、选择标准、上限和恢复判据完整写入本地 `PRD.md`,本日志保留决策摘要;未写运行时代码。
+- **剩余状态:** 本议题 DONE。下一核心议题为 Controller 决策调用的失败、重试、未知送达、崩溃窗口与恢复状态;Phase 0.5 实现仍未开始。
+
+---
+
+## 2026-08-09 14:04 AEST · Step 07 · Phase 0.5 ControllerEvidence 可见性定稿
+
+- **进度:** 作者确认采用独立、受控的 `ControllerEvidenceProjector`。LLM Controller 不接收原始 `Attempt`、`Trace` 或 `Policy`,只接收专门的安全证据类型。
+- **允许视图:** `TargetBrief`、候选策略公开信息、历史 attacker/target 对话、工具名称与参数、工具成功/拒绝/错误状态、模拟副作用种类、Attempt 状态、停止原因和标量 reward。Target 若在真实回复中泄露 canary,该回复仍是可观察证据,不事后删除。
+- **禁止视图:** Policy、预埋 canary 真值、system-prompt fingerprint、Signal tier/evidence、Finding、Scorer 规则/阈值、策略预测强弱、私有工具结果内容与 side-effect payload。
+- **决策与理由:** 原始 trace 同时装有攻击者证据和检测器 ground truth,整体传入等于开卷;只给对话文本又会丢掉 instrumented 靶场已有的确定性工具证据。独立投影把可见性规则集中在一个 module,并在类型层阻止误传,而非依赖 prompt 自觉脱敏。
+- **本次改动:** 更新本日志与本地 `PRD.md`;未写运行时代码。
+- **剩余状态:** 本议题 DONE。下一核心议题为 memory-enabled Generator 的跨-attempt 历史保存、截断与摘要规则;Phase 0.5 实现仍未开始。
+
+---
+
+## 2026-08-09 13:59 AEST · Step 06 · Phase 0.5 Controller seam 定稿
+
+- **进度:** 作者确认采用统一异步 `ControllerDriver` interface。现有 Static / Random / Thompson 通过 `SyncControllerAdapter` 接入,新的 LLM 策略选择器通过 `LLMControllerAdapter` 接入;Orchestrator 只面对统一 Driver,旧 `SearchController` 的选择、学习、RNG 与恢复行为保持不变。
+- **决策与理由:** 比较过三种方案:整体异步改造旧 `SearchController` 会扩大冻结 Phase 0 的回归面;在 Orchestrator 内按 controller 类型分支会把异步、成本、错误和恢复逻辑散开;Driver + 两类 Adapter 在不改旧算法的前提下把远程 LLM 复杂度集中在一个真实 seam,兼顾 depth、locality 与 Phase 0 回归安全。
+- **协议约束:** LLM 选择成本必须计入 Run 总预算并分栏审计;选择结果与成本必须先落盘再执行 Target;恢复只读取已持久化决定,不得重新调用 LLM;非法 LLM 输出不得静默退回 Static / Random,否则实验条件被污染。
+- **本次改动:** 更新本日志与本地 `PRD.md` 的 Phase 0.5 实现范围。只冻结设计,尚未实现 Driver 或 Adapter。
+- **剩余状态:** 本议题 DONE。下一核心议题为 `ControllerEvidence` 的允许视图与禁止字段;Phase 0.5 实现仍未开始。
+
+---
+
+## 2026-08-07 · Step 05 · 把因子边界、agent 判据与陷阱组合钉死
+
+承接 Step 04。作者追问"策略到底由谁选、四个单元是不是都能自由组合",
+暴露出 Step 04 的表还有三处没写死。
+
+### ① 因子 Y 的边界 —— 不写死两个因子就不正交
+
+Y **只**管 Attack Generator 能不能看见**过往 attempt 的 trace**。
+
+**LLM 选择器自身永远能看见本 run 的决策历史** —— 那是它区别于随机选择的全部依据,
+拿掉就退化成瞎猜。所以"选择器的记忆"是 `X=LLM` 的**固有属性,不是可调因子**。
+
+**这条区分救回了单元 ④:** 选择器读历史来分配、话术每次从 seed 重写 ——
+即"一个更聪明的 bandit",干净地隔离了分配那一层。Step 04 把 ④ 写成"可选",
+低估了它 —— 它是唯一能单独测量**分配**效果的单元。
+
+### ② 哪一种情形算 agent
+
+判据一条:**LLM 是否决定控制流。**
+
+| 单元 | X | Y | 是 agent 吗 |
+|---|---|---|---|
+| ① | Static | 无记忆 | ❌ |
+| ② | Static | memory | ❌ **模型决定的是内容,不是下一步** |
+| ③ | **LLM** | memory | ✅ 完整形态 |
+| ④ | **LLM** | 无记忆 | ✅ 退化形态(只决定做什么) |
+
+② 最容易被误判:它让 LLM 带着历史写话术,看起来很"智能",
+但**控制流仍在算法手里 —— 带记忆的生成器塞进 workflow,仍然是 workflow**。
+
+对外表述:✅「`--search llm` 模式下,搜索决策位由一个 agent 承担」;
+❌「RedCell 是一个 agent」—— 它是**内含 agent 组件的测量仪器**。
+且这不改变 §19.5 的结论:自建靶场上 `X=LLM` 永远只是选项之一,
+**只有黑盒场景让它成为唯一可行方案 —— 所以"最终是否确定为 agent"取决于 §19.5,不是本阶段。**
+
+### ③ 两个"默认"管的不是同一件事
+
+Step 04 同时写了「`SUPPORTED` → LLM 转正为默认」与「static 转正为产品默认」,**可以被读成打架**。澄清:
+
+| 问题 | 答案 |
+|---|---|
+| `redcell run` 不带参数 | **`static` 彻底扫描** —— 安全工具的开箱行为应当是完整,不是快;**漏测比慢危险** |
+| `--search adaptive` 槽位里坐谁 | **Gate 赢家** |
+
+### ④ 组合是 8 不是 4,其中一个是陷阱
+
+选择器那位已有三个算法实现,所以 `{static, random, bandit, llm} × {无记忆, memory}` = **8**。全部允许运行,但分三档标注。
+
+⚠️ **`bandit` × `memory-enabled` 是陷阱组合:** 正是 2026-07-26 决定无记忆变异时警告过的情形 ——
+bandit 把预算集中到少数策略,那几个策略**同时也获得更多次精炼**,赢了也分不清是
+(a) 分配得好还是 (b) 被精炼得更多。**跑得动,可能找到最多漏洞,但不能用它论证"自适应有效"。**
+落地:不阻止运行,打运行时警告 + 报告标注"不可用于算法比较"。
+
+这也解释了实验为什么是 ②vs① 和 ③vs②、而不是 ③vs①:**每次只让一个因子变。**
+
+- **本次改动:** `PRD.md`(本地,不入库)Phase 0.5 新增「哪一种情形算 agent」「可组合的模式矩阵」两小节 + 因子 Y 边界与双默认澄清;`README.md` Phase 0.5 条目改准(原文只描述了单元 ③)。
+- **剩余状态:** 设计层面无已知歧义。两项 `OPEN` 不变(最小实际效应阈值待冻结;八周排期待对齐)。
+
+---
+
+## 2026-08-07 · Step 04 · ⚠️ 更正 Step 03:决策变量没定死,而且"最干净的实验"把 agent 弄丢了
+
+Step 03 已合并(PR #12),不改历史,在此更正。
+
+### 错在哪
+
+Step 03 与 PRD 初稿同时写了两句指向不同决策变量的话:
+
+> 把自适应从**策略选择层**下移到**消息生成层**  ← 说的是"策略照选,LLM 只写消息"
+> 且下一步**不受策略库枚举限制**              ← 说的是"连策略库一起废掉"
+
+**两句不能同时成立,而 Gate 需要决策变量是唯一的** —— 否则判出来也说不清赢的是什么。
+
+**作者追问时暴露了第二个、更严重的问题:** 若按"策略照选、LLM 只写消息"落地,
+**那不是 agent** —— Static 决定跑哪个策略,控制流仍在算法手里,LLM 只决定内容。
+按 Step 03 决策 ⑤ 自己定的判据(LLM 是否决定控制流),这个方案**把两个动机里的第二个悄悄丢了**,
+换来的是实验更干净。**这个取舍没有被摆出来讨论过,是我单方面做掉的。**
+
+### 更正:不是三选一,是两个独立因子
+
+| 单元 | 策略由谁选 | 消息写手有记忆吗 | 作用 |
+|---|---|---|---|
+| ① | Static | ❌ | Phase 0 已有,零成本复用 |
+| ② | Static | ✅ | 隔离**消息级记忆**的效果 |
+| ③ | **LLM** | ✅ | **完整 agentic controller —— 唯一构成 agent 的单元** |
+| ④ | LLM | ❌ | 可选,单独隔离**控制流**的效果 |
+
+**② vs ①** 回答核心假设;**③ vs ②** 回答"选择权也交给 LLM 是否有额外收益"。
+①②③ 必跑。equal-cost 口径下各单元自动公平。
+
+**两个动机因此都被满足:实验保持单变量可归因,agent 也真的存在并被独立测量。**
+
+### 明确否掉:LLM 完全脱离策略库自由生成
+
+1. **动作空间不同,比较无法归因** —— 那比的是动作空间不是算法,赢了也说不清赢在哪;
+2. **coverage 算不出来** —— 它是本阶段标 ⭐ 的首要保护性指标,而计算它**需要策略标签**;
+   脱离策略库只能事后用 LLM 分类,**等于把 Phase 0 绕开的 judge 噪声重新请回来**。
+
+### 顺带确立:Static 从"基线"转正为产品默认
+
+Phase 0 Gate 的结论是 adaptive **没赢**,不是 static 输了。据此分开研究目标与产品目标:
+`--search static` = 彻底扫描(上线前用,七策略走满,覆盖面确定);
+`--search adaptive` = 快速分诊(预算紧时用)。**这有实验证据背书,不是妥协。**
+
+顺带解决了一个设计张力:因子取 Static 时七个策略照样全走,**实验设计与产品默认模式天然一致**。
+
+### 教训
+
+**"最干净的实验设计"和"作者要的东西"可以指向不同方案,而前者更容易被我当成唯一正确答案。**
+Step 03 决策 ⑤ 刚刚把两个动机显式拆开,下一步我自己就又把其中一个优化掉了 ——
+**拆开动机不够,每次做设计取舍时都要回头对一遍。**
+
+- **本次改动:** `PRD.md`(本地,不入库)Phase 0.5 新增「实验设计:两个因子」与「产品模式」两小节。
+- **剩余状态:** 决策变量已钉死。原有两项 `OPEN` 不变(最小实际效应阈值待冻结;八周排期待对齐)。
+
+---
+
 ## 2026-08-07 · Step 03 · Phase 0.5 定案:自适应换层,以及把"想要 agent"与"证明 agent 更好"拆开
 
 > ⚠️ **本条记录的决策写在 `PRD.md`,而 PRD 被 `.gitignore` 覆盖(第 7 行),不进远端。**
@@ -673,6 +986,7 @@ __all__ = [
 ```python
 if algorithm == "thompson":
     import random as _random
+
     return ThompsonSamplingController(_random.Random(controller_seed_for(seed)))
 ```
 
