@@ -7,6 +7,14 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 20:05 AEST · Step 11 · Phase 0.5 CLI 正交条件与独立 Controller 配置
+
+- **进度:** `redcell run` 新增 `--search static|random|thompson|llm` 与 `--cross-attempt-memory off|bounded-relevant-v1`。新参数写入强类型 `ExperimentConditions`、冻结策略目录和完整指纹；旧 `--algorithm` 仍兼容，但与 `--search` 同时提供时立即拒绝。Controller 新增独立 `REDCELL_CONTROLLER_*` settings / loader。
+- **决策与理由:** Controller 是稳定的逻辑角色、Provider 是可替换配置；因此 `--search llm` 不能静默复用 Target 或 Gemini attacker。它要求在线模式、独立 Controller 配置和总 Token 上限，保证 Controller 消耗可以计入同一预算。memory on/off 是独立因子，不能编码为一个组合 mode 字符串。
+- **安全边界:** 运行快照只保存 provider/endpoint/model 等非秘密配置；凭据继续只留在环境变量。当前 CLI 在 `search=llm` 时构造独立 adapter 并随既有资源一同关闭。
+- **验证证据:** `pytest tests/test_cli.py tests/test_orchestrator.py -p no:cacheprovider` 为 **40 passed**；Ruff 通过。
+- **剩余状态:** DONE（CLI 条件与 Controller 配置）；TODO 为 resume 对新 Controller 条件的完整构造/比较、contract controls、Selection Abandonment、Validator、Gate runner 与报告聚合。
+
 ### 2026-08-09 19:45 AEST · Step 10 · LLM Controller 编排路径与 Invocation→Decision→Attempt 顺序
 
 - **进度:** `RunOrchestrator` 现支持二选一的同步 `SearchController` 或异步 `ControllerDriver`。LLM 路径先构造 ControllerEvidence、执行并持久化 Invocation、计入 Controller Token，再创建统一 `ControllerDecision` 并进入既有 Attempt 提交状态机；本地 Static/Random/Thompson 路径保持原有 RNG、update/abandon/restore 行为。

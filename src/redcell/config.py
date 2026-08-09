@@ -139,6 +139,14 @@ class AttackerSettings(ProviderSettings):
     temperature: float = 1.0
 
 
+class ControllerSettings(ProviderSettings):
+    """独立的策略选择模型位；不能静默借用 target 或 attacker 配置。"""
+
+    model_config = _ENV | SettingsConfigDict(env_prefix="REDCELL_CONTROLLER_")
+    temperature: float = 0.0
+    max_tokens: int = 512
+
+
 class ProviderPair:
     """target 与 attacker 两个已建好的 provider,以及关闭它们的入口。"""
 
@@ -172,6 +180,12 @@ def load_attacker() -> OpenAICompatibleProvider:
     那会把一道"检查攻击方"的诊断,错误地卡在一个与它无关的前置条件上。
     """
     return AttackerSettings().build(name="attacker")
+
+
+def load_controller() -> tuple[OpenAICompatibleProvider, ProviderRunConfiguration]:
+    """构造 Controller 的独立连接与不含凭据的运行快照。"""
+    settings = ControllerSettings()
+    return settings.build(name="controller"), settings.run_configuration()
 
 
 def load_providers() -> ProviderPair:

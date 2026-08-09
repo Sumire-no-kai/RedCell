@@ -28,8 +28,10 @@ from redcell.config import (
     ProviderConfigError,
     ProviderPair,
     load_attacker,
+    load_controller,
     load_providers,
 )
+from redcell.controller import LLMControllerAdapter
 from redcell.controls import (
     ControlsReport,
     controls_conditions,
@@ -50,12 +52,18 @@ from redcell.orchestrator import (
 )
 from redcell.protocols.run import (
     ArenaRunConfiguration,
+    ControllerRunConfiguration,
     ExperimentConditions,
+    GenerationMemoryConfiguration,
+    GenerationMemoryLimits,
+    GenerationMemoryMode,
     ProviderRunConfiguration,
     Run,
     RunStatus,
+    SearchConfiguration,
+    SearchSelector,
 )
-from redcell.protocols.strategy import select_applicable
+from redcell.protocols.strategy import StrategyCatalogue, select_applicable
 from redcell.randomness import controller_seed_for
 from redcell.report import ReportData, write_report
 from redcell.scoring.level1 import Level1Scorer
@@ -208,7 +216,15 @@ def _experiment_conditions(
 
 @app.command()
 def run(
-    algorithm: Annotated[str, typer.Option(help="搜索算法:static / random / thompson")] = "static",
+    algorithm: Annotated[
+        str | None, typer.Option(help="旧参数：static / random / thompson；与 --search 不能并用")
+    ] = None,
+    search: Annotated[
+        str | None, typer.Option(help="Phase 0.5 搜索方式：static / random / thompson / llm")
+    ] = None,
+    cross_attempt_memory: Annotated[
+        str, typer.Option(help="跨 Attempt Generator memory：off / bounded-relevant-v1")
+    ] = "off",
     budget: Annotated[int, typer.Option(help="最大 attempt 数")] = 20,
     seed: Annotated[int, typer.Option(help="实验种子;同一 seed 结果可复现")] = 0,
     actor: Annotated[str, typer.Option(help="攻击时扮演的身份")] = "customer_a",
@@ -258,6 +274,17 @@ def run(
     默认离线(脚本化 provider),验证的是**流水线**而非靶场的真实安全性。
     加 `--online` 才接入真实模型 —— 那时才会产出可用于校准的结论。
     """
+    if algorithm is not None and search is not None:
+        raise typer.BadParameter("--algorithm 与 --search 不能同时提供")
+    selected_search = search or algorithm or "static"
+    try:
+        selector = SearchSelector(selected_search)
+        memory_mode = GenerationMemoryMode(cross_attempt_memory)
+    except ValueError as exc:
+        raise typer.BadParameter("非法 search 或 cross-attempt-memory 值") from exc
+    if selector is SearchSelector.LLM and max_tokens is None:
+        raise typer.BadParameter("--search llm 必须设置 --max-tokens，Controller 需要总 Token 预算")
+
     limits = BudgetLimits(
         max_attempts=budget,
         max_total_tokens=max_tokens,
@@ -289,6 +316,17 @@ def run(
         enforce_permissions=enforce_permissions,
         enforce_confirmation=enforce_confirmation,
     )
+    controller_provider = None
+    controller_configuration = None
+    if selector is SearchSelector.LLM:
+        if not online:
+            raise typer.BadParameter("--search llm 需要 --online 与独立 REDCELL_CONTROLLER_* 配置")
+        try:
+            controller_provider, controller_configuration = load_controller()
+        except ProviderConfigError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+
+    catalogue = StrategyCatalogue(version="phase0.5-v1", strategies=strategies).condition_summary()
     conditions = _experiment_conditions(
         online=online,
         providers=providers,
@@ -297,12 +335,42 @@ def run(
         enforce_permissions=enforce_permissions,
         enforce_confirmation=enforce_confirmation,
     )
+    conditions = conditions.model_copy(
+        update={
+            "strategy_catalogue": catalogue,
+            "search": SearchConfiguration(selector=selector),
+            "generation_memory": GenerationMemoryConfiguration(
+                mode=memory_mode,
+                policy_version=(
+                    "bounded-relevant-v1" if memory_mode is not GenerationMemoryMode.OFF else None
+                ),
+                limits=(
+                    GenerationMemoryLimits()
+                    if memory_mode is not GenerationMemoryMode.OFF
+                    else None
+                ),
+            ),
+            "controller": (
+                ControllerRunConfiguration(
+                    provider=controller_configuration,
+                    connection_id=f"controller:{controller_configuration.provider}",
+                    connection_fingerprint=controller_configuration.base_url,
+                    prompt_version="controller-prompt-v1",
+                    evidence_policy_version="controller-evidence-v1",
+                    thinking_disabled=True,
+                )
+                if controller_configuration is not None
+                else None
+            ),
+        }
+    )
+    conditions.require_phase_0_5()
 
     run_record = Run(
         target_name=policy.target_name,
         policy_version=policy.version,
         adapter_type=adapter.adapter_type,
-        algorithm=algorithm,
+        algorithm=selector.value,
         limits=limits,
         seed=seed,
         target_model=conditions.target.model,
@@ -315,16 +383,32 @@ def run(
         notes=None if online else OFFLINE_NOTICE,
     )
 
-    orchestrator = RunOrchestrator(
-        executor=ConversationExecutor(
+    orchestrator_args = {
+        "executor": ConversationExecutor(
             adapter=adapter,
             generator=generator,
             scorer=Level1Scorer(policy),
             policy=policy,
         ),
-        controller=_controller(algorithm, seed),
-        store=(store := RunStore(db)),
-    )
+        "store": (store := RunStore(db)),
+    }
+    if selector is SearchSelector.LLM:
+        assert controller_provider is not None and controller_configuration is not None
+        orchestrator = RunOrchestrator(
+            **orchestrator_args,
+            driver=LLMControllerAdapter(
+                provider=controller_provider,
+                run_id=run_record.id,
+                prompt_version="controller-prompt-v1",
+                model=controller_configuration.model,
+                temperature=controller_configuration.temperature,
+                max_tokens=controller_configuration.max_tokens,
+            ),
+        )
+    else:
+        orchestrator = RunOrchestrator(
+            **orchestrator_args, controller=_controller(selector.value, seed)
+        )
 
     if not online:
         typer.secho(f"⚠️  {OFFLINE_NOTICE}", fg=typer.colors.YELLOW, err=True)
@@ -340,6 +424,8 @@ def run(
         finally:
             if providers is not None:
                 await providers.aclose()
+            if controller_provider is not None:
+                await controller_provider.aclose()
 
     try:
         result = asyncio.run(_execute_and_close())
