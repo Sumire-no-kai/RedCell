@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 21:22 AEST · Step 24 · 从 SQLite 重建并导出 Gate 报告
+
+- **进度:** 新增 `GateReport` 与 `redcell gate-report`。命令只读取 SQLite 中的 Run/Event/Finding，重建前缀和成对统计，并输出 JSON；报告显式保存回归环境指纹集合、主/备用/无效 block 以及主比较。空库或条件不完整时显示 `NOT SUPPORTED / INCOMPLETE`，不会伪造正向结论。
+- **决策与理由:** Gate report 必须可从持久化事实重建，而非依赖运行时内存或手工表格；同时把环境一致性作为结论前提，防止不同 Target/Attacker 条件被错误合并。
+- **验证证据:** `pytest tests/test_gate_report.py tests/test_cli.py -p no:cacheprovider` 为 **26 passed**；新增 CLI 空库导出测试确认 JSON 写入且不声称支持。Ruff/Black 通过。
+- **剩余状态:** DONE（Gate 报告/CLI 基础）；TODO 为完整事件 fixture、保护线和真实 Validator 路径 fixture，再进行全量审计。
+
 ### 2026-08-09 21:08 AEST · Step 23 · 预注册备用 seed 的顺序处理
 
 - **进度:** Gate 分析现在将完整、有效 paired block 按 seed 顺序取前 12 个作为主分析样本，其余完整 block 明确标为 reserve，不与主分析混合；不完整/失效 block 仍单列为 invalid。

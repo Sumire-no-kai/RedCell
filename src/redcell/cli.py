@@ -40,6 +40,7 @@ from redcell.controls import (
 )
 from redcell.executor import ConversationExecutor
 from redcell.failures import FailureStage
+from redcell.gate_report import build_gate_report
 from redcell.generation import AttackGenerator, TemplateAttackGenerator
 from redcell.llm.base import LLMProvider
 from redcell.llm.scripted import ScriptedProvider
@@ -622,6 +623,20 @@ def report(
     paths = _emit(stored, attempts, findings, out)
     _summarise(stored, findings, paths)
     raise typer.Exit(ExitCode.FINDINGS if findings else ExitCode.CLEAN)
+
+
+@app.command(name="gate-report")
+def gate_report(
+    db: Annotated[str, typer.Option(help="SQLite 连接串")] = DEFAULT_URL,
+    out: Annotated[Path, typer.Option(help="Gate JSON 输出路径")] = Path("runs/gate-report.json"),
+) -> None:
+    """从已落盘的 Run/Event/Finding 重建冻结的 Phase 0.5 Gate 分析。"""
+    with RunStore(db) as store:
+        result = build_gate_report(store)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+    typer.echo(f"Gate report: {out}")
+    typer.echo("SUPPORTED" if result.supported else "NOT SUPPORTED / INCOMPLETE")
 
 
 @app.command(name="controls")

@@ -59,6 +59,15 @@ def test_run_completes_end_to_end_and_writes_both_reports(workspace) -> None:
     assert (run_dirs[0] / "report.html").exists()
 
 
+def test_gate_report_exports_incomplete_state_for_empty_store(workspace) -> None:
+    result = runner.invoke(app, ["gate-report", "--db", _db(workspace), "--out", "gate.json"])
+
+    assert result.exit_code == 0, result.output
+    assert "NOT SUPPORTED / INCOMPLETE" in result.output
+    payload = json.loads((workspace / "gate.json").read_text(encoding="utf-8"))
+    assert payload["analysis"]["valid_seeds"] == []
+
+
 def test_offline_run_is_labelled_as_not_a_security_assessment(workspace) -> None:
     """0 Finding 的报告最容易被读成"扫过了,是安全的"。
 
