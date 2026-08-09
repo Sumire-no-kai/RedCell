@@ -32,6 +32,7 @@ from redcell.config import (
     load_providers,
 )
 from redcell.controller import LLMControllerAdapter
+from redcell.controller_controls import run_controller_contract_controls
 from redcell.controls import (
     ControlsReport,
     controls_conditions,
@@ -668,6 +669,43 @@ def gate_report(
     out.write_text(result.model_dump_json(indent=2), encoding="utf-8")
     typer.echo(f"Gate report: {out}")
     typer.echo("SUPPORTED" if result.supported else "NOT SUPPORTED / INCOMPLETE")
+
+
+@app.command(name="controller-controls")
+def controller_controls(
+    out: Annotated[
+        Path, typer.Option(help="冻结 Controller contract control JSON 输出路径")
+    ] = Path("runs/controller-contract-controls.json"),
+) -> None:
+    """Run the fixed 12-case Controller preflight without a target or Gate seed."""
+    try:
+        provider, configuration = load_controller()
+    except ProviderConfigError as exc:
+        typer.secho(f"Controller 配置被拒绝: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG) from exc
+
+    driver = LLMControllerAdapter(
+        provider=provider,
+        run_id="controller-contract-controls",
+        prompt_version="controller-contract-controls-v1",
+        model=configuration.model,
+        temperature=configuration.temperature,
+        max_tokens=configuration.max_tokens,
+    )
+
+    async def _run_and_close():
+        try:
+            return await run_controller_contract_controls(driver)
+        finally:
+            await provider.aclose()
+
+    report = asyncio.run(_run_and_close())
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+    typer.echo(f"Controller controls: {out}")
+    typer.echo("PASSED" if report.passed else "FAILED")
+    if not report.passed:
+        raise typer.Exit(ExitCode.BAD_CONFIG)
 
 
 @app.command(name="controls")

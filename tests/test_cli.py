@@ -41,6 +41,34 @@ def _db(path) -> str:
     return f"sqlite:///{path / 'cli.db'}"
 
 
+def test_controller_controls_writes_the_fixed_preflight_report(workspace, monkeypatch) -> None:
+    provider = ScriptedProvider(['{"selected_strategy_id":"direct"}'] * 12, tokens_per_call=(3, 1))
+
+    async def aclose() -> None:
+        return None
+
+    monkeypatch.setattr(provider, "aclose", aclose, raising=False)
+    configuration = ProviderRunConfiguration(
+        provider="scripted",
+        base_url="http://local.test",
+        model="scripted",
+        temperature=0.0,
+        max_tokens=64,
+        rpm=0.0,
+        max_concurrency=1,
+        input_usd_per_mtok=0.0,
+        output_usd_per_mtok=0.0,
+    )
+    monkeypatch.setattr("redcell.cli.load_controller", lambda: (provider, configuration))
+
+    result = runner.invoke(app, ["controller-controls", "--out", "runs/controller-controls.json"])
+
+    assert result.exit_code == 0, result.output
+    report = json.loads((workspace / "runs" / "controller-controls.json").read_text())
+    assert len(report["outcomes"]) == 12
+    assert all(outcome["passed"] and outcome["known_usage"] for outcome in report["outcomes"])
+
+
 # ── run ──────────────────────────────────────────────────────────────────
 
 

@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 22:52 AEST · Step 31 · Controller contract controls CLI
+
+- **进度:** 新增 `redcell controller-controls`。该命令只载入独立 `REDCELL_CONTROLLER_*` 配置，运行冻结的 12 条 Controller contract 输入，写出 JSON，并以 12/12 成功、至少 11 条首轮成功、12 条 usage 已知的既有阈值返回结果。
+- **决策与理由:** Controller preflight 的目的只是确认候选模型能遵守小型候选集和 JSON 契约；它不得调用 Target、Generator、Finding 流程或 Gate seed，否则 preflight 本身会污染正式矩阵和预算。
+- **验证证据:** `tests/test_controller_controls.py tests/test_cli.py` 为 **28 passed**；新增 CLI 集成测试用已知 usage 的 scripted provider 验证 12 条输出写盘。Ruff/Black 与 `git diff --check` 通过。
+- **剩余状态:** DONE（Controller contract preflight 可执行）；TODO 为其真实候选运行及 Gate 的其余保护性分析。
+
 ### 2026-08-09 22:39 AEST · Step 30 · Gate controls 产物完整性
 
 - **进度:** Gate 现在要求 controls 有确切的 3 条 positive 与 10 条 negative 结果，避免空列表的语言默认值被误判为通过。为 `ControlsReport` 添加报告加载入口，导入时丢弃可由原始 negative outcomes 重算的 `utility` 计算字段；Gate CLI 可直接读取自身导出的 controls JSON。
