@@ -105,6 +105,28 @@ class ControllerDecisionRow(Base):
     )
 
 
+class ControllerInvocationRow(Base):
+    __tablename__ = "controller_invocations"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    run_id: Mapped[str] = mapped_column(String, ForeignKey("runs.id"), index=True)
+    logical_selection_index: Mapped[int] = mapped_column(Integer, index=True)
+    retry_index: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String, index=True)
+    usage_status: Mapped[str] = mapped_column(String, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "logical_selection_index",
+            "retry_index",
+            name="uq_invocation_run_selection_retry",
+        ),
+    )
+
+
 class RunEventRow(Base):
     __tablename__ = "run_events"
 

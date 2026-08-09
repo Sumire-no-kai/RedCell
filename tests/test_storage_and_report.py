@@ -5,6 +5,11 @@ import json
 import pytest
 
 from redcell.budget import BudgetLimit, BudgetLimits
+from redcell.controller import (
+    ControllerInvocation,
+    ControllerInvocationStatus,
+    UsageStatus,
+)
 from redcell.protocols import (
     AdapterOutput,
     Evidence,
@@ -149,6 +154,27 @@ def test_save_is_idempotent(store: RunStore, run: Run) -> None:
     store.save_run(run)
     store.save_run(run.model_copy(update={"status": RunStatus.COMPLETED}))
     assert len(store.list_runs()) == 1
+
+
+def test_controller_invocation_round_trips_without_becoming_a_decision(
+    store: RunStore, run: Run
+) -> None:
+    store.save_run(run)
+    invocation = ControllerInvocation(
+        run_id=run.id,
+        logical_selection_index=0,
+        retry_index=0,
+        status=ControllerInvocationStatus.FAILED,
+        usage_status=UsageStatus.KNOWN,
+        evidence_digest="sha256:evidence",
+        prompt_version="controller-prompt-v1",
+        response_digest="sha256:response",
+        failure={"code": "invalid_controller_choice"},
+    )
+    store.save_controller_invocation(invocation)
+
+    assert store.controller_invocations_for(run.id) == [invocation]
+    assert store.decisions_for(run.id) == []
 
 
 def _completed_decision(strategy_id: str = "s1") -> ControllerDecision:

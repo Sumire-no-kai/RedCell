@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 18:24 AEST · Step 03 · Controller Invocation 独立持久化
+
+- **进度:** SQLite storage 新增 `controller_invocations` 表及 `RunStore` 的保存/有序查询入口；`ControllerDecision` 增加可选 `invocation_id`，保留本地同步 Controller 的 `None` 兼容语义。补充持久化测试，确认失败 Invocation 只作为调用事实保存，不会被伪造成 Decision 或 Attempt。
+- **决策与理由:** “请求是否送达/是否产生费用”“是否得到合法策略选择”“是否执行目标攻击”是三件不同事实。将 Invocation 单独落盘让 Orchestrator 后续能保守处理未知送达、只重试持久化而不重调 LLM，并避免把 provider 格式问题混进攻击成功率或 reward。
+- **验证证据:** `pytest tests/test_storage_and_report.py tests/test_search.py -p no:cacheprovider` 为 **42 passed**；相关 Ruff 检查通过。
+- **剩余状态:** DONE（协议与独立存储）；TODO 为将 Invocation 与 Decision 的原子事务接入 LLM Driver 路径，并实现受控 evidence/memory 投影、统一 Token 预算与 Orchestrator 接线。
+
 ### 2026-08-09 18:16 AEST · Step 02 · 统一异步 Controller Driver 与严格 JSON 选择 Adapter
 
 - **进度:** 新增 `ControllerDriver` seam、`SyncControllerAdapter` 和 `LLMControllerAdapter`。前者将既有 Static/Random/Thompson controller 原样包装为 async；后者只接受冻结候选集内的 `selected_strategy_id`，带有有界 rationale/evidence refs，解析失败或候选集外选择时只发起一次同证据 repair。新增独立 `ControllerInvocation` 三态模型与 usage 状态，调用不再与 Decision 或 Attempt 混为一条记录。
