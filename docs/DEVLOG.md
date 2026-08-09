@@ -7,6 +7,41 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 22:52 AEST · Step 44 · 修正基线指纹表述,并把历史形状锁进测试
+
+- **进度:** 合并后复查发现 `docs/PHASE0_BASELINE.md` 断言的「Phase 0 原样 replay 必须
+  精确复现」在当前 master 上**已经不成立**。用 `redcell.db` 那 18 个 run 的原始快照重建
+  再算,得到 `133a1db456cfb447fec2cb5b99d1aef556fc30abec6ab1acbdb34e3da48434d5`,
+  而非 `a0f8d19098c605b1a373b5e95557252f2cb6a6210f6fc1d59629626c9828b924`。
+- **根因:** Phase 0.5 引入了几个**恒定出现**(非 `None` 默认值)的字段,`exclude_none`
+  挡不住它们:`scorer_version`、`finding_signature_version`、`attack_path_signature_version`,
+  以及嵌在两个 provider 配置里的 `cached_input_usd_per_mtok`。前三项在 Step 35 记过,
+  第四项此前没有被记为会改变历史条件形状的字段。
+- **决策与理由:改文档,不改 schema。** 让判定语义版本恒定在场是 fail-closed 的正确
+  设计:scorer 或 signature 语义一变就该换指纹,否则改版后还能假装是同一套条件。
+  为了迁就一个历史哈希而把这几个字段改成可缺省,是拿真实的防线去换一句话的字面成立。
+  因此改为如实写明:`a0f8d19…` 是**已落盘的历史标识**,由 `phase0-baseline` tag 那版
+  代码算出;当前代码不复算它,并列出全部差异字段与实测的新值。
+- **仍然成立的部分已写进文档:** 18 行存储记录携带的 `experiment_fingerprint` 都是
+  `a0f8d19…`;`analyze_ablation.py` 比较的是**已落盘的值**而非重算值,旧矩阵分析不受
+  影响;`resume` 只作用于 RUNNING run,与这批 COMPLETED 数据无关。
+- **机器锁:** 新增两条测试。一条断言该快照在当前 schema 下**只**多出显式登记的字段;
+  另一条断言剥掉这些字段后仍精确哈希回 `a0f8d19…`,即历史条件的其余部分一个字节都没漂移。
+  登记表用**完整路径**而不是顶层字段名 —— 第一版只查顶层 key,`cached_input_usd_per_mtok`
+  正是从那个缝里溜过去的,是第二条测试把它抓出来的。
+- **顺带发现,未改动:** `cached_input_usd_per_mtok` 默认 `0.0`。项目对 token 用量严格
+  区分「已知 0」与「未知」(`usage_known`、`0 ≠ unknown`),但这里的**价格**缺失被写成
+  0.0,会让 `estimated_cost` 静默少算,而 PRD ③ 要求价格缺失时美元显示 `N/A`。属于定价
+  语义决定且改动会影响指纹,留给作者定,本步骤不擅自改。
+- **验证证据:** 新增测试先按预期变红(抓出未登记的 `cached_input_usd_per_mtok`),补齐
+  路径后 `tests/test_phase_0_5_conditions.py` 为 **8 passed**;全量 **565 passed**;
+  `ruff check .` 通过,`ruff format --check .` 为 110 files already formatted,
+  `black --check src tests` 为 101 files unchanged,`git diff --check` 通过。
+- **剩余状态:** DONE(表述修正与机器锁)。PRD 中两项研究口径(攻击路径的策略铺开偏差、
+  机制主效应的对照均值定义)仍为 `OPEN`,正式 Gate 不得起跑。
+
+---
+
 ### 2026-08-09 22:20 AEST · Step 43 · PR #19 合并落地主干
 
 - **进度:** 通过仓库认证权限将 PR [#19](https://github.com/Sumire-no-kai/RedCell/pull/19) 以 merge commit 合入受保护的 `master`；PR 状态为 `MERGED`，合并提交为 `6e5bff3`。
