@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 21:55 AEST · Step 27 · Gate 保护线的否决语义
+
+- **进度:** GateReport 现在把 Attempt abandonment、Selection abandonment 和 LLM Controller invocation/decision usage 审计作为保护失败记录；没有任何 Phase 0.5 prefix 时也显式记录失败。`SUPPORTED` 需要环境一致、主比较通过且保护失败列表为空。
+- **决策与理由:** 主指标不能覆盖运行可靠性或审计缺口。尤其 LLM Decision 没有对应已知 usage 的 Invocation 时，即使路径计数很好，也不能证明等 Token 比较成立。
+- **验证证据:** `pytest tests/test_gate_report.py -p no:cacheprovider` 为 **2 passed**；空库报告明确包含 `no_phase_0_5_prefixes` 而非产生模糊的成功状态。Ruff/Black 通过。
+- **剩余状态:** PARTIAL（运行/审计保护线）；TODO 为外部 controls、utility、coverage 与复现率阈值接入 GateReport，及全量审计。
+
 ### 2026-08-09 21:45 AEST · Step 26 · Validator 正向重放链路 fixture
 
 - **进度:** 为 replay Validator 增加 Support Agent 靶场的正向 fixture：先生成已记录的一轮 canary Finding，再只用 Attempt 中的 attacker 文本进行两次重放并确认同一 attack-path 均被重新检测到。

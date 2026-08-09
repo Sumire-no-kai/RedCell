@@ -16,6 +16,7 @@ def test_empty_store_is_not_a_supported_gate(tmp_path) -> None:
 
     assert report.prefixes == []
     assert report.analysis.valid_seeds == []
+    assert report.protection_failures == ["no_phase_0_5_prefixes"]
     assert not report.supported
 
 
