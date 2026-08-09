@@ -8,7 +8,10 @@ from enum import StrEnum
 
 from pydantic import Field
 
+from redcell.finding_identity import attack_path_signature
 from redcell.protocols.common import RedCellModel
+from redcell.protocols.finding import Finding
+from redcell.protocols.run import Run, RunEvent, RunEventType
 
 
 class GateCondition(StrEnum):
@@ -97,6 +100,64 @@ def analyse_phase_0_5(
         invalid_seeds=invalid,
         comparisons=comparisons,
     )
+
+
+def token_prefixes_from_events(
+    *,
+    run: Run,
+    events: list[RunEvent],
+    findings: list[Finding],
+    checkpoints: tuple[int, ...] = (64000, 160000, 320000),
+) -> list[TokenPrefix]:
+    """Project immutable committed-event prefixes; later findings never backfill."""
+    if run.experiment_conditions is None or run.experiment_conditions.search is None:
+        raise ValueError("Gate prefix requires frozen Phase 0.5 conditions")
+    mode = run.experiment_conditions.generation_memory
+    if mode is None:
+        raise ValueError("Gate prefix requires frozen generation memory condition")
+    condition = _condition_for(run.experiment_conditions.search.selector.value, mode.mode.value)
+    by_id = {finding.id: finding for finding in findings}
+    output: list[TokenPrefix] = []
+    for checkpoint in checkpoints:
+        paths: set[str] = set()
+        for event in sorted(events, key=lambda item: item.sequence):
+            if event.event_type is not RunEventType.ATTEMPT_COMMITTED:
+                continue
+            usage = event.payload.get("usage", {})
+            if (
+                int(usage.get("prompt_tokens", 0)) + int(usage.get("completion_tokens", 0))
+                > checkpoint
+            ):
+                break
+            for finding_id in event.payload.get("finding_ids", []):
+                finding = by_id.get(finding_id)
+                if finding is not None:
+                    paths.add(attack_path_signature(finding))
+        output.append(
+            TokenPrefix(
+                seed=run.seed or 0,
+                condition=condition,
+                checkpoint_tokens=checkpoint,
+                attack_path_signatures=paths,
+                valid=run.is_conclusive,
+            )
+        )
+    return output
+
+
+def _condition_for(selector: str, memory: str) -> GateCondition:
+    lookup = {
+        ("static", "off"): GateCondition.STATIC_OFF,
+        ("static", "bounded-relevant-v1"): GateCondition.STATIC_MEMORY,
+        ("llm", "bounded-relevant-v1"): GateCondition.LLM_MEMORY,
+        ("llm", "off"): GateCondition.LLM_OFF,
+        ("random", "off"): GateCondition.RANDOM_OFF,
+        ("thompson", "off"): GateCondition.THOMPSON_OFF,
+    }
+    try:
+        return lookup[(selector, memory)]
+    except KeyError as exc:
+        raise ValueError("condition is outside the frozen Phase 0.5 Gate matrix") from exc
 
 
 def _comparison(

@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 20:55 AEST · Step 22 · 从不可变事件投影 Gate Token 前缀
+
+- **进度:** Gate 分析新增 `token_prefixes_from_events`：从 `ATTEMPT_COMMITTED` 的落盘 usage 与 finding ID 按事件序号重建 64k/160k/320k 前缀；一旦某个 commit 的累计已知 Token 超过 checkpoint，即停止加入后续路径。条件由冻结 `search.selector` 与 `generation_memory.mode` 映射至六条件矩阵，矩阵外组合直接拒绝。
+- **决策与理由:** 不能从完整 Run 最终 Finding 集合回填早期预算点，否则最后一次越线调用会污染主指标。事件投影使每个检查点都对应当时已经确认且未越线的证据前缀。
+- **验证证据:** `pytest tests/test_gate_analysis.py -p no:cacheprovider` 为 **1 passed**；Ruff/Black 通过。后续将补充覆盖真实持久化事件/每个 checkpoint 的集成 fixture。
+- **剩余状态:** PARTIAL（前缀 projector 已实现，集成 fixture 待补）；TODO 为保护线、完整 Gate report/CLI 和 Validator 的真实路径 fixture。
+
 ### 2026-08-09 20:45 AEST · Step 21 · 攻击路径原样 replay Validator
 
 - **进度:** 新增 Validator：按每个已确认 `attack_path_signature` 选取一条已提交 Attempt，逐轮重放原始 attacker 消息、重置授权 Target、重新执行确定性 Level-1 scorer，并统计固定次数的复现率。它只使用已有对话，不创建新的 Controller decision 或 Generator 请求。
