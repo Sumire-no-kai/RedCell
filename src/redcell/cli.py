@@ -76,6 +76,7 @@ from redcell.search import (
 )
 from redcell.storage import DEFAULT_URL, RunStore
 from redcell.strategies import PHASE_0_STRATEGIES
+from redcell.validator import ValidationReport
 
 app = typer.Typer(
     add_completion=False,
@@ -629,10 +630,26 @@ def report(
 def gate_report(
     db: Annotated[str, typer.Option(help="SQLite 连接串")] = DEFAULT_URL,
     out: Annotated[Path, typer.Option(help="Gate JSON 输出路径")] = Path("runs/gate-report.json"),
+    controls_json: Annotated[
+        Path | None, typer.Option(help="冻结 controls JSON；缺失时报告保持 INCOMPLETE")
+    ] = None,
+    validation_json: Annotated[
+        Path | None, typer.Option(help="冻结 replay validation JSON；缺失时报告保持 INCOMPLETE")
+    ] = None,
 ) -> None:
     """从已落盘的 Run/Event/Finding 重建冻结的 Phase 0.5 Gate 分析。"""
+    controls_result = (
+        ControlsReport.model_validate_json(controls_json.read_text(encoding="utf-8"))
+        if controls_json is not None
+        else None
+    )
+    validation_result = (
+        ValidationReport.model_validate_json(validation_json.read_text(encoding="utf-8"))
+        if validation_json is not None
+        else None
+    )
     with RunStore(db) as store:
-        result = build_gate_report(store)
+        result = build_gate_report(store, controls=controls_result, validation=validation_result)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(result.model_dump_json(indent=2), encoding="utf-8")
     typer.echo(f"Gate report: {out}")

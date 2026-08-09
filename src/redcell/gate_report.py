@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pydantic import Field
 
+from redcell.controls import ControlsReport
 from redcell.gate_analysis import (
     GateAnalysis,
     TokenPrefix,
@@ -12,6 +13,7 @@ from redcell.gate_analysis import (
 )
 from redcell.protocols.common import RedCellModel
 from redcell.storage.store import RunStore
+from redcell.validator import ValidationReport
 
 
 class GateReport(RedCellModel):
@@ -19,6 +21,8 @@ class GateReport(RedCellModel):
     regression_context_fingerprints: list[str] = Field(default_factory=list)
     prefixes: list[TokenPrefix] = Field(default_factory=list)
     analysis: GateAnalysis
+    controls: ControlsReport | None = None
+    validation: ValidationReport | None = None
     protection_failures: list[str] = Field(default_factory=list)
 
     @property
@@ -30,7 +34,13 @@ class GateReport(RedCellModel):
         return self.environment_consistent and self.analysis.passed and not self.protection_failures
 
 
-def build_gate_report(store: RunStore, *, checkpoint_tokens: int = 160000) -> GateReport:
+def build_gate_report(
+    store: RunStore,
+    *,
+    checkpoint_tokens: int = 160000,
+    controls: ControlsReport | None = None,
+    validation: ValidationReport | None = None,
+) -> GateReport:
     prefixes: list[TokenPrefix] = []
     contexts: set[str] = set()
     runs = store.list_runs()
@@ -67,10 +77,30 @@ def build_gate_report(store: RunStore, *, checkpoint_tokens: int = 160000) -> Ga
                 failures.append(f"controller_audit:{run.id}")
     if not prefixes:
         failures.append("no_phase_0_5_prefixes")
+    if controls is None:
+        failures.append("missing_controls")
+    elif not controls.passed:
+        failures.append("controls_failed")
+    elif (
+        controls.utility is None
+        or controls.utility.completed_task_runs < 32
+        or any((outcome.completed_runs or 0) < outcome.runs - 1 for outcome in controls.negative)
+    ):
+        failures.append("utility_failed")
+    if validation is None:
+        failures.append("missing_validation")
+    elif validation.repeats != 5 or any(item.runs != 5 for item in validation.results):
+        failures.append("validation_incomplete")
+    elif {item.attack_path for item in validation.results} != {
+        path for prefix in prefixes for path in prefix.attack_path_signatures
+    }:
+        failures.append("validation_path_set_mismatch")
     return GateReport(
         checkpoint_tokens=checkpoint_tokens,
         regression_context_fingerprints=sorted(contexts),
         prefixes=prefixes,
         analysis=analyse_phase_0_5(prefixes, checkpoint_tokens=checkpoint_tokens),
+        controls=controls,
+        validation=validation,
         protection_failures=sorted(set(failures)),
     )

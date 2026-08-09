@@ -7,6 +7,15 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 22:14 AEST · Step 28 · Gate 外部保护证据输入
+
+- **进度:** `GateReport` 现在保存并检查冻结的 `ControlsReport` 与 `ValidationReport`；没有输入时明确记录 `missing_controls` / `missing_validation`，不会默认视为通过。Validator 必须是 5 次原样 replay，且它报告的攻击路径集合必须与从持久化 Token prefix 重建的集合完全一致。`redcell gate-report` 增加 `--controls-json` 与 `--validation-json`，将这两份可审计证据显式载入最终 JSON。
+- **决策与理由:** controls 和 replay 不是运行事件自身能推导出的事实，强行在报告内重新执行会混淆“发现阶段”和“验证阶段”预算，也可能在结果产生后改变环境。因此报告只接收冻结产物、保留其内容并校验范围；缺失或范围不一致保持 `INCOMPLETE`。
+- **遇到的问题:** 当前 shell 没有激活 `.venv`，直接调用 `pytest`、`ruff`、`black` 均找不到命令；代码本身没有失败。
+- **解决方式:** 改用仓库 `.venv\\Scripts\\python.exe` 及对应工具执行验证。
+- **验证证据:** `tests/test_gate_report.py tests/test_validator.py` 为 **5 passed**；Ruff 与 Black 检查通过，`git diff --check` 通过。
+- **剩余状态:** PARTIAL；下一步补充策略/类别/cost/reproduction 保护指标的结构化 Gate 判定与预注册 seed 计划，再做全量审计。
+
 ### 2026-08-09 21:55 AEST · Step 27 · Gate 保护线的否决语义
 
 - **进度:** GateReport 现在把 Attempt abandonment、Selection abandonment 和 LLM Controller invocation/decision usage 审计作为保护失败记录；没有任何 Phase 0.5 prefix 时也显式记录失败。`SUPPORTED` 需要环境一致、主比较通过且保护失败列表为空。
