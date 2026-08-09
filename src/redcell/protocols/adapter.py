@@ -110,6 +110,8 @@ class SideEffect(RedCellModel):
 class TraceMetadata(RedCellModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cached_input_tokens: int = 0
+    usage_known: bool = True
     latency_ms: float = 0.0
     cost_usd: float = Field(default=0.0, ge=0.0)
     """本次目标调用的实际美元成本。真实 Provider 必须显式填充。"""

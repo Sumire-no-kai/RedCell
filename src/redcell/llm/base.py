@@ -29,6 +29,8 @@ class LLMResponse(RedCellModel):
     model: str = "unknown"
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cached_input_tokens: int = 0
+    usage_known: bool = True
     latency_ms: float = 0.0
     cost_usd: float = Field(default=0.0, ge=0.0)
     """本次调用的美元成本。

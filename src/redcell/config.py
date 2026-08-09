@@ -72,6 +72,7 @@ class ProviderSettings(BaseSettings):
     # 让预算上限可信。若接入付费模型,应在这里填真实单价。
     input_usd_per_mtok: float = Field(default=0.0, ge=0.0)
     output_usd_per_mtok: float = Field(default=0.0, ge=0.0)
+    cached_input_usd_per_mtok: float = Field(default=0.0, ge=0.0)
 
     extra_body: dict[str, object] = Field(default_factory=dict)
     """原样并入每次请求 payload 的厂商专属字段,JSON 写在 `.env` 里。
@@ -99,6 +100,7 @@ class ProviderSettings(BaseSettings):
             max_concurrency=self.max_concurrency,
             input_usd_per_mtok=self.input_usd_per_mtok,
             output_usd_per_mtok=self.output_usd_per_mtok,
+            cached_input_usd_per_mtok=self.cached_input_usd_per_mtok,
             extra_body=self.extra_body,
         )
 
@@ -117,6 +119,7 @@ class ProviderSettings(BaseSettings):
             pricing=TokenPricing(
                 input_usd_per_mtok=self.input_usd_per_mtok,
                 output_usd_per_mtok=self.output_usd_per_mtok,
+                cached_input_usd_per_mtok=self.cached_input_usd_per_mtok,
             ),
             min_interval_seconds=(60.0 / self.rpm) if self.rpm > 0 else 0.0,
             max_concurrency=self.max_concurrency,

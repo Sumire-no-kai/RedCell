@@ -74,6 +74,7 @@ class ProviderRunConfiguration(RedCellModel):
     max_concurrency: int = Field(ge=0)
     input_usd_per_mtok: float = Field(ge=0.0)
     output_usd_per_mtok: float = Field(ge=0.0)
+    cached_input_usd_per_mtok: float = Field(default=0.0, ge=0.0)
     extra_body: dict[str, Any] = Field(default_factory=dict)
 
 

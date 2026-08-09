@@ -22,7 +22,7 @@ from pydantic import Field, model_validator
 
 # ⚠️ 从 `_base` 而非 `protocols.common` 取:`protocols/run.py` 反过来依赖本模块
 # (`Run.limits`),走 protocols 会形成循环导入。见 `_base.py` 的模块文档。
-from redcell._base import RedCellModel
+from redcell._base import CostRecord, RedCellModel
 
 
 class BudgetLimit(StrEnum):
@@ -119,14 +119,18 @@ class BudgetUsage(RedCellModel):
     retries: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cached_input_tokens: int = 0
     cost_usd: float = 0.0
     wall_seconds: float = 0.0
     controller_prompt_tokens: int = 0
     controller_completion_tokens: int = 0
+    controller_cached_input_tokens: int = 0
     generator_prompt_tokens: int = 0
     generator_completion_tokens: int = 0
+    generator_cached_input_tokens: int = 0
     target_prompt_tokens: int = 0
     target_completion_tokens: int = 0
+    target_cached_input_tokens: int = 0
     per_strategy_attempts: dict[str, int] = Field(default_factory=dict)
     per_strategy_completed: dict[str, int] = Field(default_factory=dict)
     """每个策略**跑完**了多少场。
@@ -149,6 +153,16 @@ class BudgetUsage(RedCellModel):
                 self.generator_completion_tokens,
                 self.target_prompt_tokens,
                 self.target_completion_tokens,
+            )
+        )
+
+    @property
+    def role_cached_input_tokens(self) -> int:
+        return sum(
+            (
+                self.controller_cached_input_tokens,
+                self.generator_cached_input_tokens,
+                self.target_cached_input_tokens,
             )
         )
 
@@ -300,6 +314,7 @@ class BudgetManager:
         *,
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
+        cached_input_tokens: int = 0,
         cost_usd: float = 0.0,
         role: str | None = None,
     ) -> None:
@@ -307,6 +322,7 @@ class BudgetManager:
         update = {
             "prompt_tokens": self._usage.prompt_tokens + prompt_tokens,
             "completion_tokens": self._usage.completion_tokens + completion_tokens,
+            "cached_input_tokens": self._usage.cached_input_tokens + cached_input_tokens,
             "cost_usd": self._usage.cost_usd + cost_usd,
         }
         if role is not None:
@@ -318,6 +334,53 @@ class BudgetManager:
             update[f"{role}_completion_tokens"] = (
                 getattr(self._usage, f"{role}_completion_tokens") + completion_tokens
             )
+            update[f"{role}_cached_input_tokens"] = (
+                getattr(self._usage, f"{role}_cached_input_tokens") + cached_input_tokens
+            )
+        self._usage = self._usage.model_copy(update=update)
+
+    def record_attempt_usage(
+        self,
+        *,
+        total: CostRecord,
+        generator: CostRecord,
+        target: CostRecord,
+    ) -> None:
+        """Atomically record one Attempt total plus its role allocation.
+
+        Role values explain the single total; they never add a second copy to it.
+        """
+        if (
+            generator.prompt_tokens + target.prompt_tokens != total.prompt_tokens
+            or generator.completion_tokens + target.completion_tokens != total.completion_tokens
+            or generator.cached_input_tokens + target.cached_input_tokens
+            != total.cached_input_tokens
+        ):
+            raise ValueError("Attempt role usage must exactly allocate the total usage")
+        if total.usage_known != (generator.usage_known and target.usage_known):
+            raise ValueError("Attempt role usage-known state must explain the total")
+        update = {
+            "prompt_tokens": self._usage.prompt_tokens + total.prompt_tokens,
+            "completion_tokens": self._usage.completion_tokens + total.completion_tokens,
+            "cached_input_tokens": self._usage.cached_input_tokens + total.cached_input_tokens,
+            "cost_usd": self._usage.cost_usd + total.usd,
+            "generator_prompt_tokens": (
+                self._usage.generator_prompt_tokens + generator.prompt_tokens
+            ),
+            "generator_completion_tokens": (
+                self._usage.generator_completion_tokens + generator.completion_tokens
+            ),
+            "generator_cached_input_tokens": (
+                self._usage.generator_cached_input_tokens + generator.cached_input_tokens
+            ),
+            "target_prompt_tokens": self._usage.target_prompt_tokens + target.prompt_tokens,
+            "target_completion_tokens": (
+                self._usage.target_completion_tokens + target.completion_tokens
+            ),
+            "target_cached_input_tokens": (
+                self._usage.target_cached_input_tokens + target.cached_input_tokens
+            ),
+        }
         self._usage = self._usage.model_copy(update=update)
 
     def complete_attempt(self, strategy_id: str) -> None:

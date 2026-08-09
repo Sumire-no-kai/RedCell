@@ -7,6 +7,22 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 20:52 AEST · Step 34 · Token 账本与 Controller 恢复语义修复
+
+- **进度:** `BudgetManager` 新增 Attempt 原子记账入口：总账只增加一次，Generator/Target 仅解释同一笔总账；成功与失败调用均保留 cached input Token，并按角色分摊。Provider 缺失 usage 不再伪装成已知零值，Controller 或 Attempt 任一远程调用出现 unknown usage 时均使 Run fail-closed。Controller evidence digest 改为覆盖 TargetBrief、候选策略、历史和预算的完整规范化摘要；恢复时发现“已成功调用但未形成 Decision”的孤儿 Invocation，会补记其已知成本并使 Run 失效，不重放付费模型调用。
+- **决策与理由:** 否决给 `record_usage` 增加 `count_total=False` 布尔开关，因为调用者一旦传错仍会静默重复或漏记；采用 `record_attempt_usage(total, generator, target)` 并强制三组 Token 精确守恒。对孤儿 Invocation 否决“根据 response digest 推断 Decision”（digest 不能恢复原始结构）和“直接重调”（会双花且可能改变选择），采用保守失效语义。
+- **遇到的问题:** 首轮回归暴露孤儿 Invocation 的 ID 列表不能写入 `FailureRecord.details` 的标量契约；改为逗号连接的审计字符串。另，pytest 尝试写 `.pytest_cache` 时因当前权限产生 warning，但测试执行与结果未受影响。
+- **验证证据:** Ruff 全部通过；预算/provider/controller/orchestrator/executor 定向回归 **89 passed**。新增非零 Generator+Target 用量测试锁定 `total_tokens == role_total_tokens == 15`，cached input 同样守恒；新增 unknown usage、完整 evidence digest 和崩溃窗口恢复测试，恢复路径确认不会再次调用 Provider。
+- **剩余状态:** DONE（账本、unknown usage、Controller digest/恢复切片）；继续修复 Finding identity、冻结指纹与完整 Gate 保护线。
+
+### 2026-08-09 20:38 AEST · Step 33 · Phase 0.5 review remediation 启动
+
+- **进度:** 在 `fix/phase-0-5-review-findings` 分支启动合并后代码审查修复，范围为 Token 重复记账、unknown usage、Controller 崩溃恢复/evidence digest、Finding identity、Gate checkpoint/重复 block/controls 环境绑定与全部冻结保护线。
+- **决策与理由:** 沿用 PRD 已冻结的实验合同，不调整阈值。总 Token 只记一次，角色数字作为同一账目的分配；任一远程角色 usage 未知即使 Run 失效；Gate 对缺少证据一律 fail-closed。否决“在 CLI 分散补 if”的方案，规则集中在 BudgetManager、Controller Adapter/恢复 seam 和 Gate 分析模块。
+- **遇到的问题:** Step 32 的“IMPLEMENTATION DONE”被本次审查证伪；543 个测试通过只证明既有测试面通过，没有覆盖实验合同语义。另，本机当前时钟早于先前会话写入的 23:01 时间，保留原历史并以当前系统时间记录本次更正，不静默改写。
+- **验证证据:** 审查探针复现 `total_tokens=24`、`role_total_tokens=12`；现有全量测试仍为 543 passed，说明需要新增能捕获语义缺口的回归测试。
+- **剩余状态:** IN PROGRESS；Step 32 的完成结论撤回，待本分支修复、全量验证与新 PR。
+
 ### 2026-08-09 23:01 AEST · Step 32 · Phase 0.5 实现全量回归审计
 
 - **进度:** 对本分支的 Phase 0.5 实现进行最终本地回归：冻结条件、LLM Controller invocation/repair/recovery、bounded memory、角色 Token、攻击路径身份、提交前缀、paired bootstrap/permutation/Holm、seed plan、controls/validator 输入和 Controller preflight 均纳入测试与 CLI 可达路径。

@@ -89,6 +89,15 @@ class ControllerEvidence(RedCellModel):
     rendered_history: str
     budget: ControllerBudgetView
 
+    def digest(self) -> str:
+        payload = json.dumps(
+            self.model_dump(mode="json"),
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return _digest(payload)
+
 
 class ControllerChoice(RedCellModel):
     """唯一执行字段加两个有界审计字段。"""
@@ -205,6 +214,11 @@ class LLMControllerAdapter(ControllerDriver):
                 self._indeterminate_invocation(requested, exc),
                 "Controller request delivery or usage is indeterminate",
             ) from exc
+        if not cost.usage_known:
+            raise ControllerSelectionError(
+                self._unknown_usage_invocation(requested, raw),
+                "Controller response omitted auditable Token usage",
+            )
         parsed = self._parse(raw, evidence.available_strategy_ids)
         if parsed is not None:
             choice, warnings = parsed
@@ -231,10 +245,17 @@ class LLMControllerAdapter(ControllerDriver):
                 self._indeterminate_invocation(requested, exc, retry_index=1),
                 "Controller repair delivery or usage is indeterminate",
             ) from exc
+        if not repair_cost.usage_known:
+            raise ControllerSelectionError(
+                self._unknown_usage_invocation(requested, repair_raw, retry_index=1),
+                "Controller repair response omitted auditable Token usage",
+            )
         repaired = self._parse(repair_raw, evidence.available_strategy_ids)
         total = CostRecord(
             prompt_tokens=cost.prompt_tokens + repair_cost.prompt_tokens,
             completion_tokens=cost.completion_tokens + repair_cost.completion_tokens,
+            cached_input_tokens=cost.cached_input_tokens + repair_cost.cached_input_tokens,
+            usage_known=cost.usage_known and repair_cost.usage_known,
             usd=cost.usd + repair_cost.usd,
             wall_ms=cost.wall_ms + repair_cost.wall_ms,
         )
@@ -250,7 +271,7 @@ class LLMControllerAdapter(ControllerDriver):
             update={
                 "retry_index": 1,
                 "status": ControllerInvocationStatus.FAILED,
-                "usage_status": UsageStatus.KNOWN,
+                "usage_status": UsageStatus.KNOWN if total.usage_known else UsageStatus.UNKNOWN,
                 "cost": total,
                 "response_digest": _digest(repair_raw),
                 "failure": {"code": "invalid_controller_choice"},
@@ -268,6 +289,8 @@ class LLMControllerAdapter(ControllerDriver):
         return response.content, CostRecord(
             prompt_tokens=response.prompt_tokens,
             completion_tokens=response.completion_tokens,
+            cached_input_tokens=response.cached_input_tokens,
+            usage_known=response.usage_known,
             usd=response.cost_usd,
             wall_ms=response.latency_ms,
         )
@@ -334,7 +357,7 @@ class LLMControllerAdapter(ControllerDriver):
             retry_index=0,
             status=ControllerInvocationStatus.REQUESTED,
             usage_status=UsageStatus.UNKNOWN,
-            evidence_digest=evidence.history_digest,
+            evidence_digest=evidence.digest(),
             prompt_version=self._prompt_version,
         )
 
@@ -349,7 +372,7 @@ class LLMControllerAdapter(ControllerDriver):
             update={
                 "retry_index": retry_index,
                 "status": ControllerInvocationStatus.SUCCEEDED,
-                "usage_status": UsageStatus.KNOWN,
+                "usage_status": UsageStatus.KNOWN if cost.usage_known else UsageStatus.UNKNOWN,
                 "cost": cost,
                 "response_digest": _digest(raw),
             }
@@ -371,6 +394,19 @@ class LLMControllerAdapter(ControllerDriver):
                     "code": type(exc).__name__,
                     "message": safe_error_message(exc),
                 },
+            }
+        )
+
+    def _unknown_usage_invocation(
+        self, requested: ControllerInvocation, raw: str, *, retry_index: int = 0
+    ) -> ControllerInvocation:
+        return requested.model_copy(
+            update={
+                "retry_index": retry_index,
+                "status": ControllerInvocationStatus.INDETERMINATE,
+                "usage_status": UsageStatus.UNKNOWN,
+                "response_digest": _digest(raw),
+                "failure": {"code": "provider_usage_missing"},
             }
         )
 

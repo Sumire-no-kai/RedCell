@@ -120,6 +120,8 @@ class ArenaAdapter(TargetAdapter):
         tool_results: list[ToolResult] = []
         side_effects: list[SideEffect] = []
         prompt_tokens = completion_tokens = 0
+        cached_input_tokens = 0
+        usage_known = True
         cost_usd = 0.0
         malformed_tool_calls = 0
         visible = ""
@@ -133,6 +135,8 @@ class ArenaAdapter(TargetAdapter):
             )
             prompt_tokens += response.prompt_tokens
             completion_tokens += response.completion_tokens
+            cached_input_tokens += response.cached_input_tokens
+            usage_known = usage_known and response.usage_known
             cost_usd += response.cost_usd
             model_name = response.model
 
@@ -174,6 +178,8 @@ class ArenaAdapter(TargetAdapter):
             trace_metadata=TraceMetadata(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
+                cached_input_tokens=cached_input_tokens,
+                usage_known=usage_known,
                 cost_usd=cost_usd,
                 latency_ms=(time.perf_counter() - started) * 1000,
                 model=model_name,

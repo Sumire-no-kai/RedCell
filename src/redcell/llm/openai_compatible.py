@@ -40,10 +40,16 @@ class TokenPricing(RedCellModel):
 
     input_usd_per_mtok: float = Field(ge=0.0)
     output_usd_per_mtok: float = Field(ge=0.0)
+    cached_input_usd_per_mtok: float = Field(default=0.0, ge=0.0)
 
-    def cost_for(self, prompt_tokens: int, completion_tokens: int) -> float:
+    def cost_for(
+        self, prompt_tokens: int, completion_tokens: int, cached_input_tokens: int = 0
+    ) -> float:
+        uncached_input_tokens = max(prompt_tokens - cached_input_tokens, 0)
         return (
-            prompt_tokens * self.input_usd_per_mtok + completion_tokens * self.output_usd_per_mtok
+            uncached_input_tokens * self.input_usd_per_mtok
+            + cached_input_tokens * self.cached_input_usd_per_mtok
+            + completion_tokens * self.output_usd_per_mtok
         ) / 1_000_000
 
 
@@ -376,9 +382,22 @@ class OpenAICompatibleProvider(LLMProvider):
                 f"{self._name} 的 message.content 不是字符串:{type(content).__name__}"
             )
 
-        usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        usage_value = data.get("usage")
+        usage = usage_value if isinstance(usage_value, dict) else {}
+        usage_known = (
+            isinstance(usage.get("prompt_tokens"), int)
+            and usage["prompt_tokens"] >= 0
+            and isinstance(usage.get("completion_tokens"), int)
+            and usage["completion_tokens"] >= 0
+        )
         prompt_tokens = _as_int(usage.get("prompt_tokens"))
         completion_tokens = _as_int(usage.get("completion_tokens"))
+        prompt_details = (
+            usage.get("prompt_tokens_details")
+            if isinstance(usage.get("prompt_tokens_details"), dict)
+            else {}
+        )
+        cached_input_tokens = min(_as_int(prompt_details.get("cached_tokens")), prompt_tokens)
 
         raw: dict[str, Any] = {
             "provider": self._name,
@@ -387,7 +406,7 @@ class OpenAICompatibleProvider(LLMProvider):
         }
         cost = 0.0
         if self._pricing is not None:
-            cost = self._pricing.cost_for(prompt_tokens, completion_tokens)
+            cost = self._pricing.cost_for(prompt_tokens, completion_tokens, cached_input_tokens)
             # 把单价一起留档:厂商调价后,只有这条记录能说明当时算的是哪一档。
             raw["pricing"] = self._pricing.model_dump()
 
@@ -397,6 +416,8 @@ class OpenAICompatibleProvider(LLMProvider):
             model=str(data.get("model") or self._model),
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            cached_input_tokens=cached_input_tokens,
+            usage_known=usage_known,
             latency_ms=latency_ms,
             cost_usd=cost,
             raw=raw,

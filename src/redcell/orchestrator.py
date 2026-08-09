@@ -19,6 +19,7 @@ from sqlalchemy.exc import OperationalError
 from redcell.budget import BudgetLimit, BudgetManager
 from redcell.controller import (
     ControllerDriver,
+    ControllerInvocation,
     ControllerInvocationStatus,
     ControllerSelectionError,
     LLMControllerAdapter,
@@ -218,6 +219,7 @@ class RunOrchestrator:
             invocations = await self._persist(
                 lambda: self._store.controller_invocations_for(run.id), retry_rng
             )
+            decisions = await self._persist(lambda: self._store.decisions_for(run.id), retry_rng)
             requested = [
                 invocation
                 for invocation in invocations
@@ -250,7 +252,38 @@ class RunOrchestrator:
                     retry_rng,
                 )
                 raise RunFailedError(failed, failure)
-            decisions = await self._persist(lambda: self._store.decisions_for(run.id), retry_rng)
+            referenced_invocations = {
+                decision.invocation_id
+                for decision in decisions
+                if decision.invocation_id is not None
+            }
+            orphaned_succeeded = [
+                invocation
+                for invocation in invocations
+                if invocation.status is ControllerInvocationStatus.SUCCEEDED
+                and invocation.id not in referenced_invocations
+            ]
+            if orphaned_succeeded:
+                for invocation in orphaned_succeeded:
+                    budget.record_usage(
+                        prompt_tokens=invocation.cost.prompt_tokens,
+                        completion_tokens=invocation.cost.completion_tokens,
+                        cached_input_tokens=invocation.cost.cached_input_tokens,
+                        cost_usd=invocation.cost.usd,
+                        role="controller",
+                    )
+                failure = _orphaned_controller_invocation_failure(orphaned_succeeded)
+                failed = self._failed_run(run.model_copy(update={"usage": budget.usage()}), failure)
+                failed_event = self._event(
+                    failed,
+                    RunEventType.RUN_FAILED,
+                    payload={"failure": failure.model_dump(mode="json")},
+                )
+                await self._persist(
+                    partial(self._store.commit_run_state, run=failed, run_event=failed_event),
+                    retry_rng,
+                )
+                raise RunFailedError(failed, failure)
             if self._controller is not None:
                 self._controller = self._restore_controller(run, decisions)
             else:
@@ -442,17 +475,58 @@ class RunOrchestrator:
                     current_result = None
                     continue
 
-                budget.record_usage(
-                    prompt_tokens=result.attempt.cost.prompt_tokens,
-                    completion_tokens=result.attempt.cost.completion_tokens,
-                    cost_usd=result.attempt.cost.usd,
-                )
-                for role, cost in _attempt_role_costs(result.attempt):
-                    budget.record_usage(
-                        prompt_tokens=cost.prompt_tokens,
-                        completion_tokens=cost.completion_tokens,
-                        role=role,
+                if not result.attempt.cost.usage_known:
+                    generator_cost, target_cost = _attempt_role_costs(result.attempt)
+                    budget.record_attempt_usage(
+                        total=result.attempt.cost,
+                        generator=generator_cost,
+                        target=target_cost,
                     )
+                    budget.abandon_attempt()
+                    failure = _unknown_attempt_usage_failure(
+                        generator_known=generator_cost.usage_known,
+                        target_known=target_cost.usage_known,
+                    )
+                    self._abandon_selection(strategy_id, _failure_reason(failure))
+                    failed = self._failed_run(
+                        run.model_copy(update={"usage": budget.usage()}), failure
+                    )
+                    events = [
+                        self._event(
+                            failed,
+                            RunEventType.ATTEMPT_ABANDONED,
+                            attempt_id=attempt_id,
+                            payload={
+                                "failure": failure.model_dump(mode="json"),
+                                "partial_turns": [
+                                    turn.model_dump(mode="json") for turn in result.attempt.turns
+                                ],
+                            },
+                        ),
+                        self._event(
+                            failed,
+                            RunEventType.RUN_FAILED,
+                            payload={"failure": failure.model_dump(mode="json")},
+                        ),
+                    ]
+                    await self._persist(
+                        partial(
+                            self._store.commit_abandonment,
+                            run=failed,
+                            attempt_id=attempt_id,
+                            decision=self._require_latest_decision(),
+                            run_events=events,
+                        ),
+                        retry_rng,
+                    )
+                    raise RunFailedError(failed, failure)
+
+                generator_cost, target_cost = _attempt_role_costs(result.attempt)
+                budget.record_attempt_usage(
+                    total=result.attempt.cost,
+                    generator=generator_cost,
+                    target=target_cost,
+                )
                 budget.complete_attempt(strategy_id)
                 self._complete_selection(strategy_id, result.attempt.reward)
                 consecutive_abandoned = 0
@@ -622,10 +696,10 @@ class RunOrchestrator:
                     ),
                 )
             except AttemptExecutionError as exc:
-                budget.record_usage(
-                    prompt_tokens=exc.cost.prompt_tokens,
-                    completion_tokens=exc.cost.completion_tokens,
-                    cost_usd=exc.cost.usd,
+                budget.record_attempt_usage(
+                    total=exc.cost,
+                    generator=exc.generator_cost,
+                    target=exc.target_cost,
                 )
                 max_retries = self._retry_policy.max_retries_for(exc.failure)
                 if exc.failure.stage is FailureStage.PERSISTENCE or retry_index >= max_retries:
@@ -985,6 +1059,7 @@ class RunOrchestrator:
             budget.record_usage(
                 prompt_tokens=invocation.cost.prompt_tokens,
                 completion_tokens=invocation.cost.completion_tokens,
+                cached_input_tokens=invocation.cost.cached_input_tokens,
                 cost_usd=invocation.cost.usd,
                 role="controller",
             )
@@ -996,6 +1071,7 @@ class RunOrchestrator:
             budget.record_usage(
                 prompt_tokens=selection.invocation.cost.prompt_tokens,
                 completion_tokens=selection.invocation.cost.completion_tokens,
+                cached_input_tokens=selection.invocation.cost.cached_input_tokens,
                 cost_usd=selection.invocation.cost.usd,
                 role="controller",
             )
@@ -1008,7 +1084,7 @@ class RunOrchestrator:
             decision_state={
                 "rationale": selection.choice.rationale,
                 "evidence_refs": selection.choice.evidence_refs,
-                "evidence_digest": evidence.history_digest,
+                "evidence_digest": evidence.digest(),
                 "repaired": selection.repaired,
             },
         )
@@ -1131,19 +1207,27 @@ def _failure_reason(failure: FailureRecord) -> str:
     return f"{failure.kind.value}:{failure.code}"
 
 
-def _attempt_role_costs(attempt: Attempt) -> list[tuple[str, CostRecord]]:
+def _attempt_role_costs(attempt: Attempt) -> tuple[CostRecord, CostRecord]:
     """Split committed Attempt usage without changing its single total budget."""
     generator = CostRecord(
         prompt_tokens=sum(turn.attacker_cost.prompt_tokens for turn in attempt.turns),
         completion_tokens=sum(turn.attacker_cost.completion_tokens for turn in attempt.turns),
+        cached_input_tokens=sum(turn.attacker_cost.cached_input_tokens for turn in attempt.turns),
+        usage_known=all(turn.attacker_cost.usage_known for turn in attempt.turns),
+        usd=sum(turn.attacker_cost.usd for turn in attempt.turns),
     )
     target = CostRecord(
         prompt_tokens=sum(turn.output.trace_metadata.prompt_tokens for turn in attempt.turns),
         completion_tokens=sum(
             turn.output.trace_metadata.completion_tokens for turn in attempt.turns
         ),
+        cached_input_tokens=sum(
+            turn.output.trace_metadata.cached_input_tokens for turn in attempt.turns
+        ),
+        usage_known=all(turn.output.trace_metadata.usage_known for turn in attempt.turns),
+        usd=sum(turn.output.trace_metadata.cost_usd for turn in attempt.turns),
     )
-    return [("generator", generator), ("target", target)]
+    return generator, target
 
 
 def _trailing_abandoned(decisions: Sequence[ControllerDecision]) -> int:
@@ -1249,6 +1333,42 @@ def _indeterminate_controller_failure(last_failure: dict[str, str] | None) -> Fa
         delivery_status=DeliveryStatus.UNKNOWN,
         side_effect_status=SideEffectStatus.UNKNOWN,
         details={"controller_failure": (last_failure or {}).get("code")},
+    )
+
+
+def _orphaned_controller_invocation_failure(
+    invocations: Sequence[ControllerInvocation],
+) -> FailureRecord:
+    return FailureRecord(
+        kind=FailureKind.EXPERIMENT_INVALID,
+        stage=FailureStage.CONTROLLER_SELECTION,
+        code="orphaned_succeeded_controller_invocation",
+        message=(
+            "A paid Controller response was persisted without its Decision; "
+            "the Run cannot safely replay or infer that selection"
+        ),
+        cause_type="redcell.controller.ControllerInvocation",
+        retry_safety=RetrySafety.UNSAFE,
+        delivery_status=DeliveryStatus.SENT,
+        side_effect_status=SideEffectStatus.NONE,
+        details={"invocation_ids": ",".join(invocation.id for invocation in invocations)},
+    )
+
+
+def _unknown_attempt_usage_failure(*, generator_known: bool, target_known: bool) -> FailureRecord:
+    return FailureRecord(
+        kind=FailureKind.EXPERIMENT_INVALID,
+        stage=FailureStage.USAGE_ACCOUNTING,
+        code="provider_usage_missing",
+        message="Generator or Target response omitted auditable Token usage",
+        cause_type="redcell.llm.base.LLMResponse",
+        retry_safety=RetrySafety.UNSAFE,
+        delivery_status=DeliveryStatus.SENT,
+        side_effect_status=SideEffectStatus.UNKNOWN,
+        details={
+            "generator_usage_known": generator_known,
+            "target_usage_known": target_known,
+        },
     )
 
 

@@ -52,6 +52,12 @@ class CostRecord(RedCellModel):
 
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cached_input_tokens: int = 0
+    """Provider 报告的 cached-input Token；它是 prompt_tokens 的子集，不重复加入 total。"""
+
+    usage_known: bool = True
+    """False 表示 Provider 没有返回可审计 usage；数字 0 不能替代 unknown。"""
+
     usd: float = 0.0
     wall_ms: float = 0.0
 

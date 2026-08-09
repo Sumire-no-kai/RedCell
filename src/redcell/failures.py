@@ -63,6 +63,7 @@ class FailureKind(StrEnum):
 class FailureStage(StrEnum):
     PREFLIGHT = "preflight"
     CONTROLLER_SELECTION = "controller_selection"
+    USAGE_ACCOUNTING = "usage_accounting"
     RESET = "reset"
     GENERATION = "generation"
     TARGET_SEND = "target_send"
