@@ -7,6 +7,7 @@ from pydantic import Field
 from redcell.controls import ControlsReport
 from redcell.gate_analysis import (
     GateAnalysis,
+    SeedPlan,
     TokenPrefix,
     analyse_phase_0_5,
     token_prefixes_from_events,
@@ -23,6 +24,7 @@ class GateReport(RedCellModel):
     analysis: GateAnalysis
     controls: ControlsReport | None = None
     validation: ValidationReport | None = None
+    seed_plan: SeedPlan | None = None
     protection_failures: list[str] = Field(default_factory=list)
 
     @property
@@ -40,6 +42,7 @@ def build_gate_report(
     checkpoint_tokens: int = 160000,
     controls: ControlsReport | None = None,
     validation: ValidationReport | None = None,
+    seed_plan: SeedPlan | None = None,
 ) -> GateReport:
     prefixes: list[TokenPrefix] = []
     contexts: set[str] = set()
@@ -95,12 +98,17 @@ def build_gate_report(
         path for prefix in prefixes for path in prefix.attack_path_signatures
     }:
         failures.append("validation_path_set_mismatch")
+    if seed_plan is None:
+        failures.append("missing_seed_plan")
     return GateReport(
         checkpoint_tokens=checkpoint_tokens,
         regression_context_fingerprints=sorted(contexts),
         prefixes=prefixes,
-        analysis=analyse_phase_0_5(prefixes, checkpoint_tokens=checkpoint_tokens),
+        analysis=analyse_phase_0_5(
+            prefixes, checkpoint_tokens=checkpoint_tokens, seed_plan=seed_plan
+        ),
         controls=controls,
         validation=validation,
+        seed_plan=seed_plan,
         protection_failures=sorted(set(failures)),
     )

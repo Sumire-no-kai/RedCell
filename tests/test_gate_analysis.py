@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from redcell.gate_analysis import GateCondition, TokenPrefix, analyse_phase_0_5
+import pytest
+
+from redcell.gate_analysis import GateCondition, SeedPlan, TokenPrefix, analyse_phase_0_5
 
 
 def test_gate_analysis_requires_complete_paired_blocks_and_uses_path_identity() -> None:
@@ -50,3 +52,24 @@ def test_gate_analysis_keeps_later_complete_blocks_as_reserves() -> None:
 
     assert analysis.valid_seeds == list(range(12))
     assert analysis.reserve_seeds == [12]
+
+
+def test_gate_analysis_uses_the_registered_seed_order_not_result_order() -> None:
+    plan = SeedPlan(primary=[20, *range(1, 12)], reserve=[12, 13, 14, 15])
+    prefixes = [
+        TokenPrefix(seed=seed, condition=condition, checkpoint_tokens=160000)
+        for seed in [1, 20]
+        for condition in GateCondition
+    ]
+
+    analysis = analyse_phase_0_5(prefixes, seed_plan=plan)
+
+    assert analysis.valid_seeds == [20, 1]
+    assert analysis.missing_planned_seeds == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+
+
+def test_seed_plan_rejects_pilot_seed_and_wrong_cardinality() -> None:
+    with pytest.raises(ValueError, match="12 primary"):
+        SeedPlan(primary=[1], reserve=[2])
+    with pytest.raises(ValueError, match="pilot seeds"):
+        SeedPlan(primary=[5000, *range(1, 12)], reserve=[12, 13, 14, 15])

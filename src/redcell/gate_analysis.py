@@ -6,7 +6,7 @@ import itertools
 import random
 from enum import StrEnum
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from redcell.finding_identity import attack_path_signature
 from redcell.protocols.common import RedCellModel
@@ -21,6 +21,32 @@ class GateCondition(StrEnum):
     LLM_OFF = "llm-off"
     RANDOM_OFF = "random-off"
     THOMPSON_OFF = "thompson-off"
+
+
+class SeedPlan(RedCellModel):
+    """The ordered, pre-registered Phase 0.5 seed allocation.
+
+    This intentionally carries no generated defaults.  A generated sequence would
+    only look pre-registered after the results were already available.
+    """
+
+    primary: list[int]
+    reserve: list[int]
+
+    @model_validator(mode="after")
+    def validate_frozen_allocation(self) -> SeedPlan:
+        if len(self.primary) != 12 or len(self.reserve) != 4:
+            raise ValueError("Phase 0.5 seed plan requires exactly 12 primary and 4 reserve seeds")
+        all_seeds = [*self.primary, *self.reserve]
+        if len(set(all_seeds)) != len(all_seeds):
+            raise ValueError("Phase 0.5 seed plan must not repeat a seed")
+        if set(all_seeds) & {5000, 5001, 5002}:
+            raise ValueError("Phase 0 pilot seeds 5000-5002 are not eligible for Phase 0.5")
+        return self
+
+    @property
+    def ordered(self) -> list[int]:
+        return [*self.primary, *self.reserve]
 
 
 class TokenPrefix(RedCellModel):
@@ -59,15 +85,25 @@ class GateAnalysis(RedCellModel):
     valid_seeds: list[int]
     invalid_seeds: list[int]
     reserve_seeds: list[int] = Field(default_factory=list)
+    missing_planned_seeds: list[int] = Field(default_factory=list)
+    unregistered_seeds: list[int] = Field(default_factory=list)
     comparisons: list[PairedComparison]
 
     @property
     def passed(self) -> bool:
-        return len(self.valid_seeds) == 12 and all(item.passed for item in self.comparisons)
+        return (
+            len(self.valid_seeds) == 12
+            and not self.unregistered_seeds
+            and all(item.passed for item in self.comparisons)
+        )
 
 
 def analyse_phase_0_5(
-    prefixes: list[TokenPrefix], *, checkpoint_tokens: int = 160000, bootstrap_samples: int = 10000
+    prefixes: list[TokenPrefix],
+    *,
+    checkpoint_tokens: int = 160000,
+    bootstrap_samples: int = 10000,
+    seed_plan: SeedPlan | None = None,
 ) -> GateAnalysis:
     required = set(GateCondition)
     by_seed: dict[int, dict[GateCondition, TokenPrefix]] = {}
@@ -82,7 +118,10 @@ def analyse_phase_0_5(
             eligible.append(seed)
         else:
             invalid.append(seed)
-    valid = eligible[:12]
+    ordered = seed_plan.ordered if seed_plan is not None else sorted(by_seed)
+    valid = [seed for seed in ordered if seed in eligible][:12]
+    missing_planned = [seed for seed in ordered if seed not in by_seed]
+    unregistered = sorted(set(by_seed) - set(ordered)) if seed_plan is not None else []
     comparisons = [
         _comparison(valid, by_seed, GateCondition.LLM_MEMORY, control, bootstrap_samples)
         for control in (
@@ -100,7 +139,9 @@ def analyse_phase_0_5(
         checkpoint_tokens=checkpoint_tokens,
         valid_seeds=valid,
         invalid_seeds=invalid,
-        reserve_seeds=eligible[12:],
+        reserve_seeds=[seed for seed in ordered if seed in eligible and seed not in valid],
+        missing_planned_seeds=missing_planned,
+        unregistered_seeds=unregistered,
         comparisons=comparisons,
     )
 

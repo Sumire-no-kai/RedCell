@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 22:24 AEST · Step 29 · 预注册 seed 计划契约
+
+- **进度:** 增加 `SeedPlan`（严格 12 个 primary + 4 个 reserve、全局唯一、拒绝 Phase 0 pilot 的 5000–5002），Gate 分析按该计划的冻结顺序取有效 paired block，不再按已观察到的 seed 数字排序。报告和 CLI 新增 `--seed-plan-json`；缺失时为 `missing_seed_plan`。
+- **决策与理由:** PRD 只冻结了数量和不可复用规则，没有写出具体 16 个新 seed。不能由代码自动生成一组再宣称它已经预注册，因此实现输入契约和拒绝语义，将具体编号留作正式实验启动前的作者决定。主 block 失效时只按该清单的 reserve 顺序补位；清单外的 run 会明确列为 `unregistered_seeds`。
+- **验证证据:** `tests/test_gate_analysis.py tests/test_gate_report.py` 为 **6 passed**；测试覆盖冻结顺序优先于数值排序，以及 pilot seed/错误数量拒绝。Ruff/Black 与 `git diff --check` 通过。
+- **剩余状态:** PARTIAL；具体 seed 编号为 OPEN（需要作者提供未观察过的编号）；继续实现剩余保护线和完整审计。
+
 ### 2026-08-09 22:14 AEST · Step 28 · Gate 外部保护证据输入
 
 - **进度:** `GateReport` 现在保存并检查冻结的 `ControlsReport` 与 `ValidationReport`；没有输入时明确记录 `missing_controls` / `missing_validation`，不会默认视为通过。Validator 必须是 5 次原样 replay，且它报告的攻击路径集合必须与从持久化 Token prefix 重建的集合完全一致。`redcell gate-report` 增加 `--controls-json` 与 `--validation-json`，将这两份可审计证据显式载入最终 JSON。

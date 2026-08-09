@@ -40,6 +40,7 @@ from redcell.controls import (
 )
 from redcell.executor import ConversationExecutor
 from redcell.failures import FailureStage
+from redcell.gate_analysis import SeedPlan
 from redcell.gate_report import build_gate_report
 from redcell.generation import AttackGenerator, TemplateAttackGenerator
 from redcell.llm.base import LLMProvider
@@ -636,6 +637,9 @@ def gate_report(
     validation_json: Annotated[
         Path | None, typer.Option(help="冻结 replay validation JSON；缺失时报告保持 INCOMPLETE")
     ] = None,
+    seed_plan_json: Annotated[
+        Path | None, typer.Option(help="冻结的 12+4 seed plan JSON；缺失时报告保持 INCOMPLETE")
+    ] = None,
 ) -> None:
     """从已落盘的 Run/Event/Finding 重建冻结的 Phase 0.5 Gate 分析。"""
     controls_result = (
@@ -648,8 +652,18 @@ def gate_report(
         if validation_json is not None
         else None
     )
+    seed_plan = (
+        SeedPlan.model_validate_json(seed_plan_json.read_text(encoding="utf-8"))
+        if seed_plan_json is not None
+        else None
+    )
     with RunStore(db) as store:
-        result = build_gate_report(store, controls=controls_result, validation=validation_result)
+        result = build_gate_report(
+            store,
+            controls=controls_result,
+            validation=validation_result,
+            seed_plan=seed_plan,
+        )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(result.model_dump_json(indent=2), encoding="utf-8")
     typer.echo(f"Gate report: {out}")

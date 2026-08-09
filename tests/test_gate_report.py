@@ -18,6 +18,7 @@ def test_empty_store_is_not_a_supported_gate(tmp_path) -> None:
     assert report.analysis.valid_seeds == []
     assert report.protection_failures == [
         "missing_controls",
+        "missing_seed_plan",
         "missing_validation",
         "no_phase_0_5_prefixes",
     ]
