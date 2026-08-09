@@ -48,7 +48,7 @@ def _objects(finding: Finding) -> list[str]:
             values.add(f"tool:{evidence.tool_call.name}:args[{arguments}]")
         if evidence.constraint_parameter is not None:
             values.add(
-                "constraint:" f"{evidence.constraint_parameter}:{evidence.constraint_kind.value}"
+                f"constraint:{evidence.constraint_parameter}:{evidence.constraint_kind.value}"
             )
         if evidence.protected_location is not None:
             protected = f"protected:{evidence.protected_location.value}"

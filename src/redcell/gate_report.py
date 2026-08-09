@@ -141,6 +141,9 @@ class GateReport(RedCellModel):
             "Token equality does not imply equal compute or monetary value across models.",
             "The result applies only to the frozen policy-known arena and conditions.",
             "Twelve paired seeds are an internal falsifiable Gate, not publication-grade power.",
+            "Attack-path identity includes strategy_id, so broader strategy allocation can "
+            "increase measured path breadth without adding a new structural vulnerability; "
+            "interpret finding-signature breadth and strategy allocation alongside it.",
         ]
     )
 

@@ -7,6 +7,21 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 21:55 AEST · Step 40 · 二次互检修复全量回归
+
+- **进度:** `ruff format .` 一次性规范化了 24 个文件（23 个既有格式失败文件加本轮新改文件），随后逐字节扫描全部 102 个受跟踪 Python 文件，确认混合行尾数为 **0**。报告脱敏、Gate Limitations、格式门文档与回归测试均已完成。
+- **验证证据:** 定向报告/Gate 测试为 **29 passed**。四道全量门依次为：`.venv\Scripts\python.exe -m pytest -p no:cacheprovider` **563 passed in 63.35s**；`ruff check .` 全部通过；`ruff format --check .` 确认 **110 files already formatted**；`black --check src tests` 确认 **101 files would be left unchanged**；`git diff --check` 通过。随后把脱敏不变量加强到 `ReportData` 直接构造路径后，相关 **22 passed**，Ruff/Black/diff 门再次通过，最终全量 pytest 再次为 **563 passed in 56.11s**。该证据补齐了 Step 37 遗漏的 Ruff format check。
+- **剩余状态:** DONE（无需作者拍板的实现修复与验证）；TODO 为索引行尾 renormalize、提交并推送现有 PR。正式 Gate 仍不得起跑，直到 Step 39 记录的两项 `OPEN` 研究口径由作者确认；工程测试通过不等于 Phase 0.5 `SUPPORTED`。
+
+### 2026-08-09 21:51 AEST · Step 39 · 二次互检复现、行尾门与报告脱敏
+
+- **进度:** 复现 `.venv\Scripts\python.exe -m ruff format --check .` 失败为 **23 files would be reformatted**，并确认 `_base.py` 为 CRLF 56 / bare-LF 10、`finding_identity.py` 为 CRLF 0 / bare-LF 94、`orchestrator.py` 为 CRLF 1366 / bare-LF 34、`budget.py` 为 CRLF 428 / bare-LF 6。新增 `.gitattributes` 固定 `*.py text eol=lf`，并把 pytest、Ruff lint、Ruff format check、Black 四道门写入公开贡献说明与内部合并清单；这同时更正 Step 37 的证据边界：当时只跑了 Ruff lint 与 Black，漏掉了唯一会抓住混合行尾的 Ruff format check。
+- **决策与理由:** 报告层现在会复制并清空所有带 `protected_location` 的 Evidence `matched_value`，HTML 只显示脱敏位置标记；原始 SQLite/Finding 不变，继续支持本地确定性检测与复现。这样 JSON/HTML 均不再输出 canary 等受保护明文，同时不销毁内部证据。攻击路径默认 Limitations 新增“`strategy_id`/策略铺开可能放大路径 breadth”的明确警告，并要求联读结构签名与策略分配。
+- **遇到的问题:** `attack_path_signature` 的策略铺开偏差如何影响主要指标，以及机制主效应实际阈值的“对照均值”如何定义，都属于正式实验解释与预注册口径，不能在代码修复中擅自拍板。已有 HTML 渲染 canary 明文的行为还与 PRD ④ 的文字承诺直接冲突。
+- **解决方式:** 两项研究口径已在内部 PRD 标为 `OPEN`，列出当前方案与替代方案，并明确作者确认前正式 Gate 不得起跑；当前计算与 identity 算法保持不变。canary 冲突按既有 PRD 约束直接修复，并新增 JSON/HTML 双格式回归测试，同时断言原始 Finding 未被变异。
+- **验证证据:** 当前完成代码与测试落盘；下一步先执行一次 `ruff format .` 规范化存量行尾，再运行定向测试与四道全量门。未调用真实 Provider、未生成新 Gate seed 或实验结果。
+- **剩余状态:** IN PROGRESS；TODO 为规范化 23 个文件、确认全仓无混合 Python 行尾、跑全量验证并提交推送现有 PR。两项正式实验口径保持 `OPEN`，等待作者确认。
+
 ### 2026-08-09 21:31 AEST · Step 38 · Review remediation 推送与 PR
 
 - **进度:** `fix/phase-0-5-review-findings` 已推送到 origin，并创建 ready-for-review PR [#19](https://github.com/Sumire-no-kai/RedCell/pull/19)，目标分支为受保护的 `master`。PR 描述记录了四个实现/日志提交、核心设计取舍、562 项本地验证与真实 Gate 仍为 `INCOMPLETE` 的证据边界。
