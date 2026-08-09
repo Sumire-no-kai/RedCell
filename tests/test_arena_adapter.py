@@ -66,7 +66,7 @@ def test_codec_counts_structurally_wrong_calls_as_malformed() -> None:
     assert codec.decode(LLMResponse(content='<tool_call>{"arguments": {}}')).malformed == 1
     assert (
         codec.decode(
-            LLMResponse(content='<tool_call>{"name": "x", ' '"arguments": "not-an-object"}')
+            LLMResponse(content='<tool_call>{"name": "x", "arguments": "not-an-object"}')
         ).malformed
         == 1
     )

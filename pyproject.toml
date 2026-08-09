@@ -28,8 +28,10 @@ redcell = "redcell.cli:main"
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
-    "ruff>=0.5",
-    "black>=24.4",
+    # 开发质量门必须可复现。未固定版本时,2026-08-09 重建环境会拿到
+    # Ruff/Black 互不兼容的格式规则,且 Black 26.5.1 在本机导入时挂起。
+    "ruff==0.16.1",
+    "black==24.10.0",
 ]
 
 [tool.hatch.build.targets.wheel]
