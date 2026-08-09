@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 19:28 AEST · Step 09 · Finding 与 attack-path 确定性身份
+
+- **进度:** 新增 `finding-signature-v1` 和 `attack-path-signature-v1`。结构签名只使用漏洞类别、工具/副作用类别与 Attempt/Impact 结构；攻击路径签名再加入冻结 `strategy_id`。标题、具体参数值与 canary 明文不参与身份。
+- **决策与理由:** Phase 0.5 主指标必须避免两个相反错误：按自然语言标题去重会引入 LLM/judge 噪声，按 customer ID/金额等具体值去重会把同一漏洞的参数变体虚报为 breadth。结构 identity 和 strategy identity 分层，允许报告漏洞 breadth，同时衡量不同高层策略对同一结构漏洞的确认。
+- **验证证据:** `pytest tests/test_finding_identity.py -p no:cacheprovider` 为 **2 passed**；Ruff 通过。测试固定标题/金额变化不改变签名、Strategy 变化只改变 attack-path 层。
+- **剩余状态:** DONE（身份函数）；TODO 为在报告与 Gate runner 中按该层聚合，及原样 replay Validator。Controller/Orchestrator runtime 接线仍进行中。
+
 ### 2026-08-09 19:12 AEST · Step 08 · ControllerEvidence 确定性投影
 
 - **进度:** `redcell.history` 新增 Controller 专用 projector：输入仅为 `TargetBrief`、已提交 Attempt、候选 Strategy 和 Token 账本；输出为固定 ID 排序的聚合、最近两场与跨 Strategy 高分两场的有限明细、稳定 digest 及三字段 `ControllerBudgetView`。
