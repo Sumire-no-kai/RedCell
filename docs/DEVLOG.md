@@ -5,6 +5,19 @@
 
 ---
 
+## 2026-08-09 · Phase 0.5 runtime implementation
+
+### 2026-08-09 18:09 AEST · Step 01 · 冻结处理条件协议与双层指纹
+
+- **进度:** 在 `feat/phase-0-5-runtime` 新增 Phase 0.5 的强类型处理条件：`search.selector`、跨 Attempt Generator memory 配置/四项上限，以及仅 `search=llm` 可用的独立 Controller 非秘密配置。`ExperimentConditions` 新增完整实验指纹与版本化 `regression_context_fingerprint`；新增 4 项协议测试，并复核既有 strategy catalogue 测试。
+- **决策与理由:** 完整指纹必须包含 selector、memory 与 Controller，故它不能也不应复现 Phase 0 的完整 SHA；回归上下文指纹只投影共同环境，专门用于证明六条件比较没有环境漂移。字段保持 optional 仅服务旧 Phase 0 payload 反序列化；新 Phase 0.5 builder/CLI 必须调用 `require_phase_0_5()`，拒绝不完整处理条件，避免把历史兼容误用为新实验的宽松入口。
+- **遇到的问题:** 初始测试先触发缺失 strategy catalogue，尚未走到 Controller 组合校验。这是校验顺序明确而测试 fixture 不完整，不是运行时语义问题。
+- **解决方式:** 为组合校验 fixture 加入已冻结的策略目录摘要；保留另一个专门断言“目录缺失即拒绝”的测试。
+- **验证证据:** `pytest tests/test_phase_0_5_conditions.py tests/test_strategy_catalogue.py -p no:cacheprovider` 为 **8 passed**；相关 Ruff 与 Black 检查通过。
+- **剩余状态:** DONE（协议基础）；下一步 TODO 为 Controller invocation/decision 持久化、统一异步 Driver、受控 evidence/memory 投影与 Orchestrator 接线。未调用真实 Provider、未生成正式实验结果。
+
+---
+
 ## 2026-08-09 17:55 AEST · Step 25 · Phase 0.5 Gate 修订合并与正式开发分支交接
 
 - **提交与合并:** Step 24 的公开文档修订以 `ca5212a` 提交到 `docs/phase-0-5-gate-corrections`，推送后创建 PR #16 `docs: correct Phase 0.5 gate design`。PR 状态为 `CLEAN / MERGEABLE`，仓库没有配置远端 checks；已按作者授权用 merge commit `69561bf` 合并回 `master`。内部 `PRD.md` 继续保持 gitignored，只在本地同步需求真相，没有进入提交或远端。

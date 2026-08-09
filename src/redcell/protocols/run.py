@@ -76,6 +76,77 @@ class ProviderRunConfiguration(RedCellModel):
     extra_body: dict[str, Any] = Field(default_factory=dict)
 
 
+class SearchSelector(StrEnum):
+    """本次 Run 实际使用的策略选择机制。
+
+    这里刻意记录具体的 ``thompson``，而不是含混的 ``bandit``。实验指纹必须能
+    回答“究竟跑了哪个算法”，否则将来新增 UCB 后旧数据会被错误混组。
+    """
+
+    STATIC = "static"
+    RANDOM = "random"
+    THOMPSON = "thompson"
+    LLM = "llm"
+
+
+class SearchConfiguration(RedCellModel):
+    """Phase 0.5 的因子 X：由谁选择冻结策略库中的下一条 Strategy。"""
+
+    selector: SearchSelector
+
+
+class GenerationMemoryMode(StrEnum):
+    """Phase 0.5 的因子 Y；它只控制 Generator 的跨 Attempt 可见性。"""
+
+    OFF = "off"
+    BOUNDED_RELEVANT_V1 = "bounded-relevant-v1"
+
+
+class GenerationMemoryLimits(RedCellModel):
+    """有界历史的版本化工程上限，改变任一值即改变实验条件。"""
+
+    max_detailed_attempts: int = Field(default=4, ge=1)
+    max_attempt_chars: int = Field(default=3000, ge=1)
+    max_message_chars: int = Field(default=2000, ge=1)
+    max_history_chars: int = Field(default=12000, ge=1)
+
+
+class GenerationMemoryConfiguration(RedCellModel):
+    """跨 Attempt Generator memory 的显式、可审计开关。"""
+
+    mode: GenerationMemoryMode
+    policy_version: str | None = None
+    limits: GenerationMemoryLimits | None = None
+
+    @model_validator(mode="after")
+    def _bind_mode(self) -> GenerationMemoryConfiguration:
+        if self.mode is GenerationMemoryMode.OFF:
+            if self.policy_version is not None or self.limits is not None:
+                raise ValueError("memory=off 时不得携带 memory policy 或 limits")
+        elif self.policy_version is None or self.limits is None:
+            raise ValueError("开启跨 Attempt memory 必须记录 policy_version 与 limits")
+        return self
+
+
+class ControllerRunConfiguration(RedCellModel):
+    """LLM Controller 的非秘密、可复核运行快照。"""
+
+    provider: ProviderRunConfiguration
+    connection_id: str
+    connection_fingerprint: str
+    prompt_version: str
+    evidence_policy_version: str
+    output_schema_version: str = "controller-choice-v1"
+    budget_view_policy_version: str = "controller-budget-view-v1"
+    thinking_disabled: bool
+
+    @model_validator(mode="after")
+    def _require_nonempty_identity(self) -> ControllerRunConfiguration:
+        if not self.connection_id.strip() or not self.connection_fingerprint.strip():
+            raise ValueError("Controller connection identity/fingerprint 不能为空")
+        return self
+
+
 class ArenaRunConfiguration(RedCellModel):
     """会改变靶场难度或副作用语义的所有 Phase 0 旋钮。"""
 
@@ -95,6 +166,10 @@ class ExperimentConditions(RedCellModel):
     strategy_catalogue: StrategyCatalogueSummary | None = None
     """Phase 0.5 起的新实验必须提供；None 仅用于复现 Phase 0 既有条件指纹。"""
 
+    search: SearchConfiguration | None = None
+    generation_memory: GenerationMemoryConfiguration | None = None
+    controller: ControllerRunConfiguration | None = None
+
     def fingerprint(self) -> str:
         payload = json.dumps(
             self.model_dump(mode="json", exclude_none=True),
@@ -103,6 +178,45 @@ class ExperimentConditions(RedCellModel):
             separators=(",", ":"),
         ).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
+
+    def regression_context_fingerprint(self) -> str:
+        """生成跨处理条件比较用的环境指纹。
+
+        完整指纹会且应该因 selector、memory、LLM Controller 而不同；回归比较需要
+        验证其余环境是否相同，不能通过忽略“旧对象碰巧没有的字段”来伪造兼容。
+        """
+        payload = {
+            "version": "regression-context-v1",
+            "online": self.online,
+            "actor": self.actor,
+            "target": self.target.model_dump(mode="json"),
+            "attacker": self.attacker.model_dump(mode="json"),
+            "arena": self.arena.model_dump(mode="json"),
+            "strategy_catalogue": (
+                self.strategy_catalogue.model_dump(mode="json")
+                if self.strategy_catalogue is not None
+                else None
+            ),
+        }
+        encoded = json.dumps(
+            payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def require_phase_0_5(self) -> None:
+        """拒绝用不完整处理条件创建新的 Phase 0.5 Run。
+
+        模型字段保持 optional 仅为了反序列化冻结的 Phase 0 payload；新的 builder/CLI
+        必须显式调用本方法，不能把历史兼容性偷渡成新实验的宽松校验。
+        """
+        if self.strategy_catalogue is None:
+            raise ValueError("Phase 0.5 Run 必须提供 strategy_catalogue")
+        if self.search is None or self.generation_memory is None:
+            raise ValueError("Phase 0.5 Run 必须提供 search 与 generation_memory")
+        if self.search.selector is SearchSelector.LLM and self.controller is None:
+            raise ValueError("search=llm 必须提供独立的 Controller 配置")
+        if self.search.selector is not SearchSelector.LLM and self.controller is not None:
+            raise ValueError("非 LLM search 不得携带 Controller 配置")
 
 
 class Run(RedCellModel):
