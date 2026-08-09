@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 21:28 AEST · Step 37 · Review remediation 全量回归与提交收尾
+
+- **进度:** 三个审查修复切片已经分别提交：`b382171` 修复 Provider usage/角色账本与 Controller 恢复，`f92604c` 冻结 Finding/attack-path 结构身份，`cb7700c` 完成 Gate、controls、checkpoint、validator 与 verdict 证据闭环。复核 `origin/master...HEAD` 只包含代码、测试与公开 DEVLOG；内部 `PRD.md`、`AGENTS.md`、`CLAUDE.md` 未被 Git 跟踪。
+- **验证证据:** `.venv\Scripts\python.exe -m pytest -p no:cacheprovider` 为 **562 passed in 67.63s**；`.venv\Scripts\python.exe -m ruff check .` 全部通过；`.venv\Scripts\python.exe -m black --check src tests` 确认 **101 files would be left unchanged**；`git diff --check HEAD^ HEAD` 通过。测试数量由审查前 543 增至 562，新增用例覆盖九项已确认缺陷及完整 `SUPPORTED` 合成证据路径。
+- **遇到的问题:** 仓库根目录 `.pytest_cache` 在当前权限下不可写；最终全量测试使用 `-p no:cacheprovider` 关闭非功能性缓存，测试本身无跳过、无失败。Git 读取用户级 global ignore 时仍打印权限 warning，但工作树状态、差异与提交均可正常核验。
+- **剩余状态:** CODE REVIEW REMEDIATION DONE；真实 Phase 0.5 实验 Gate 仍为 `INCOMPLETE`，不得从 562 个工程测试推导为实验 `SUPPORTED`。下一步仅剩提交本条日志、刷新远端、推送当前分支并创建 ready-for-review PR；不在本步骤直接合并。
+
 ### 2026-08-09 21:25 AEST · Step 36 · Phase 0.5 Gate 证据闭环与判定语义修复
 
 - **进度:** 重写 Gate 的冻结证据核验面：从同一 320k 事件流投影 64k/160k/320k 前缀，只有实际达到 checkpoint、Run 以 Token 上限结束且总账与三角色账守恒时才可进入 paired block；重复的 seed×condition 不再覆盖，缺失 primary、计划外 seed 与 Controller 配置漂移均显式失败。160k 主分析保留 LLM×memory 对 Static/Random/Thompson 的三项成对检验，并补齐 Selector/Memory 主效应、四项 simple effect 与交互诊断。新增 Level-1 golden、完整 positive/negative/utility controls、Attacker controls、Controller contract controls、Static×off 320k ASR 漂移、Strategy/漏洞类别 coverage、Token/attack-path 成本、逐 Run×path 五次重放和 LLM Invocation→Decision 审计保护线。报告现在明确区分 `SUPPORTED`、`NOT_SUPPORTED`、`EXPERIMENT_INVALID` 与尚未形成实验结论的 `INCOMPLETE`。
