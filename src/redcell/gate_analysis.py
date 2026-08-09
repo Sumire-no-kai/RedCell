@@ -58,6 +58,7 @@ class GateAnalysis(RedCellModel):
     checkpoint_tokens: int
     valid_seeds: list[int]
     invalid_seeds: list[int]
+    reserve_seeds: list[int] = Field(default_factory=list)
     comparisons: list[PairedComparison]
 
     @property
@@ -74,13 +75,14 @@ def analyse_phase_0_5(
         if prefix.checkpoint_tokens != checkpoint_tokens:
             continue
         by_seed.setdefault(prefix.seed, {})[prefix.condition] = prefix
-    valid: list[int] = []
+    eligible: list[int] = []
     invalid: list[int] = []
     for seed, values in sorted(by_seed.items()):
         if set(values) == required and all(value.valid for value in values.values()):
-            valid.append(seed)
+            eligible.append(seed)
         else:
             invalid.append(seed)
+    valid = eligible[:12]
     comparisons = [
         _comparison(valid, by_seed, GateCondition.LLM_MEMORY, control, bootstrap_samples)
         for control in (
@@ -98,6 +100,7 @@ def analyse_phase_0_5(
         checkpoint_tokens=checkpoint_tokens,
         valid_seeds=valid,
         invalid_seeds=invalid,
+        reserve_seeds=eligible[12:],
         comparisons=comparisons,
     )
 

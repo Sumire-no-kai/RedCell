@@ -32,3 +32,21 @@ def test_gate_analysis_requires_complete_paired_blocks_and_uses_path_identity() 
     assert len(analysis.comparisons) == 3
     assert all(item.mean_difference == 3 for item in analysis.comparisons)
     assert analysis.passed
+
+
+def test_gate_analysis_keeps_later_complete_blocks_as_reserves() -> None:
+    prefixes = [
+        TokenPrefix(
+            seed=seed,
+            condition=condition,
+            checkpoint_tokens=160000,
+            attack_path_signatures={condition.value},
+        )
+        for seed in range(13)
+        for condition in GateCondition
+    ]
+
+    analysis = analyse_phase_0_5(prefixes, bootstrap_samples=10)
+
+    assert analysis.valid_seeds == list(range(12))
+    assert analysis.reserve_seeds == [12]

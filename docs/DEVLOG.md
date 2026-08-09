@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 21:08 AEST · Step 23 · 预注册备用 seed 的顺序处理
+
+- **进度:** Gate 分析现在将完整、有效 paired block 按 seed 顺序取前 12 个作为主分析样本，其余完整 block 明确标为 reserve，不与主分析混合；不完整/失效 block 仍单列为 invalid。
+- **决策与理由:** 备用 seed 的作用是补位而不是在看过结果后扩大样本或挑出更好结果。把 12 个主 block 与后续 reserve 分开落盘，使“主结果使用了哪些 seed”可审计。
+- **验证证据:** `pytest tests/test_gate_analysis.py -p no:cacheprovider` 为 **2 passed**；新增第 13 个完整 block fixture，确认它只进入 reserve。Ruff/Black 通过。
+- **剩余状态:** DONE（主/备用 block 分离）；TODO 为完整事件 fixture、保护线/报告和 CLI 导出。
+
 ### 2026-08-09 20:55 AEST · Step 22 · 从不可变事件投影 Gate Token 前缀
 
 - **进度:** Gate 分析新增 `token_prefixes_from_events`：从 `ATTEMPT_COMMITTED` 的落盘 usage 与 finding ID 按事件序号重建 64k/160k/320k 前缀；一旦某个 commit 的累计已知 Token 超过 checkpoint，即停止加入后续路径。条件由冻结 `search.selector` 与 `generation_memory.mode` 映射至六条件矩阵，矩阵外组合直接拒绝。
