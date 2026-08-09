@@ -7,6 +7,12 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 22:02 AEST · Step 41 · 二次互检修复提交、推送与 PR 刷新
+
+- **进度:** 行尾门、报告脱敏、Gate limitation 与测试修复已提交为 `1d7bee3`（`fix: close report and formatting review gaps`），并推送到现有 `fix/phase-0-5-review-findings`；PR [#19](https://github.com/Sumire-no-kai/RedCell/pull/19) 描述已同步新增修复、563 项验证、Ruff format 门和两项待作者冻结的实验口径。
+- **验证证据:** 提交仅含 `.gitattributes`、README、公开 DEVLOG、实现与测试共 9 个文件；内部 `PRD.md` / `AGENTS.md` / `CLAUDE.md` 继续由 `.gitignore` 排除。推送后本地与 `origin/fix/phase-0-5-review-findings` 为 behind 0 / ahead 0；GitHub 报告 PR 为 `OPEN`、非 Draft、`MERGEABLE`、`CLEAN`，当前仍没有远端 status checks，故不声称 CI 通过。
+- **剩余状态:** DONE（修复/commit/push/PR 更新）；PR 尚未合并。正式 Gate 仍为 `INCOMPLETE`，两项研究口径保持 `OPEN` 等待作者确认。
+
 ### 2026-08-09 21:55 AEST · Step 40 · 二次互检修复全量回归
 
 - **进度:** `ruff format .` 一次性规范化了 24 个文件（23 个既有格式失败文件加本轮新改文件），随后逐字节扫描全部 102 个受跟踪 Python 文件，确认混合行尾数为 **0**。报告脱敏、Gate Limitations、格式门文档与回归测试均已完成。
