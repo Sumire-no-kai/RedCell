@@ -360,7 +360,10 @@ class RunOrchestrator:
                     event = self._event(
                         run,
                         RunEventType.SELECTION_ABANDONED,
-                        payload={"selection_abandonment": exc.invocation.model_dump(mode="json")},
+                        payload={
+                            "selection_abandonment": exc.invocation.model_dump(mode="json"),
+                            "usage": run.usage.model_dump(mode="json"),
+                        },
                     )
                     await self._persist(
                         partial(self._store.commit_run_state, run=run, run_event=event), retry_rng
@@ -445,6 +448,7 @@ class RunOrchestrator:
                         attempt_id=attempt_id,
                         payload={
                             "failure": exc.failure.model_dump(mode="json"),
+                            "usage": run.usage.model_dump(mode="json"),
                             "partial_turns": [
                                 turn.model_dump(mode="json") for turn in exc.partial_turns
                             ],
@@ -498,6 +502,7 @@ class RunOrchestrator:
                             attempt_id=attempt_id,
                             payload={
                                 "failure": failure.model_dump(mode="json"),
+                                "usage": failed.usage.model_dump(mode="json"),
                                 "partial_turns": [
                                     turn.model_dump(mode="json") for turn in result.attempt.turns
                                 ],
@@ -653,7 +658,10 @@ class RunOrchestrator:
                     failed,
                     RunEventType.ATTEMPT_ABANDONED,
                     attempt_id=current_attempt_id,
-                    payload={"failure": failure.model_dump(mode="json")},
+                    payload={
+                        "failure": failure.model_dump(mode="json"),
+                        "usage": failed.usage.model_dump(mode="json"),
+                    },
                 )
                 await self._persist(
                     partial(
@@ -794,7 +802,10 @@ class RunOrchestrator:
                 aborted,
                 RunEventType.ATTEMPT_ABANDONED,
                 attempt_id=current_attempt_id,
-                payload={"reason": "user cancelled"},
+                payload={
+                    "reason": "user cancelled",
+                    "usage": aborted.usage.model_dump(mode="json"),
+                },
             )
             await self._persist(
                 partial(
@@ -984,7 +995,11 @@ class RunOrchestrator:
             recovered,
             RunEventType.ATTEMPT_ABANDONED,
             attempt_id=attempt_id,
-            payload={"reason": abandoned.failure_reason, "recovered_on_resume": True},
+            payload={
+                "reason": abandoned.failure_reason,
+                "recovered_on_resume": True,
+                "usage": recovered.usage.model_dump(mode="json"),
+            },
         )
         resumed_event = self._event(
             recovered,

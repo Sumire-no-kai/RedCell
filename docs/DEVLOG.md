@@ -7,6 +7,15 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 21:25 AEST · Step 36 · Phase 0.5 Gate 证据闭环与判定语义修复
+
+- **进度:** 重写 Gate 的冻结证据核验面：从同一 320k 事件流投影 64k/160k/320k 前缀，只有实际达到 checkpoint、Run 以 Token 上限结束且总账与三角色账守恒时才可进入 paired block；重复的 seed×condition 不再覆盖，缺失 primary、计划外 seed 与 Controller 配置漂移均显式失败。160k 主分析保留 LLM×memory 对 Static/Random/Thompson 的三项成对检验，并补齐 Selector/Memory 主效应、四项 simple effect 与交互诊断。新增 Level-1 golden、完整 positive/negative/utility controls、Attacker controls、Controller contract controls、Static×off 320k ASR 漂移、Strategy/漏洞类别 coverage、Token/attack-path 成本、逐 Run×path 五次重放和 LLM Invocation→Decision 审计保护线。报告现在明确区分 `SUPPORTED`、`NOT_SUPPORTED`、`EXPERIMENT_INVALID` 与尚未形成实验结论的 `INCOMPLETE`。
+- **决策与理由:** Gate 被实现为集中、fail-closed 的证据模块，而不是在 CLI 中分散布尔判断。对照报告不仅看 `passed`，还绑定正式 Target/Attacker/Controller 配置、策略目录、TargetBrief digest、冻结 case ID、重复次数与样本数；理由是“同样 12 条/同样 5 次”不足以证明跑的是预注册条件。`NOT_SUPPORTED` 只保留给完整有效实验中主效应或 treatment 保护线未过；preflight、历史 ASR、Token/审计/环境/数据完整性故障归为 `EXPERIMENT_INVALID`，缺少尚未执行的证据归为 `INCOMPLETE`，避免把工程故障伪装成算法负结果。
+- **遇到的问题:** 定向测试首先发现 Attacker control 的新条件模型在 CLI 的错误边界之外验证 `samples=1`，使本应为 `BAD_CONFIG` 的输入泄漏成未处理异常；修复为在加载 Provider、消耗 quota 之前拒绝。继续复核前缀口径时发现 Selection/Attempt abandonment 的累计 Token 虽已进入 BudgetManager，却未全部写入事件 payload，且投影只从 committed Attempt 更新成本，会低估“没有形成 Attempt 的已知用量”。
+- **解决方式:** 所有会改变累计远程用量的 selection/attempt abandonment 事件现在同步保存 usage；前缀从每条带 usage 的不可变事件取不超过 checkpoint 的最大累计值，并在应带 usage 的事件缺失快照时使 prefix 失效。Validator 的去重键从单一 path 改为 `(run_id, attack_path)`，避免不同 run 的相同路径互相覆盖；Gate 同时拒绝 unknown/missing replay usage、重复 Controller invocation 引用和未知用量的失败 Invocation。
+- **验证证据:** Ruff 与 Black 定向检查通过；Gate/CLI/analysis/validator/conditions/controller-controls/attacker-controls 定向回归 **61 passed**，Gate+analysis+validator+orchestrator 回归 **38 passed**。新增 12 seed × 6 condition 的全证据合成测试，确认合法矩阵能够得到 `SUPPORTED`；另覆盖重复单元格、未达 checkpoint、无 usage 事件、无 Attempt 的 selection 成本、跨 Run 同路径重放以及四类 verdict。
+- **剩余状态:** DONE（审查发现的 Gate/前缀/controls/validator 切片）；TODO 为执行全量测试与格式检查、同步最终证据、提交、推送并创建 PR。正式 Phase 0.5 Gate 仍为 `INCOMPLETE`：真实未观察 seed 计划、在线 preflight、六条件矩阵与 replay 证据尚未执行，代码测试不得替代这些外部实验事实。
+
 ### 2026-08-09 20:55 AEST · Step 35 · Finding 结构身份与实验版本冻结
 
 - **进度:** Finding signature v2 现同时绑定工具名、参数键、JSON 类型、约束参数/种类，以及受保护数据的位置和 canary 的 SHA-256 摘要；具体参数值与 canary 明文仍不进入签名。Level-1 scorer 在 Evidence 中显式记录这些结构语义。`ExperimentConditions` 新增 scorer、finding signature、attack-path signature 三项版本，任一变化都会改变完整实验指纹。

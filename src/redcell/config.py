@@ -182,7 +182,10 @@ def load_attacker() -> OpenAICompatibleProvider:
     因此不该因为 target 那半边配置不全就拒绝启动:
     那会把一道"检查攻击方"的诊断,错误地卡在一个与它无关的前置条件上。
     """
-    return AttackerSettings().build(name="attacker")
+    settings = AttackerSettings()
+    provider = settings.build(name="attacker")
+    provider.run_configuration = settings.run_configuration()
+    return provider
 
 
 def load_controller() -> tuple[OpenAICompatibleProvider, ProviderRunConfiguration]:

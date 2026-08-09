@@ -22,7 +22,11 @@ from redcell.arena.support_agent import (
     ArenaAdapter,
     DefenseLevel,
 )
-from redcell.attacker_control import run_attacker_control
+from redcell.attacker_control import (
+    AttackerControlConditions,
+    AttackerControlReport,
+    run_attacker_control,
+)
 from redcell.budget import BudgetLimits
 from redcell.config import (
     ProviderConfigError,
@@ -32,7 +36,10 @@ from redcell.config import (
     load_providers,
 )
 from redcell.controller import LLMControllerAdapter
-from redcell.controller_controls import run_controller_contract_controls
+from redcell.controller_controls import (
+    ControllerContractReport,
+    run_controller_contract_controls,
+)
 from redcell.controls import (
     ControlsReport,
     controls_conditions,
@@ -42,6 +49,7 @@ from redcell.controls import (
 from redcell.executor import ConversationExecutor
 from redcell.failures import FailureStage
 from redcell.gate_analysis import SeedPlan
+from redcell.gate_evidence import GoldenReport
 from redcell.gate_report import build_gate_report
 from redcell.generation import AttackGenerator, TemplateAttackGenerator
 from redcell.llm.base import LLMProvider
@@ -641,6 +649,15 @@ def gate_report(
     seed_plan_json: Annotated[
         Path | None, typer.Option(help="冻结的 12+4 seed plan JSON；缺失时报告保持 INCOMPLETE")
     ] = None,
+    golden_json: Annotated[
+        Path | None, typer.Option(help="冻结 Level-1 golden 结果；缺失时报告保持 INCOMPLETE")
+    ] = None,
+    attacker_control_json: Annotated[
+        Path | None, typer.Option(help="冻结 attacker control JSON；缺失时报告保持 INCOMPLETE")
+    ] = None,
+    controller_controls_json: Annotated[
+        Path | None, typer.Option(help="冻结 Controller controls JSON；缺失时报告保持 INCOMPLETE")
+    ] = None,
 ) -> None:
     """从已落盘的 Run/Event/Finding 重建冻结的 Phase 0.5 Gate 分析。"""
     controls_result = (
@@ -658,17 +675,37 @@ def gate_report(
         if seed_plan_json is not None
         else None
     )
+    golden_result = (
+        GoldenReport.model_validate_json(golden_json.read_text(encoding="utf-8"))
+        if golden_json is not None
+        else None
+    )
+    attacker_control_result = (
+        AttackerControlReport.model_validate_json(attacker_control_json.read_text(encoding="utf-8"))
+        if attacker_control_json is not None
+        else None
+    )
+    controller_controls_result = (
+        ControllerContractReport.model_validate_json(
+            controller_controls_json.read_text(encoding="utf-8")
+        )
+        if controller_controls_json is not None
+        else None
+    )
     with RunStore(db) as store:
         result = build_gate_report(
             store,
             controls=controls_result,
+            golden=golden_result,
+            attacker_control=attacker_control_result,
+            controller_controls=controller_controls_result,
             validation=validation_result,
             seed_plan=seed_plan,
         )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(result.model_dump_json(indent=2), encoding="utf-8")
     typer.echo(f"Gate report: {out}")
-    typer.echo("SUPPORTED" if result.supported else "NOT SUPPORTED / INCOMPLETE")
+    typer.echo(result.verdict.value)
 
 
 @app.command(name="controller-controls")
@@ -692,10 +729,18 @@ def controller_controls(
         temperature=configuration.temperature,
         max_tokens=configuration.max_tokens,
     )
+    frozen_controller = ControllerRunConfiguration(
+        provider=configuration,
+        connection_id=f"controller:{configuration.provider}",
+        connection_fingerprint=configuration.base_url,
+        prompt_version="controller-prompt-v1",
+        evidence_policy_version="controller-evidence-v1",
+        thinking_disabled=True,
+    )
 
     async def _run_and_close():
         try:
-            return await run_controller_contract_controls(driver)
+            return await run_controller_contract_controls(driver, controller=frozen_controller)
         finally:
             await provider.aclose()
 
@@ -794,6 +839,13 @@ def attacker_control(
     """
     policy = SUPPORT_AGENT_POLICY
     strategies = select_applicable(list(PHASE_0_STRATEGIES), policy)
+    if samples < 2:
+        typer.secho(
+            "配置被拒绝:samples 至少为 2，才能计算策略内相似度。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(ExitCode.BAD_CONFIG)
     if not strategies:
         typer.secho("没有适用于该目标的策略。", fg=typer.colors.RED, err=True)
         raise typer.Exit(ExitCode.BAD_CONFIG)
@@ -806,6 +858,30 @@ def attacker_control(
         raise typer.Exit(ExitCode.BAD_CONFIG) from exc
 
     generator = LLMMutationGenerator(attacker, model=attacker.model)
+    attacker_configuration = getattr(
+        attacker,
+        "run_configuration",
+        ProviderRunConfiguration(
+            provider=attacker.name,
+            base_url="in-process://test-double",
+            model=attacker.model,
+            temperature=1.0,
+            max_tokens=512,
+            rpm=0,
+            max_concurrency=0,
+            input_usd_per_mtok=0,
+            output_usd_per_mtok=0,
+        ),
+    )
+    attacker_conditions = AttackerControlConditions.build(
+        attacker=attacker_configuration,
+        strategy_catalogue=StrategyCatalogue(
+            version="phase0.5-v1", strategies=strategies
+        ).condition_summary(),
+        brief=brief,
+        samples_per_strategy=samples,
+        seed=seed,
+    )
 
     async def _control_and_close():
         # 与 run 同理:provider 必须在创建它的那个事件循环里关闭。
@@ -816,6 +892,7 @@ def attacker_control(
                 brief,
                 samples_per_strategy=samples,
                 seed=seed,
+                conditions=attacker_conditions,
             )
         finally:
             await attacker.aclose()

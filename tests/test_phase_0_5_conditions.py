@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from redcell.budget import BudgetLimits
 from redcell.protocols import (
     ArenaRunConfiguration,
     ControllerRunConfiguration,
@@ -10,6 +11,7 @@ from redcell.protocols import (
     GenerationMemoryLimits,
     GenerationMemoryMode,
     ProviderRunConfiguration,
+    Run,
     SearchConfiguration,
     SearchSelector,
     StrategyCatalogue,
@@ -136,4 +138,22 @@ def test_experiment_fingerprint_binds_scorer_and_identity_versions() -> None:
         != baseline.model_copy(
             update={"attack_path_signature_version": "attack-path-signature-v-next"}
         ).fingerprint()
+    )
+
+
+def test_gate_context_fingerprint_binds_budget_contract() -> None:
+    run = Run(
+        target_name="target",
+        policy_version="policy-v1",
+        adapter_type="arena",
+        algorithm="static",
+        limits=BudgetLimits(max_total_tokens=320000),
+        experiment_conditions=_conditions(),
+    )
+
+    assert (
+        run.gate_context_fingerprint()
+        != run.model_copy(
+            update={"limits": BudgetLimits(max_total_tokens=160000)}
+        ).gate_context_fingerprint()
     )

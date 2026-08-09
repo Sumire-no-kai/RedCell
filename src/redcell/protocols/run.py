@@ -207,6 +207,9 @@ class ExperimentConditions(RedCellModel):
                 if self.strategy_catalogue is not None
                 else None
             ),
+            "scorer_version": self.scorer_version,
+            "finding_signature_version": self.finding_signature_version,
+            "attack_path_signature_version": self.attack_path_signature_version,
         }
         encoded = json.dumps(
             payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")
@@ -288,6 +291,26 @@ class Run(RedCellModel):
     @property
     def has_auditable_conditions(self) -> bool:
         return self.experiment_conditions is not None and self.experiment_fingerprint is not None
+
+    def gate_context_fingerprint(self) -> str:
+        """Bind every non-treatment contract that can change Gate eligibility."""
+        if self.experiment_conditions is None:
+            raise ValueError("Gate context requires experiment_conditions")
+        payload = {
+            "version": "phase-0.5-gate-context-v1",
+            "target_name": self.target_name,
+            "policy_version": self.policy_version,
+            "adapter_type": self.adapter_type,
+            "protocol_version": self.protocol_version,
+            "regression_context": self.experiment_conditions.regression_context_fingerprint(),
+            "limits": self.limits.model_dump(mode="json"),
+            "reliability": self.reliability.model_dump(mode="json"),
+            "selection_reliability": self.selection_reliability.model_dump(mode="json"),
+        }
+        encoded = json.dumps(
+            payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
     @property
     def is_conclusive(self) -> bool:
