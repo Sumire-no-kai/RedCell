@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 22:18 AEST · Step 42 · PR #19 合并前复核与权限回退
+
+- **进度:** 作者明确授权合并 PR #19。合并前重新刷新 `origin/master`，确认工作树干净、分支 behind 0 / ahead 7、PR head 为 `9889fa1`；GitHub 返回 PR 可合并，且无 review、无未解决 review thread。
+- **遇到的问题:** 仓库没有配置远端 status checks，因此只能如实沿用 Step 40 的本地 563 项测试和四道格式门证据；首次通过 GitHub App integration 发起带 expected-head 保护的 merge commit 时返回 HTTP 403 `Resource not accessible by integration`，属于集成权限不足，不是代码或 PR 冲突。
+- **解决方式:** 不降低保护、不改写主干，改用仓库已有认证的 `gh` 权限执行相同的 merge-commit 流程；本条先提交推送，再以新的精确 PR head SHA 重新核验并合并，避免在记录变更后误合旧 head。
+- **剩余状态:** IN PROGRESS；TODO 为推送本条日志、重新确认 PR head/mergeability、执行合并并验证 `origin/master` 实际包含 PR head。
+
 ### 2026-08-09 22:02 AEST · Step 41 · 二次互检修复提交、推送与 PR 刷新
 
 - **进度:** 行尾门、报告脱敏、Gate limitation 与测试修复已提交为 `1d7bee3`（`fix: close report and formatting review gaps`），并推送到现有 `fix/phase-0-5-review-findings`；PR [#19](https://github.com/Sumire-no-kai/RedCell/pull/19) 描述已同步新增修复、563 项验证、Ruff format 门和两项待作者冻结的实验口径。
