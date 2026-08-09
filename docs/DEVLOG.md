@@ -7,6 +7,14 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 19:45 AEST · Step 10 · LLM Controller 编排路径与 Invocation→Decision→Attempt 顺序
+
+- **进度:** `RunOrchestrator` 现支持二选一的同步 `SearchController` 或异步 `ControllerDriver`。LLM 路径先构造 ControllerEvidence、执行并持久化 Invocation、计入 Controller Token，再创建统一 `ControllerDecision` 并进入既有 Attempt 提交状态机；本地 Static/Random/Thompson 路径保持原有 RNG、update/abandon/restore 行为。
+- **恢复语义:** LLM resume 只恢复已经落盘的 Decision 列表并推进 Driver 的逻辑 selection index，不重调任何历史模型调用；pending Decision 仍按既有安全边界拒绝直接重放。
+- **决策与理由:** 没有将 async provider 调用伪装成同步 `SearchController.select()`。两个实现通过同一 Decision/Attempt 记录相交，避免报告、存储和重试维护两套不同事实；LLM Token 在选择后立刻计账，repair 也已包含在 Invocation cost 中。
+- **验证证据:** `pytest tests/test_orchestrator.py -p no:cacheprovider` 为 **16 passed**；新增 ScriptedProvider 场景验证 Invocation 先于 Attempt 持久化、Decision 引用 invocation ID、总 Token 包含 Controller 调用；Ruff 通过。
+- **剩余状态:** DONE（基本 LLM orchestration）；TODO 为 Selection Abandonment 独立阈值/INDETERMINATE 语义、完整 Controller resume 测试、CLI 控制器配置、controls/analysis/validator/reporting。
+
 ### 2026-08-09 19:28 AEST · Step 09 · Finding 与 attack-path 确定性身份
 
 - **进度:** 新增 `finding-signature-v1` 和 `attack-path-signature-v1`。结构签名只使用漏洞类别、工具/副作用类别与 Attempt/Impact 结构；攻击路径签名再加入冻结 `strategy_id`。标题、具体参数值与 canary 明文不参与身份。

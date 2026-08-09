@@ -169,6 +169,12 @@ class LLMControllerAdapter(ControllerDriver):
     def name(self) -> str:
         return "llm"
 
+    def resume_at(self, next_selection_index: int) -> None:
+        """恢复时只推进逻辑序号，绝不重调或重写已持久化的历史决定。"""
+        if next_selection_index < 0:
+            raise ValueError("next_selection_index 必须 >= 0")
+        self._selection_index = next_selection_index
+
     async def select(self, evidence: ControllerEvidence) -> ControllerSelection:
         index = self._selection_index
         self._selection_index += 1

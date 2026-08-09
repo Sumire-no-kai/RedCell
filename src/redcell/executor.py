@@ -309,6 +309,10 @@ class ConversationExecutor:
     def policy_version(self) -> str:
         return self._policy.version
 
+    def target_brief(self, actor: str):
+        """返回经 Policy 脱敏的攻击/Controller 可见 TargetBrief。"""
+        return self._policy.brief_for(actor)
+
     @property
     def adapter_type(self) -> str:
         return self._adapter.adapter_type
