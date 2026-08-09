@@ -22,6 +22,23 @@ class AttackGenerationError(RuntimeError):
     """Generator 无法为当前轮生成有效消息。"""
 
 
+class GenerationMemory(RedCellModel):
+    """经投影和裁剪后才允许穿过 Generator seam 的跨 Attempt 历史。"""
+
+    policy_version: str
+    selected_attempt_refs: list[str] = Field(max_length=4)
+    rendered_history: str
+    digest: str
+    truncated: bool = False
+    rendered_chars: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _rendered_length_matches(self) -> GenerationMemory:
+        if self.rendered_chars != len(self.rendered_history):
+            raise ValueError("GenerationMemory.rendered_chars 必须等于实际渲染长度")
+        return self
+
+
 class AttackGenerationRequest(RedCellModel):
     strategy: Strategy
     brief: TargetBrief
@@ -35,6 +52,8 @@ class AttackGenerationRequest(RedCellModel):
 
     turn_index: int = Field(ge=0)
     prior_turns: list[Turn] = Field(default_factory=list)
+    cross_attempt_memory: GenerationMemory | None = None
+    """仅 Phase 0.5 memory-enabled 条件可提供；Attempt 内 prior_turns 不受影响。"""
     seed: int = Field(ge=0)
 
     @property

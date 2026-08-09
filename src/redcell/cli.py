@@ -28,8 +28,11 @@ from redcell.config import (
     ProviderConfigError,
     ProviderPair,
     load_attacker,
+    load_controller,
     load_providers,
 )
+from redcell.controller import LLMControllerAdapter
+from redcell.controller_controls import run_controller_contract_controls
 from redcell.controls import (
     ControlsReport,
     controls_conditions,
@@ -38,6 +41,8 @@ from redcell.controls import (
 )
 from redcell.executor import ConversationExecutor
 from redcell.failures import FailureStage
+from redcell.gate_analysis import SeedPlan
+from redcell.gate_report import build_gate_report
 from redcell.generation import AttackGenerator, TemplateAttackGenerator
 from redcell.llm.base import LLMProvider
 from redcell.llm.scripted import ScriptedProvider
@@ -50,12 +55,18 @@ from redcell.orchestrator import (
 )
 from redcell.protocols.run import (
     ArenaRunConfiguration,
+    ControllerRunConfiguration,
     ExperimentConditions,
+    GenerationMemoryConfiguration,
+    GenerationMemoryLimits,
+    GenerationMemoryMode,
     ProviderRunConfiguration,
     Run,
     RunStatus,
+    SearchConfiguration,
+    SearchSelector,
 )
-from redcell.protocols.strategy import select_applicable
+from redcell.protocols.strategy import StrategyCatalogue, select_applicable
 from redcell.randomness import controller_seed_for
 from redcell.report import ReportData, write_report
 from redcell.scoring.level1 import Level1Scorer
@@ -67,6 +78,7 @@ from redcell.search import (
 )
 from redcell.storage import DEFAULT_URL, RunStore
 from redcell.strategies import PHASE_0_STRATEGIES
+from redcell.validator import ValidationReport
 
 app = typer.Typer(
     add_completion=False,
@@ -208,7 +220,15 @@ def _experiment_conditions(
 
 @app.command()
 def run(
-    algorithm: Annotated[str, typer.Option(help="搜索算法:static / random / thompson")] = "static",
+    algorithm: Annotated[
+        str | None, typer.Option(help="旧参数：static / random / thompson；与 --search 不能并用")
+    ] = None,
+    search: Annotated[
+        str | None, typer.Option(help="Phase 0.5 搜索方式：static / random / thompson / llm")
+    ] = None,
+    cross_attempt_memory: Annotated[
+        str, typer.Option(help="跨 Attempt Generator memory：off / bounded-relevant-v1")
+    ] = "off",
     budget: Annotated[int, typer.Option(help="最大 attempt 数")] = 20,
     seed: Annotated[int, typer.Option(help="实验种子;同一 seed 结果可复现")] = 0,
     actor: Annotated[str, typer.Option(help="攻击时扮演的身份")] = "customer_a",
@@ -258,6 +278,17 @@ def run(
     默认离线(脚本化 provider),验证的是**流水线**而非靶场的真实安全性。
     加 `--online` 才接入真实模型 —— 那时才会产出可用于校准的结论。
     """
+    if algorithm is not None and search is not None:
+        raise typer.BadParameter("--algorithm 与 --search 不能同时提供")
+    selected_search = search or algorithm or "static"
+    try:
+        selector = SearchSelector(selected_search)
+        memory_mode = GenerationMemoryMode(cross_attempt_memory)
+    except ValueError as exc:
+        raise typer.BadParameter("非法 search 或 cross-attempt-memory 值") from exc
+    if selector is SearchSelector.LLM and max_tokens is None:
+        raise typer.BadParameter("--search llm 必须设置 --max-tokens，Controller 需要总 Token 预算")
+
     limits = BudgetLimits(
         max_attempts=budget,
         max_total_tokens=max_tokens,
@@ -289,6 +320,17 @@ def run(
         enforce_permissions=enforce_permissions,
         enforce_confirmation=enforce_confirmation,
     )
+    controller_provider = None
+    controller_configuration = None
+    if selector is SearchSelector.LLM:
+        if not online:
+            raise typer.BadParameter("--search llm 需要 --online 与独立 REDCELL_CONTROLLER_* 配置")
+        try:
+            controller_provider, controller_configuration = load_controller()
+        except ProviderConfigError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+
+    catalogue = StrategyCatalogue(version="phase0.5-v1", strategies=strategies).condition_summary()
     conditions = _experiment_conditions(
         online=online,
         providers=providers,
@@ -297,12 +339,42 @@ def run(
         enforce_permissions=enforce_permissions,
         enforce_confirmation=enforce_confirmation,
     )
+    conditions = conditions.model_copy(
+        update={
+            "strategy_catalogue": catalogue,
+            "search": SearchConfiguration(selector=selector),
+            "generation_memory": GenerationMemoryConfiguration(
+                mode=memory_mode,
+                policy_version=(
+                    "bounded-relevant-v1" if memory_mode is not GenerationMemoryMode.OFF else None
+                ),
+                limits=(
+                    GenerationMemoryLimits()
+                    if memory_mode is not GenerationMemoryMode.OFF
+                    else None
+                ),
+            ),
+            "controller": (
+                ControllerRunConfiguration(
+                    provider=controller_configuration,
+                    connection_id=f"controller:{controller_configuration.provider}",
+                    connection_fingerprint=controller_configuration.base_url,
+                    prompt_version="controller-prompt-v1",
+                    evidence_policy_version="controller-evidence-v1",
+                    thinking_disabled=True,
+                )
+                if controller_configuration is not None
+                else None
+            ),
+        }
+    )
+    conditions.require_phase_0_5()
 
     run_record = Run(
         target_name=policy.target_name,
         policy_version=policy.version,
         adapter_type=adapter.adapter_type,
-        algorithm=algorithm,
+        algorithm=selector.value,
         limits=limits,
         seed=seed,
         target_model=conditions.target.model,
@@ -315,16 +387,32 @@ def run(
         notes=None if online else OFFLINE_NOTICE,
     )
 
-    orchestrator = RunOrchestrator(
-        executor=ConversationExecutor(
+    orchestrator_args = {
+        "executor": ConversationExecutor(
             adapter=adapter,
             generator=generator,
             scorer=Level1Scorer(policy),
             policy=policy,
         ),
-        controller=_controller(algorithm, seed),
-        store=(store := RunStore(db)),
-    )
+        "store": (store := RunStore(db)),
+    }
+    if selector is SearchSelector.LLM:
+        assert controller_provider is not None and controller_configuration is not None
+        orchestrator = RunOrchestrator(
+            **orchestrator_args,
+            driver=LLMControllerAdapter(
+                provider=controller_provider,
+                run_id=run_record.id,
+                prompt_version="controller-prompt-v1",
+                model=controller_configuration.model,
+                temperature=controller_configuration.temperature,
+                max_tokens=controller_configuration.max_tokens,
+            ),
+        )
+    else:
+        orchestrator = RunOrchestrator(
+            **orchestrator_args, controller=_controller(selector.value, seed)
+        )
 
     if not online:
         typer.secho(f"⚠️  {OFFLINE_NOTICE}", fg=typer.colors.YELLOW, err=True)
@@ -340,6 +428,8 @@ def run(
         finally:
             if providers is not None:
                 await providers.aclose()
+            if controller_provider is not None:
+                await controller_provider.aclose()
 
     try:
         result = asyncio.run(_execute_and_close())
@@ -398,6 +488,7 @@ def resume(
     policy = SUPPORT_AGENT_POLICY
     strategies = select_applicable(list(PHASE_0_STRATEGIES), policy)
     conditions = stored.experiment_conditions
+    controller_provider = None
     try:
         target_provider, generator, providers = _providers(conditions.online)
         defense = DefenseLevel(conditions.arena.defense)
@@ -409,6 +500,33 @@ def resume(
             enforce_permissions=conditions.arena.enforce_permissions,
             enforce_confirmation=conditions.arena.enforce_confirmation,
         )
+        controller_configuration = None
+        if conditions.search is not None and conditions.search.selector is SearchSelector.LLM:
+            if not conditions.online or conditions.controller is None:
+                raise ValueError("已落盘的 LLM Controller 条件不完整")
+            controller_provider, controller_configuration = load_controller()
+        current_conditions = current_conditions.model_copy(
+            update={
+                "strategy_catalogue": conditions.strategy_catalogue,
+                "search": conditions.search,
+                "generation_memory": conditions.generation_memory,
+                "controller": (
+                    ControllerRunConfiguration(
+                        provider=controller_configuration,
+                        connection_id=f"controller:{controller_configuration.provider}",
+                        connection_fingerprint=controller_configuration.base_url,
+                        prompt_version=conditions.controller.prompt_version,
+                        evidence_policy_version=conditions.controller.evidence_policy_version,
+                        output_schema_version=conditions.controller.output_schema_version,
+                        budget_view_policy_version=conditions.controller.budget_view_policy_version,
+                        thinking_disabled=conditions.controller.thinking_disabled,
+                    )
+                    if controller_configuration is not None
+                    else None
+                ),
+            }
+        )
+        current_conditions.require_phase_0_5()
         if current_conditions.fingerprint() != stored.experiment_fingerprint:
             raise ValueError(
                 "当前 provider / temperature / attacker / actor 或靶场开关与原 Run 不一致"
@@ -416,6 +534,8 @@ def resume(
     except (ProviderConfigError, ValueError) as exc:
         if "providers" in locals() and providers is not None:
             asyncio.run(providers.aclose())
+        if controller_provider is not None:
+            asyncio.run(controller_provider.aclose())
         store.close()
         typer.secho(f"恢复配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(ExitCode.BAD_CONFIG) from exc
@@ -426,6 +546,21 @@ def resume(
         enforce_permissions=conditions.arena.enforce_permissions,
         enforce_confirmation=conditions.arena.enforce_confirmation,
     )
+    controller = None
+    driver = None
+    if conditions.search is not None and conditions.search.selector is SearchSelector.LLM:
+        if controller_provider is None or conditions.controller is None:
+            raise AssertionError("LLM Controller provider must be built during resume preflight")
+        driver = LLMControllerAdapter(
+            provider=controller_provider,
+            run_id=stored.id,
+            prompt_version=conditions.controller.prompt_version,
+            model=conditions.controller.provider.model,
+            temperature=conditions.controller.provider.temperature,
+            max_tokens=conditions.controller.provider.max_tokens,
+        )
+    else:
+        controller = _controller(stored.algorithm, stored.seed or 0)
     orchestrator = RunOrchestrator(
         executor=ConversationExecutor(
             adapter=adapter,
@@ -433,7 +568,8 @@ def resume(
             scorer=Level1Scorer(policy),
             policy=policy,
         ),
-        controller=_controller(stored.algorithm, stored.seed or 0),
+        controller=controller,
+        driver=driver,
         store=store,
     )
 
@@ -445,6 +581,8 @@ def resume(
         finally:
             if providers is not None:
                 await providers.aclose()
+            if controller_provider is not None:
+                await controller_provider.aclose()
 
     try:
         result = asyncio.run(_resume_and_close())
@@ -488,6 +626,86 @@ def report(
     paths = _emit(stored, attempts, findings, out)
     _summarise(stored, findings, paths)
     raise typer.Exit(ExitCode.FINDINGS if findings else ExitCode.CLEAN)
+
+
+@app.command(name="gate-report")
+def gate_report(
+    db: Annotated[str, typer.Option(help="SQLite 连接串")] = DEFAULT_URL,
+    out: Annotated[Path, typer.Option(help="Gate JSON 输出路径")] = Path("runs/gate-report.json"),
+    controls_json: Annotated[
+        Path | None, typer.Option(help="冻结 controls JSON；缺失时报告保持 INCOMPLETE")
+    ] = None,
+    validation_json: Annotated[
+        Path | None, typer.Option(help="冻结 replay validation JSON；缺失时报告保持 INCOMPLETE")
+    ] = None,
+    seed_plan_json: Annotated[
+        Path | None, typer.Option(help="冻结的 12+4 seed plan JSON；缺失时报告保持 INCOMPLETE")
+    ] = None,
+) -> None:
+    """从已落盘的 Run/Event/Finding 重建冻结的 Phase 0.5 Gate 分析。"""
+    controls_result = (
+        ControlsReport.from_report_json(controls_json.read_text(encoding="utf-8"))
+        if controls_json is not None
+        else None
+    )
+    validation_result = (
+        ValidationReport.model_validate_json(validation_json.read_text(encoding="utf-8"))
+        if validation_json is not None
+        else None
+    )
+    seed_plan = (
+        SeedPlan.model_validate_json(seed_plan_json.read_text(encoding="utf-8"))
+        if seed_plan_json is not None
+        else None
+    )
+    with RunStore(db) as store:
+        result = build_gate_report(
+            store,
+            controls=controls_result,
+            validation=validation_result,
+            seed_plan=seed_plan,
+        )
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+    typer.echo(f"Gate report: {out}")
+    typer.echo("SUPPORTED" if result.supported else "NOT SUPPORTED / INCOMPLETE")
+
+
+@app.command(name="controller-controls")
+def controller_controls(
+    out: Annotated[
+        Path, typer.Option(help="冻结 Controller contract control JSON 输出路径")
+    ] = Path("runs/controller-contract-controls.json"),
+) -> None:
+    """Run the fixed 12-case Controller preflight without a target or Gate seed."""
+    try:
+        provider, configuration = load_controller()
+    except ProviderConfigError as exc:
+        typer.secho(f"Controller 配置被拒绝: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG) from exc
+
+    driver = LLMControllerAdapter(
+        provider=provider,
+        run_id="controller-contract-controls",
+        prompt_version="controller-contract-controls-v1",
+        model=configuration.model,
+        temperature=configuration.temperature,
+        max_tokens=configuration.max_tokens,
+    )
+
+    async def _run_and_close():
+        try:
+            return await run_controller_contract_controls(driver)
+        finally:
+            await provider.aclose()
+
+    report = asyncio.run(_run_and_close())
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+    typer.echo(f"Controller controls: {out}")
+    typer.echo("PASSED" if report.passed else "FAILED")
+    if not report.passed:
+        raise typer.Exit(ExitCode.BAD_CONFIG)
 
 
 @app.command(name="controls")

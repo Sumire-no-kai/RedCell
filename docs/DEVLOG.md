@@ -5,6 +5,244 @@
 
 ---
 
+## 2026-08-09 · Phase 0.5 runtime implementation
+
+### 2026-08-09 23:01 AEST · Step 32 · Phase 0.5 实现全量回归审计
+
+- **进度:** 对本分支的 Phase 0.5 实现进行最终本地回归：冻结条件、LLM Controller invocation/repair/recovery、bounded memory、角色 Token、攻击路径身份、提交前缀、paired bootstrap/permutation/Holm、seed plan、controls/validator 输入和 Controller preflight 均纳入测试与 CLI 可达路径。
+- **验证证据:** `.venv\\Scripts\\python.exe -m pytest -p no:cacheprovider` 为 **543 passed in 50.39s**；`ruff check .`、`black --check src tests`、`git diff --check` 通过；工作树干净。
+- **剩余状态:** IMPLEMENTATION DONE；正式 Gate 仍为 INCOMPLETE，原因是作者尚未提供真实未观察 seed 的 12+4 JSON，且尚未执行线上 preflight、完整六条件矩阵和 replay/controls 证据。这些是外部实验事实，不可由离线代码替代或捏造。
+
+### 2026-08-09 22:52 AEST · Step 31 · Controller contract controls CLI
+
+- **进度:** 新增 `redcell controller-controls`。该命令只载入独立 `REDCELL_CONTROLLER_*` 配置，运行冻结的 12 条 Controller contract 输入，写出 JSON，并以 12/12 成功、至少 11 条首轮成功、12 条 usage 已知的既有阈值返回结果。
+- **决策与理由:** Controller preflight 的目的只是确认候选模型能遵守小型候选集和 JSON 契约；它不得调用 Target、Generator、Finding 流程或 Gate seed，否则 preflight 本身会污染正式矩阵和预算。
+- **验证证据:** `tests/test_controller_controls.py tests/test_cli.py` 为 **28 passed**；新增 CLI 集成测试用已知 usage 的 scripted provider 验证 12 条输出写盘。Ruff/Black 与 `git diff --check` 通过。
+- **剩余状态:** DONE（Controller contract preflight 可执行）；TODO 为其真实候选运行及 Gate 的其余保护性分析。
+
+### 2026-08-09 22:39 AEST · Step 30 · Gate controls 产物完整性
+
+- **进度:** Gate 现在要求 controls 有确切的 3 条 positive 与 10 条 negative 结果，避免空列表的语言默认值被误判为通过。为 `ControlsReport` 添加报告加载入口，导入时丢弃可由原始 negative outcomes 重算的 `utility` 计算字段；Gate CLI 可直接读取自身导出的 controls JSON。
+- **遇到的问题:** 新增 CLI 集成测试发现 `ControlsReport.model_dump_json()` 会输出 `utility`，而直接 `model_validate_json()` 因模型禁止额外字段拒绝该文件。
+- **解决方式:** 加载时只移除展示型、可重算的计算字段；不接受用户提供的 utility 汇总值作为 Gate 事实，仍由十条原始任务结果重新计算。
+- **验证证据:** `tests/test_gate_report.py tests/test_controls.py` 为 **24 passed**，包含 Gate CLI 读取 controls/validation/seed-plan 三份 JSON 的集成覆盖；Ruff/Black 与 `git diff --check` 通过。
+- **剩余状态:** PARTIAL；继续完成余下的 Phase 0.5 保护性指标和正式运行前的外部输入契约。
+
+### 2026-08-09 22:24 AEST · Step 29 · 预注册 seed 计划契约
+
+- **进度:** 增加 `SeedPlan`（严格 12 个 primary + 4 个 reserve、全局唯一、拒绝 Phase 0 pilot 的 5000–5002），Gate 分析按该计划的冻结顺序取有效 paired block，不再按已观察到的 seed 数字排序。报告和 CLI 新增 `--seed-plan-json`；缺失时为 `missing_seed_plan`。
+- **决策与理由:** PRD 只冻结了数量和不可复用规则，没有写出具体 16 个新 seed。不能由代码自动生成一组再宣称它已经预注册，因此实现输入契约和拒绝语义，将具体编号留作正式实验启动前的作者决定。主 block 失效时只按该清单的 reserve 顺序补位；清单外的 run 会明确列为 `unregistered_seeds`。
+- **验证证据:** `tests/test_gate_analysis.py tests/test_gate_report.py` 为 **6 passed**；测试覆盖冻结顺序优先于数值排序，以及 pilot seed/错误数量拒绝。Ruff/Black 与 `git diff --check` 通过。
+- **剩余状态:** PARTIAL；具体 seed 编号为 OPEN（需要作者提供未观察过的编号）；继续实现剩余保护线和完整审计。
+
+### 2026-08-09 22:14 AEST · Step 28 · Gate 外部保护证据输入
+
+- **进度:** `GateReport` 现在保存并检查冻结的 `ControlsReport` 与 `ValidationReport`；没有输入时明确记录 `missing_controls` / `missing_validation`，不会默认视为通过。Validator 必须是 5 次原样 replay，且它报告的攻击路径集合必须与从持久化 Token prefix 重建的集合完全一致。`redcell gate-report` 增加 `--controls-json` 与 `--validation-json`，将这两份可审计证据显式载入最终 JSON。
+- **决策与理由:** controls 和 replay 不是运行事件自身能推导出的事实，强行在报告内重新执行会混淆“发现阶段”和“验证阶段”预算，也可能在结果产生后改变环境。因此报告只接收冻结产物、保留其内容并校验范围；缺失或范围不一致保持 `INCOMPLETE`。
+- **遇到的问题:** 当前 shell 没有激活 `.venv`，直接调用 `pytest`、`ruff`、`black` 均找不到命令；代码本身没有失败。
+- **解决方式:** 改用仓库 `.venv\\Scripts\\python.exe` 及对应工具执行验证。
+- **验证证据:** `tests/test_gate_report.py tests/test_validator.py` 为 **5 passed**；Ruff 与 Black 检查通过，`git diff --check` 通过。
+- **剩余状态:** PARTIAL；下一步补充策略/类别/cost/reproduction 保护指标的结构化 Gate 判定与预注册 seed 计划，再做全量审计。
+
+### 2026-08-09 21:55 AEST · Step 27 · Gate 保护线的否决语义
+
+- **进度:** GateReport 现在把 Attempt abandonment、Selection abandonment 和 LLM Controller invocation/decision usage 审计作为保护失败记录；没有任何 Phase 0.5 prefix 时也显式记录失败。`SUPPORTED` 需要环境一致、主比较通过且保护失败列表为空。
+- **决策与理由:** 主指标不能覆盖运行可靠性或审计缺口。尤其 LLM Decision 没有对应已知 usage 的 Invocation 时，即使路径计数很好，也不能证明等 Token 比较成立。
+- **验证证据:** `pytest tests/test_gate_report.py -p no:cacheprovider` 为 **2 passed**；空库报告明确包含 `no_phase_0_5_prefixes` 而非产生模糊的成功状态。Ruff/Black 通过。
+- **剩余状态:** PARTIAL（运行/审计保护线）；TODO 为外部 controls、utility、coverage 与复现率阈值接入 GateReport，及全量审计。
+
+### 2026-08-09 21:45 AEST · Step 26 · Validator 正向重放链路 fixture
+
+- **进度:** 为 replay Validator 增加 Support Agent 靶场的正向 fixture：先生成已记录的一轮 canary Finding，再只用 Attempt 中的 attacker 文本进行两次重放并确认同一 attack-path 均被重新检测到。
+- **验证证据:** `pytest tests/test_validator.py -p no:cacheprovider` 为 **3 passed**；断言底层 scripted provider 总调用数为初始记录 1 次加 replay 2 次，证明验证没有调用 Generator/Controller。
+- **剩余状态:** DONE（Validator 正向重放覆盖）；TODO 为 Gate 保护线/汇总报告、全量审计与 PR。
+
+### 2026-08-09 21:32 AEST · Step 25 · 真实持久化事件的 Token 前缀集成覆盖
+
+- **进度:** 增加从真实 `redcell run` SQLite 产物读取 Run/Event/Finding 并构造三个 TokenPrefix 的集成测试，覆盖实际条件映射为 `static-off` 与冻结的 64k/160k/320k checkpoint 顺序。
+- **决策与理由:** 手工模型 fixture 只能验证 projector 的局部逻辑；CLI→Store→Event→prefix 覆盖证明报告读取的是与实际运行相同的持久化形态。
+- **验证证据:** `pytest tests/test_gate_report.py -p no:cacheprovider` 为 **2 passed**；Ruff/Black 通过。
+- **剩余状态:** DONE（真实事件投影集成覆盖）；TODO 为 Gate 保护线和 Validator 的正向 replay fixture、全量审计。
+
+### 2026-08-09 21:22 AEST · Step 24 · 从 SQLite 重建并导出 Gate 报告
+
+- **进度:** 新增 `GateReport` 与 `redcell gate-report`。命令只读取 SQLite 中的 Run/Event/Finding，重建前缀和成对统计，并输出 JSON；报告显式保存回归环境指纹集合、主/备用/无效 block 以及主比较。空库或条件不完整时显示 `NOT SUPPORTED / INCOMPLETE`，不会伪造正向结论。
+- **决策与理由:** Gate report 必须可从持久化事实重建，而非依赖运行时内存或手工表格；同时把环境一致性作为结论前提，防止不同 Target/Attacker 条件被错误合并。
+- **验证证据:** `pytest tests/test_gate_report.py tests/test_cli.py -p no:cacheprovider` 为 **26 passed**；新增 CLI 空库导出测试确认 JSON 写入且不声称支持。Ruff/Black 通过。
+- **剩余状态:** DONE（Gate 报告/CLI 基础）；TODO 为完整事件 fixture、保护线和真实 Validator 路径 fixture，再进行全量审计。
+
+### 2026-08-09 21:08 AEST · Step 23 · 预注册备用 seed 的顺序处理
+
+- **进度:** Gate 分析现在将完整、有效 paired block 按 seed 顺序取前 12 个作为主分析样本，其余完整 block 明确标为 reserve，不与主分析混合；不完整/失效 block 仍单列为 invalid。
+- **决策与理由:** 备用 seed 的作用是补位而不是在看过结果后扩大样本或挑出更好结果。把 12 个主 block 与后续 reserve 分开落盘，使“主结果使用了哪些 seed”可审计。
+- **验证证据:** `pytest tests/test_gate_analysis.py -p no:cacheprovider` 为 **2 passed**；新增第 13 个完整 block fixture，确认它只进入 reserve。Ruff/Black 通过。
+- **剩余状态:** DONE（主/备用 block 分离）；TODO 为完整事件 fixture、保护线/报告和 CLI 导出。
+
+### 2026-08-09 20:55 AEST · Step 22 · 从不可变事件投影 Gate Token 前缀
+
+- **进度:** Gate 分析新增 `token_prefixes_from_events`：从 `ATTEMPT_COMMITTED` 的落盘 usage 与 finding ID 按事件序号重建 64k/160k/320k 前缀；一旦某个 commit 的累计已知 Token 超过 checkpoint，即停止加入后续路径。条件由冻结 `search.selector` 与 `generation_memory.mode` 映射至六条件矩阵，矩阵外组合直接拒绝。
+- **决策与理由:** 不能从完整 Run 最终 Finding 集合回填早期预算点，否则最后一次越线调用会污染主指标。事件投影使每个检查点都对应当时已经确认且未越线的证据前缀。
+- **验证证据:** `pytest tests/test_gate_analysis.py -p no:cacheprovider` 为 **1 passed**；Ruff/Black 通过。后续将补充覆盖真实持久化事件/每个 checkpoint 的集成 fixture。
+- **剩余状态:** PARTIAL（前缀 projector 已实现，集成 fixture 待补）；TODO 为保护线、完整 Gate report/CLI 和 Validator 的真实路径 fixture。
+
+### 2026-08-09 20:45 AEST · Step 21 · 攻击路径原样 replay Validator
+
+- **进度:** 新增 Validator：按每个已确认 `attack_path_signature` 选取一条已提交 Attempt，逐轮重放原始 attacker 消息、重置授权 Target、重新执行确定性 Level-1 scorer，并统计固定次数的复现率。它只使用已有对话，不创建新的 Controller decision 或 Generator 请求。
+- **决策与理由:** 验证是对已发现攻击路径的独立稳定性测量，不能把新的生成或搜索决策混入发现阶段预算；因此它单独报告，不修改原 Run 的 320k discovery 账本。
+- **验证证据:** `pytest tests/test_validator.py -p no:cacheprovider` 为 **2 passed**；覆盖无确认路径时零重放，以及非法 repeat 参数被拒绝。Ruff/Black 通过。
+- **剩余状态:** DONE（Validator 的安全边界与 replay 核心）；TODO 为真实路径 fixture 覆盖、从不可变事件构造 Token prefix、Gate 保护线与完整报告/CLI 接线。
+
+### 2026-08-09 20:32 AEST · Step 20 · 六条件配对 Gate 的离线统计核心
+
+- **进度:** 新增纯离线 `gate_analysis`：按 160k Token 前缀收集六个条件的 `attack_path_signature` 集合，只有六条件齐全且有效的 seed 才进入 paired block；完整配置③分别与 Static/Random/Thompson × off 比较，计算实际效应阈值、确定性 bootstrap 95% 下界、12 seed 精确单侧 sign-flip p 值及三比较 Holm 校正。
+- **决策与理由:** 统计层只消费已落盘的 token-prefix 身份集合，不调用 Provider、不生成攻击、也不按 Finding 结果挑 seed。缺任意一个条件的 block 整体排除，防止在某个不利条件失败后仍保留其余五格造成配对偏差。
+- **验证证据:** `pytest tests/test_gate_analysis.py -p no:cacheprovider` 为 **1 passed**；覆盖 12 个完整 block、一个不完整 block 的排除，以及三项主比较的路径计数与通过状态。Ruff/Black 通过。
+- **剩余状态:** DONE（Gate 统计核心）；TODO 为从不可变 Run/Event 事实构造 Token 前缀、四格机制效应/保护线、Validator 与最终 Gate 报告。
+
+### 2026-08-09 20:18 AEST · Step 19 · 三角色 Token 分栏账本
+
+- **进度:** `BudgetUsage` 保留唯一的总 Token/美元硬预算，同时新增 Controller、Generator、Target 的输入/输出 Token 分栏。LLM Controller Invocation 在成功、repair 后成功或已知失败时按 Controller 角色记账；完整 Attempt 从已保存 Turn 的 attacker/target usage 确定性投影到 Generator/Target 分栏。
+- **决策与理由:** Gate 比较只允许使用一个总 Token 预算，否则三套账本会各自漏记；但不分角色又无法审计 memory/Controller 的资源增量。因此角色分栏是总账的可核对投影，而不是第二个预算管理器。
+- **验证证据:** `pytest tests/test_budget.py tests/test_orchestrator.py -p no:cacheprovider` 为 **34 passed**；新增测试确认三角色 Token 和严格等于总 Token。Ruff/Black 通过。
+- **剩余状态:** DONE（已知完成调用的三角色分栏）；TODO 为失败 partial turn 的精确角色分摊、Token 前缀/Gate matrix 分析、Validator 与完整 Gate 报告。
+
+### 2026-08-09 20:02 AEST · Step 18 · 当前 Phase 0.5 切片全量回归
+
+- **进度:** 对当前功能分支上的条件协议、LLM Controller、请求审计/恢复、历史投影、CLI、contract controls 与报告身份聚合运行全量验证；工作树在验证结束时无未提交变更。
+- **验证证据:** `pytest -p no:cacheprovider` 为 **526 passed in 28.59s**；`ruff check .`、`black --check src tests` 与 `git diff --check` 全部通过。
+- **剩余状态:** IN PROGRESS（Phase 0.5 整体）；未开始正式 Gate Provider controls 或任何新 seed/真实攻击运行。下一实现切片为角色化 Token accounting、Token 前缀/六条件 Gate 分析和 replay Validator；这些不是本条验证可替代的结果。
+
+### 2026-08-09 19:33 AEST · Step 17 · 报告输出确定性 Finding 与攻击路径身份
+
+- **进度:** `ReportData` 现在同时输出 `finding_signature` 与 `attack_path_signature` 的去重计数和签名频次。签名来自已冻结的结构函数，不包含标题、canary 明文或具体参数值；报告可据此区分“同一结构漏洞的重复证据”和“固定 Strategy 确认的新攻击路径”。
+- **决策与理由:** Phase 0.5 的主指标是不同攻击路径，而不是自然语言标题或原始 Finding 条数。将两层身份放入同一报告数据模型，确保 JSON 与 HTML 后续都从同一聚合事实出发，避免指标口径分叉。
+- **验证证据:** `pytest tests/test_storage_and_report.py -p no:cacheprovider` 为 **21 passed**；测试确认签名计数和频次总和与原始 Finding 一致。Ruff/Black 通过。
+- **剩余状态:** DONE（报告层 identity 聚合）；TODO 为 Token 前缀/Gate matrix 分析、角色化 Token 分栏、Validator 与完整 Gate 报告。
+
+### 2026-08-09 19:25 AEST · Step 16 · Controller audit 字段的有界归一化
+
+- **进度:** 合法 `selected_strategy_id` 现在可伴随超长 rationale 或超过 4 条的 audit refs；Adapter 会确定性截断并记录 warning，而不为这些非控制字段额外发起 repair。schema 外控制字段、非法 JSON、候选集外 Strategy 仍保持唯一 repair 后失败的严格语义。
+- **决策与理由:** rationale/ref 是低强度审计辅助信息，不能改变被执行的 Strategy；把它们的长度瑕疵升级为选择失败会无谓放大 Provider 格式噪声。相反，任何试图增加控制字段或越出候选集的输出仍必须拒绝，避免把动作空间交给模型。
+- **验证证据:** `pytest tests/test_controller_driver.py tests/test_controller_controls.py -p no:cacheprovider` 为 **9 passed**；新增测试锁定 audit 截断不触发 repair、而 warning 与上限可审计。Ruff/Black 通过。
+- **剩余状态:** DONE（输出契约的 audit-field 归一化）；TODO 为 CLI controls 候选比较、角色化 Token 分栏、Gate runner、Validator 与报告聚合。
+
+### 2026-08-09 19:18 AEST · Step 15 · Controller contract controls 基础执行器
+
+- **进度:** 新增 `controller-contract-controls-v1` 的固定 12 条本地 Evidence：3 条冷启动、3 条受限候选集（含单候选不变量）、3 条历史状态，以及 3 条提示注入样本。执行器只调用候选 Controller，不触发 Target、Generator、Finding 或 Gate seed，并按 12/12 合法选择、至少 11/12 首次成功、12/12 已知 Token usage 计算通过状态。
+- **决策与理由:** Controller 候选选择必须发生在正式攻击结果之前；否则“谁在攻击中 Finding 多就选谁”会把结果选择偏差写入实验条件。该模块因此是纯角色适任性测试，输出的是可冻结的 contract report，不是安全评估或 Gate 结果。
+- **验证证据:** `pytest tests/test_controller_controls.py -p no:cacheprovider` 为 **2 passed**；覆盖固定 12 条输入、单候选限制和全量合格报告。Ruff/Black 通过。
+- **剩余状态:** DONE（可复用的 contract controls 核心）；TODO 为 CLI 候选执行/比较与选择冻结、角色化 Token 分栏、Gate runner、Validator 与报告聚合。
+
+### 2026-08-09 19:08 AEST · Step 14 · Controller 请求前落盘与崩溃窗口保守恢复
+
+- **进度:** LLM Driver 在网络调用前创建并经 Orchestrator 持久化 `REQUESTED` Invocation，响应后以相同 ID 更新为 `SUCCEEDED`、`FAILED` 或 `INDETERMINATE`；由此不会把同一次外部请求拆成两条审计记录。恢复时若发现仍为 `REQUESTED` 的调用，系统不重调 Controller，而是转为 `INDETERMINATE` 并以 `EXPERIMENT_INVALID` 结束该 Gate Run。连续 Selection Abandonment 的事件尾部也在恢复时重建。
+- **决策与理由:** 进程可恰好在“请求已发出、响应尚未写入”之间死亡。重调会改变模型输出、费用和历史，猜测它没送达又会遗漏真实 Token；因此把该窗口保守视为未知，并让原始 Run 留作删失证据。`REQUESTED` 先写入是唯一能区分“从未发请求”与“无法确认请求状态”的方式。
+- **验证证据:** `pytest tests/test_controller_driver.py tests/test_orchestrator.py tests/test_cli.py -p no:cacheprovider` 为 **47 passed**；新增 Driver 回调测试确认 provider 调用前已发出 `REQUESTED` 且终态复用同一 invocation ID。Ruff 与 Black 通过。
+- **剩余状态:** DONE（Invocation 请求前持久化与恢复保守性）；TODO 为角色化 Token 分栏、Controller contract controls、Gate runner、Validator 与报告聚合。
+
+### 2026-08-09 18:55 AEST · Step 13 · Resume 按落盘的 Phase 0.5 条件重建 Controller
+
+- **进度:** `redcell resume` 现在从已存 `ExperimentConditions` 读取 selector、memory、策略目录与 Controller 协议版本；当且仅当原 Run 为 `search=llm` 时，重新装配独立 `REDCELL_CONTROLLER_*` 连接并比较完整指纹，再创建 `LLMControllerAdapter`。本地 selector 仍按原有私有 seed 控制器恢复。
+- **决策与理由:** 恢复的真相是已落盘条件，而不是命令行默认值。若把 LLM Run 恢复成 Static/Random，或把当前环境的 Controller 配置不经比对地带入，都会把同一 Run 的处理条件悄悄换掉；因此不匹配一律在请求前拒绝，已持久化 Decision 仍由 Orchestrator 复用而不重调。
+- **验证证据:** `pytest tests/test_cli.py -p no:cacheprovider` 为 **24 passed**；`ruff check src/redcell/cli.py` 与 `black --check src/redcell/cli.py` 通过。
+- **剩余状态:** DONE（条件一致的 Controller resume composition）；TODO 为 REQUESTED 崩溃窗口的持久化恢复、角色化 Token 分栏、contract controls、Gate runner、Validator 与报告聚合。
+
+### 2026-08-09 18:48 AEST · Step 12 · Controller Selection Abandonment 与未知送达语义
+
+- **进度:** 为 LLM Controller 增加独立的 `successful_selections` / `abandoned_selections` 账本、冻结的 5%（最少 20 次）与连续 2 次可靠性门，并新增 `selection_abandoned` 事件。JSON/候选集错误经唯一 repair 后仍失败时，只持久化失败 Invocation 和 abandonment，不创建 Decision/Attempt；成功选择（含 repair 成功）单独计数。Provider 抛出、断线或用量未知则持久化 `INDETERMINATE` Invocation，并立即以 `EXPERIMENT_INVALID` 删除本 Gate Run，不进入 Selection Abandonment 分母。
+- **决策与理由:** 一次 Controller 请求、一个合法 Decision 和一次 Target Attempt 是三件不同的事实。将格式失败塞入 Attempt 会污染 reward/ASR；将未知送达当成普通格式失败又会假装 Token 与调用状态已知。故将“已知送达但无合法选择”作为可计数的独立样本缺失，将未知送达/Token 作为立即删失条件；两者都不会静默降级到 Static/Random。
+- **遇到的问题:** 首次接线将失败事件暂借用 `retry_scheduled`，并漏记成功 LLM selection 的逻辑计数；Ruff 还指出 loop 内延迟执行的 lambda 会捕获后续变量。
+- **解决方式:** 增加专用事件、在合法 Decision 建立时记 successful selection，并用 `partial` 绑定持久化参数。Controller provider 异常显式转换为带安全错误摘要的 `INDETERMINATE` Invocation；已知的 repair 成本仍随 Invocation 计入预算。
+- **验证证据:** `pytest tests/test_controller_driver.py tests/test_orchestrator.py -p no:cacheprovider` 为 **22 passed**；新增用例覆盖 provider 耗尽的 unknown usage，以及两次 Selection Abandonment 使 Run 标为 `EXPERIMENT_INVALID` 且不产生 Attempt/Decision。相关 Ruff 与 Black 均通过。
+- **剩余状态:** DONE（Selection Abandonment 运行时语义）；TODO 为 LLM resume/REQUESTED 崩溃窗口、角色化 Token 分栏、Controller contract controls、Gate runner、Validator 与报告聚合。
+
+### 2026-08-09 20:05 AEST · Step 11 · Phase 0.5 CLI 正交条件与独立 Controller 配置
+
+- **进度:** `redcell run` 新增 `--search static|random|thompson|llm` 与 `--cross-attempt-memory off|bounded-relevant-v1`。新参数写入强类型 `ExperimentConditions`、冻结策略目录和完整指纹；旧 `--algorithm` 仍兼容，但与 `--search` 同时提供时立即拒绝。Controller 新增独立 `REDCELL_CONTROLLER_*` settings / loader。
+- **决策与理由:** Controller 是稳定的逻辑角色、Provider 是可替换配置；因此 `--search llm` 不能静默复用 Target 或 Gemini attacker。它要求在线模式、独立 Controller 配置和总 Token 上限，保证 Controller 消耗可以计入同一预算。memory on/off 是独立因子，不能编码为一个组合 mode 字符串。
+- **安全边界:** 运行快照只保存 provider/endpoint/model 等非秘密配置；凭据继续只留在环境变量。当前 CLI 在 `search=llm` 时构造独立 adapter 并随既有资源一同关闭。
+- **验证证据:** `pytest tests/test_cli.py tests/test_orchestrator.py -p no:cacheprovider` 为 **40 passed**；Ruff 通过。
+- **剩余状态:** DONE（CLI 条件与 Controller 配置）；TODO 为 resume 对新 Controller 条件的完整构造/比较、contract controls、Selection Abandonment、Validator、Gate runner 与报告聚合。
+
+### 2026-08-09 19:45 AEST · Step 10 · LLM Controller 编排路径与 Invocation→Decision→Attempt 顺序
+
+- **进度:** `RunOrchestrator` 现支持二选一的同步 `SearchController` 或异步 `ControllerDriver`。LLM 路径先构造 ControllerEvidence、执行并持久化 Invocation、计入 Controller Token，再创建统一 `ControllerDecision` 并进入既有 Attempt 提交状态机；本地 Static/Random/Thompson 路径保持原有 RNG、update/abandon/restore 行为。
+- **恢复语义:** LLM resume 只恢复已经落盘的 Decision 列表并推进 Driver 的逻辑 selection index，不重调任何历史模型调用；pending Decision 仍按既有安全边界拒绝直接重放。
+- **决策与理由:** 没有将 async provider 调用伪装成同步 `SearchController.select()`。两个实现通过同一 Decision/Attempt 记录相交，避免报告、存储和重试维护两套不同事实；LLM Token 在选择后立刻计账，repair 也已包含在 Invocation cost 中。
+- **验证证据:** `pytest tests/test_orchestrator.py -p no:cacheprovider` 为 **16 passed**；新增 ScriptedProvider 场景验证 Invocation 先于 Attempt 持久化、Decision 引用 invocation ID、总 Token 包含 Controller 调用；Ruff 通过。
+- **剩余状态:** DONE（基本 LLM orchestration）；TODO 为 Selection Abandonment 独立阈值/INDETERMINATE 语义、完整 Controller resume 测试、CLI 控制器配置、controls/analysis/validator/reporting。
+
+### 2026-08-09 19:28 AEST · Step 09 · Finding 与 attack-path 确定性身份
+
+- **进度:** 新增 `finding-signature-v1` 和 `attack-path-signature-v1`。结构签名只使用漏洞类别、工具/副作用类别与 Attempt/Impact 结构；攻击路径签名再加入冻结 `strategy_id`。标题、具体参数值与 canary 明文不参与身份。
+- **决策与理由:** Phase 0.5 主指标必须避免两个相反错误：按自然语言标题去重会引入 LLM/judge 噪声，按 customer ID/金额等具体值去重会把同一漏洞的参数变体虚报为 breadth。结构 identity 和 strategy identity 分层，允许报告漏洞 breadth，同时衡量不同高层策略对同一结构漏洞的确认。
+- **验证证据:** `pytest tests/test_finding_identity.py -p no:cacheprovider` 为 **2 passed**；Ruff 通过。测试固定标题/金额变化不改变签名、Strategy 变化只改变 attack-path 层。
+- **剩余状态:** DONE（身份函数）；TODO 为在报告与 Gate runner 中按该层聚合，及原样 replay Validator。Controller/Orchestrator runtime 接线仍进行中。
+
+### 2026-08-09 19:12 AEST · Step 08 · ControllerEvidence 确定性投影
+
+- **进度:** `redcell.history` 新增 Controller 专用 projector：输入仅为 `TargetBrief`、已提交 Attempt、候选 Strategy 和 Token 账本；输出为固定 ID 排序的聚合、最近两场与跨 Strategy 高分两场的有限明细、稳定 digest 及三字段 `ControllerBudgetView`。
+- **决策与理由:** Controller 与 Generator 不共享同一份历史选择规则：前者需要跨 Strategy 比较，后者需要围绕当前 Strategy 写话术。两者都复用同一个受控 Trace 渲染函数，但各自以冻结规则选择证据，避免 LLM summary、Policy、Finding、Scorer 或私有工具结果跨 seam 泄漏。
+- **验证证据:** `pytest tests/test_history.py tests/test_controller_driver.py -p no:cacheprovider` 为 **7 passed**；Ruff/Black 通过。
+- **剩余状态:** DONE（Evidence projector）；TODO 为把 `ControllerDriver` 接入 Orchestrator，持久化 Invocation 后创建 Decision，并把 LLM 的 Token 使用纳入 BudgetManager。
+
+### 2026-08-09 18:58 AEST · Step 07 · 将 Generator memory 接入现有 Orchestrator
+
+- **进度:** `RunOrchestrator` 在每次生成 `ExecutionRequest` 前读取 Run 的显式 `generation_memory` 条件。只有 `bounded-relevant-v1` 才调用 projector；默认 off、历史 Phase 0 Run 或缺少条件均稳定传递 `None`。Projector 输入为内存中已原子提交成功的 Attempt 列表，resume 路径则先从 Store 读回同一列表。
+- **决策与理由:** Orchestrator 持有“哪些 Attempt 已提交”为唯一事实，因此应在这里决定何时构造历史；禁止 Generator 自行查询 Store，否则生成层既得到存储依赖又可能读到 partial/未提交记录。memory enabled 却缺少冻结 policy/limits 被显式视为运行时不变量错误，不能静默按 off 继续。
+- **验证证据:** `pytest tests/test_orchestrator.py tests/test_executor.py -p no:cacheprovider` 为 **27 passed**；Ruff/Black 通过。
+- **剩余状态:** DONE（Generator memory runtime 接线）；下一步 TODO 为将 `ControllerDriver` 取代 Orchestrator 的直接 `SearchController` 调用，按 Invocation/Decision/Attempt 三段事务接线，并新增 ControllerEvidence projector。
+
+### 2026-08-09 18:50 AEST · Step 06 · 确定性 bounded-relevant-v1 history projector
+
+- **进度:** 新增 `redcell.history`，将已提交的完整 Attempt 投影为 Generator memory：固定选择最近两场、当前 Strategy 的最高 reward 场与最近场，按 Attempt ID 去重并按执行顺序渲染；每条和总历史均按冻结上限裁剪、标记 `[TRUNCATED]` 并计算 SHA-256 digest。新增稳定的每 Strategy 聚合，按 ID 排序且不包含原始消息。
+- **决策与理由:** Projector 是原始 Trace 与 LLM 输入之间的唯一 seam。它不接收 Policy、Finding 或 Scorer，避免给模型检测答案；也不使用 LLM summary，避免摘要模型把处理条件变成未冻结的随机变量。Orchestrator 后续只把已经原子提交的 Attempt 传入，partial/abandoned trace 不会被当成学习材料。
+- **遇到的问题:** 初始实现遗漏返回类型方括号，pytest collection 立即报告 SyntaxError；没有运行时或数据语义异常。
+- **解决方式:** 修正类型声明和格式化长行后重跑；同时让 Ruff 自动整理测试 import。
+- **验证证据:** `pytest tests/test_history.py -p no:cacheprovider` 为 **2 passed**；相关 Ruff/Black 均通过。
+- **剩余状态:** DONE（独立 deterministic projector）；TODO 为 Controller 专用的“最近两场+跨策略最高两场”投影、abandoned 聚合、Orchestrator memory 接线与恢复 digest 核对。未调用 Provider。
+
+### 2026-08-09 18:39 AEST · Step 05 · 当前实现切片全量验证与远端分支同步
+
+- **进度:** 已提交并推送四个小步实现提交至 `feat/phase-0-5-runtime`：处理条件/双层指纹、统一 Driver/LLM JSON Adapter、Controller Invocation 持久化、类型化 Generator memory 入口。
+- **验证证据:** 全量 `pytest -p no:cacheprovider` 为 **511 passed in 27.22s**；`ruff check .`、`ruff format --check .` 与 `black --check src tests` 均通过；`git diff --check` 通过。未调用真实 LLM Provider、未创建 Gate seed 或实验结果。
+- **Git 状态:** `git push -u origin feat/phase-0-5-runtime` 成功，远端已建立同名分支。按工作流准备创建 Draft PR 时，`gh auth status` 显示当前 GitHub token 无效；因此 PR **BLOCKED（认证）**，不是代码或测试失败。SSH remote 的 push 不受影响。
+- **剩余状态:** 当前切片已安全提交/推送；Phase 0.5 runtime 仍 **IN PROGRESS**，尚未接入 Orchestrator、确定性 history projector、三角色 Token accounting、CLI/preflight/controls、Gate runner、signature/validator/report。恢复 PR 流程前需重新认证 GitHub CLI。
+
+### 2026-08-09 18:31 AEST · Step 04 · 打开受类型约束的跨 Attempt Generator memory 入口
+
+- **进度:** `AttackGenerationRequest` 与 `ExecutionRequest` 现在可携带 `GenerationMemory`，其中强制记录 policy version、选择的 Attempt refs、渲染 digest、截断标记及精确字符数；Executor 将其传给每轮 Generator。`LLMMutationGenerator` 只在首轮接收该有界上下文，并明确把历史内容标为 evidence 而非指令；默认 off 时仍没有历史消息。
+- **决策与理由:** 这是对旧“接口层完全没有跨 Attempt history”的有意、受条件约束的松绑：memory 必须以显式类型落盘，不能让调用者塞裸字符串。这样 memory-on/off 可被 Run 指纹区分，后续恢复可核对 digest；Attempt 内的 `prior_turns` 仍保持原语义，不与因子 Y 混淆。
+- **安全边界:** 历史中的 attacker/target 文本在 prompt 中明确为不可信上下文，不能成为指令；尚未提供投影对象就不会将 Policy、Finding、canary 或 Scorer 传入。
+- **验证证据:** `pytest tests/test_generation.py tests/test_executor.py tests/test_mutation.py -p no:cacheprovider` 为 **42 passed**；新增测试锁定 memory off 无历史和 memory on 的不可信上下文标记，Ruff 通过。
+- **剩余状态:** DONE（类型入口与 Generator 传递）；TODO 为实现冻结的 deterministic `bounded-relevant-v1` projector/聚合/裁剪与 Orchestrator 从已提交 Attempt 构造 memory。未调用真实 Provider。
+
+### 2026-08-09 18:24 AEST · Step 03 · Controller Invocation 独立持久化
+
+- **进度:** SQLite storage 新增 `controller_invocations` 表及 `RunStore` 的保存/有序查询入口；`ControllerDecision` 增加可选 `invocation_id`，保留本地同步 Controller 的 `None` 兼容语义。补充持久化测试，确认失败 Invocation 只作为调用事实保存，不会被伪造成 Decision 或 Attempt。
+- **决策与理由:** “请求是否送达/是否产生费用”“是否得到合法策略选择”“是否执行目标攻击”是三件不同事实。将 Invocation 单独落盘让 Orchestrator 后续能保守处理未知送达、只重试持久化而不重调 LLM，并避免把 provider 格式问题混进攻击成功率或 reward。
+- **验证证据:** `pytest tests/test_storage_and_report.py tests/test_search.py -p no:cacheprovider` 为 **42 passed**；相关 Ruff 检查通过。
+- **剩余状态:** DONE（协议与独立存储）；TODO 为将 Invocation 与 Decision 的原子事务接入 LLM Driver 路径，并实现受控 evidence/memory 投影、统一 Token 预算与 Orchestrator 接线。
+
+### 2026-08-09 18:16 AEST · Step 02 · 统一异步 Controller Driver 与严格 JSON 选择 Adapter
+
+- **进度:** 新增 `ControllerDriver` seam、`SyncControllerAdapter` 和 `LLMControllerAdapter`。前者将既有 Static/Random/Thompson controller 原样包装为 async；后者只接受冻结候选集内的 `selected_strategy_id`，带有有界 rationale/evidence refs，解析失败或候选集外选择时只发起一次同证据 repair。新增独立 `ControllerInvocation` 三态模型与 usage 状态，调用不再与 Decision 或 Attempt 混为一条记录。
+- **决策与理由:** 统一 interface 是因为本地 Controller 与远程 LLM 的行为真正可替换；Orchestrator 之后只需面对“合法选择或可审计失败”，无需知道 JSON、provider 或 repair。独立 Invocation 防止“调用失败”等同于“攻击失败”，也为后续按未知送达/Token 语义持久化与恢复留出唯一位置。
+- **安全与实验边界:** LLM Prompt 只接收 `ControllerEvidence`，系统提示明确把 Evidence 中的指令视为不可信；输出不能创建 Strategy、Prompt 或预算指令。测试使用 `ScriptedProvider`，没有调用真实模型或消耗 quota。
+- **验证证据:** `pytest tests/test_controller_driver.py -p no:cacheprovider` 为 **4 passed**；相关 Ruff 与 Black 检查通过。覆盖同步适配、首次合法 JSON、一次 repair 成功、repair 后失败四条路径。
+- **剩余状态:** DONE（Driver/Adapter 的独立实现）；TODO 为把 Invocation/Decision 分别持久化，并将 Driver 接入 Orchestrator、受控 evidence/memory 投影、Token 账本与 CLI。正式 Gate 尚未启动。
+
+### 2026-08-09 18:09 AEST · Step 01 · 冻结处理条件协议与双层指纹
+
+- **进度:** 在 `feat/phase-0-5-runtime` 新增 Phase 0.5 的强类型处理条件：`search.selector`、跨 Attempt Generator memory 配置/四项上限，以及仅 `search=llm` 可用的独立 Controller 非秘密配置。`ExperimentConditions` 新增完整实验指纹与版本化 `regression_context_fingerprint`；新增 4 项协议测试，并复核既有 strategy catalogue 测试。
+- **决策与理由:** 完整指纹必须包含 selector、memory 与 Controller，故它不能也不应复现 Phase 0 的完整 SHA；回归上下文指纹只投影共同环境，专门用于证明六条件比较没有环境漂移。字段保持 optional 仅服务旧 Phase 0 payload 反序列化；新 Phase 0.5 builder/CLI 必须调用 `require_phase_0_5()`，拒绝不完整处理条件，避免把历史兼容误用为新实验的宽松入口。
+- **遇到的问题:** 初始测试先触发缺失 strategy catalogue，尚未走到 Controller 组合校验。这是校验顺序明确而测试 fixture 不完整，不是运行时语义问题。
+- **解决方式:** 为组合校验 fixture 加入已冻结的策略目录摘要；保留另一个专门断言“目录缺失即拒绝”的测试。
+- **验证证据:** `pytest tests/test_phase_0_5_conditions.py tests/test_strategy_catalogue.py -p no:cacheprovider` 为 **8 passed**；相关 Ruff 与 Black 检查通过。
+- **剩余状态:** DONE（协议基础）；下一步 TODO 为 Controller invocation/decision 持久化、统一异步 Driver、受控 evidence/memory 投影与 Orchestrator 接线。未调用真实 Provider、未生成正式实验结果。
+
+---
+
 ## 2026-08-09 17:55 AEST · Step 25 · Phase 0.5 Gate 修订合并与正式开发分支交接
 
 - **提交与合并:** Step 24 的公开文档修订以 `ca5212a` 提交到 `docs/phase-0-5-gate-corrections`，推送后创建 PR #16 `docs: correct Phase 0.5 gate design`。PR 状态为 `CLEAN / MERGEABLE`，仓库没有配置远端 checks；已按作者授权用 merge commit `69561bf` 合并回 `master`。内部 `PRD.md` 继续保持 gitignored，只在本地同步需求真相，没有进入提交或远端。

@@ -11,6 +11,7 @@ from collections.abc import Iterable
 from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from redcell.controller import ControllerInvocation
 from redcell.protocols.finding import Finding
 from redcell.protocols.run import Run, RunEvent
 from redcell.protocols.trace import Attempt
@@ -19,6 +20,7 @@ from redcell.storage.models import (
     AttemptRow,
     Base,
     ControllerDecisionRow,
+    ControllerInvocationRow,
     FindingRow,
     RunEventRow,
     RunRow,
@@ -130,6 +132,24 @@ class RunStore:
         )
         with self._open() as session:
             return [ControllerDecision.model_validate(row.payload) for row in session.scalars(stmt)]
+
+    def save_controller_invocation(self, invocation: ControllerInvocation) -> None:
+        with self._open() as session, session.begin():
+            self._merge_controller_invocation(session, invocation)
+
+    def controller_invocations_for(self, run_id: str) -> list[ControllerInvocation]:
+        stmt = (
+            select(ControllerInvocationRow)
+            .where(ControllerInvocationRow.run_id == run_id)
+            .order_by(
+                ControllerInvocationRow.logical_selection_index,
+                ControllerInvocationRow.retry_index,
+            )
+        )
+        with self._open() as session:
+            return [
+                ControllerInvocation.model_validate(row.payload) for row in session.scalars(stmt)
+            ]
 
     def pending_decision_for(self, run_id: str) -> tuple[str, ControllerDecision] | None:
         """Return the one selected decision whose outcome was never committed.
@@ -309,6 +329,22 @@ class RunStore:
                 selected_strategy_id=decision.selected_strategy_id,
                 outcome=decision.outcome.value,
                 payload=decision.model_dump(mode="json"),
+            )
+        )
+
+    def _merge_controller_invocation(
+        self, session: Session, invocation: ControllerInvocation
+    ) -> None:
+        session.merge(
+            ControllerInvocationRow(
+                id=invocation.id,
+                run_id=invocation.run_id,
+                logical_selection_index=invocation.logical_selection_index,
+                retry_index=invocation.retry_index,
+                status=invocation.status.value,
+                usage_status=invocation.usage_status.value,
+                created_at=invocation.created_at.replace(tzinfo=None),
+                payload=invocation.model_dump(mode="json"),
             )
         )
 

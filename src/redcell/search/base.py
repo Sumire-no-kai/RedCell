@@ -32,6 +32,8 @@ class ControllerDecision(RedCellModel):
     controller: str
     available_strategy_ids: list[str] = Field(min_length=1)
     selected_strategy_id: str
+    invocation_id: str | None = None
+    """产生该选择的外部 Controller 调用；本地同步 Controller 为 None。"""
     decision_state: dict[str, Any] = Field(default_factory=dict)
     observed_score: float | None = Field(default=None, ge=0.0, le=1.0)
     outcome: ControllerDecisionOutcome = ControllerDecisionOutcome.PENDING

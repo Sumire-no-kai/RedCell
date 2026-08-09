@@ -18,6 +18,22 @@ from pydantic import Field
 from redcell._base import RedCellModel
 
 
+class SelectionReliabilityPolicy(RedCellModel):
+    """LLM 选择失败的独立可靠性门，不能混入 Attempt abandonment。"""
+
+    max_abandoned_selection_fraction: float = Field(default=0.05, ge=0.0, le=1.0)
+    selection_fraction_minimum: int = Field(default=20, ge=1)
+    max_consecutive_abandoned_selections: int = Field(default=2, ge=1)
+
+    def invalidates(self, *, successful: int, abandoned: int, consecutive_abandoned: int) -> bool:
+        if consecutive_abandoned >= self.max_consecutive_abandoned_selections:
+            return True
+        total = successful + abandoned
+        return total >= self.selection_fraction_minimum and (
+            abandoned / total > self.max_abandoned_selection_fraction
+        )
+
+
 class ReliabilityPolicy(RedCellModel):
     """什么程度的运行故障会让这次 Run 不能用于下结论。
 

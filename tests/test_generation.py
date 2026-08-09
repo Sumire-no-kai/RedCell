@@ -7,6 +7,7 @@ from redcell.arena.support_agent import SUPPORT_AGENT_POLICY
 from redcell.generation import (
     AttackGenerationError,
     AttackGenerationRequest,
+    GenerationMemory,
     ScriptedAttackGenerator,
     TemplateAttackGenerator,
 )
@@ -155,6 +156,26 @@ def test_generation_request_rejects_history_mismatch() -> None:
             turn_index=1,
             prior_turns=[],
             seed=1,
+        )
+
+
+def test_generation_memory_has_auditable_rendered_length() -> None:
+    memory = GenerationMemory(
+        policy_version="bounded-relevant-v1",
+        selected_attempt_refs=["attempt-1"],
+        rendered_history="bounded evidence",
+        digest="sha256:test",
+        rendered_chars=16,
+    )
+    assert memory.rendered_chars == len(memory.rendered_history)
+
+    with pytest.raises(ValueError, match="rendered_chars"):
+        GenerationMemory(
+            policy_version="bounded-relevant-v1",
+            selected_attempt_refs=[],
+            rendered_history="evidence",
+            digest="sha256:test",
+            rendered_chars=0,
         )
 
 
