@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 19:12 AEST · Step 08 · ControllerEvidence 确定性投影
+
+- **进度:** `redcell.history` 新增 Controller 专用 projector：输入仅为 `TargetBrief`、已提交 Attempt、候选 Strategy 和 Token 账本；输出为固定 ID 排序的聚合、最近两场与跨 Strategy 高分两场的有限明细、稳定 digest 及三字段 `ControllerBudgetView`。
+- **决策与理由:** Controller 与 Generator 不共享同一份历史选择规则：前者需要跨 Strategy 比较，后者需要围绕当前 Strategy 写话术。两者都复用同一个受控 Trace 渲染函数，但各自以冻结规则选择证据，避免 LLM summary、Policy、Finding、Scorer 或私有工具结果跨 seam 泄漏。
+- **验证证据:** `pytest tests/test_history.py tests/test_controller_driver.py -p no:cacheprovider` 为 **7 passed**；Ruff/Black 通过。
+- **剩余状态:** DONE（Evidence projector）；TODO 为把 `ControllerDriver` 接入 Orchestrator，持久化 Invocation 后创建 Decision，并把 LLM 的 Token 使用纳入 BudgetManager。
+
 ### 2026-08-09 18:58 AEST · Step 07 · 将 Generator memory 接入现有 Orchestrator
 
 - **进度:** `RunOrchestrator` 在每次生成 `ExecutionRequest` 前读取 Run 的显式 `generation_memory` 条件。只有 `bounded-relevant-v1` 才调用 projector；默认 off、历史 Phase 0 Run 或缺少条件均稳定传递 `None`。Projector 输入为内存中已原子提交成功的 Attempt 列表，resume 路径则先从 Store 读回同一列表。

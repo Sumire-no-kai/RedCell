@@ -9,7 +9,9 @@ from __future__ import annotations
 import hashlib
 from collections import defaultdict
 
+from redcell.controller import ControllerBudgetView, ControllerEvidence
 from redcell.generation import GenerationMemory
+from redcell.protocols.policy import TargetBrief
 from redcell.protocols.run import GenerationMemoryLimits
 from redcell.protocols.trace import Attempt
 
@@ -85,6 +87,64 @@ def strategy_aggregates(attempts: list[Attempt]) -> list[dict[str, int | float |
             }
         )
     return summaries
+
+
+def build_controller_evidence(
+    attempts: list[Attempt],
+    *,
+    brief: TargetBrief,
+    available_strategy_ids: list[str],
+    total_token_limit: int,
+    used_tokens: int,
+    limits: GenerationMemoryLimits | None = None,
+) -> ControllerEvidence:
+    """构造 Controller 专用 evidence：最近两场 + 跨 Strategy 高分两场。"""
+    active_limits = limits or GenerationMemoryLimits()
+    indexed = list(enumerate(attempts))
+    chosen: dict[str, tuple[int, Attempt]] = {
+        attempt.id: (index, attempt) for index, attempt in indexed[-2:]
+    }
+    by_strategy: dict[str, tuple[int, Attempt]] = {}
+    for index, attempt in indexed:
+        existing = by_strategy.get(attempt.strategy_id)
+        if existing is None or (attempt.reward, index) > (existing[1].reward, existing[0]):
+            by_strategy[attempt.strategy_id] = (index, attempt)
+    for index, attempt in sorted(
+        by_strategy.values(), key=lambda pair: (pair[1].reward, pair[0]), reverse=True
+    )[:2]:
+        chosen[attempt.id] = (index, attempt)
+    ordered = sorted(chosen.values(), key=lambda pair: pair[0])[
+        -active_limits.max_detailed_attempts :
+    ]
+    rendered = "\n\n".join(
+        _render_attempt(index, attempt, active_limits) for index, attempt in ordered
+    )
+    aggregate_lines = [json_line for json_line in _aggregate_lines(attempts)]
+    history = "strategy_aggregates:\n" + "\n".join(aggregate_lines)
+    if rendered:
+        history += "\n\ndetailed_attempts:\n" + rendered
+    history = _truncate(history, active_limits.max_history_chars)
+    digest = hashlib.sha256(history.encode("utf-8")).hexdigest()
+    return ControllerEvidence(
+        target_brief=brief.model_dump_json(),
+        available_strategy_ids=list(available_strategy_ids),
+        history_digest=digest,
+        rendered_history=history,
+        budget=ControllerBudgetView(
+            total_token_limit=total_token_limit,
+            used_tokens=used_tokens,
+            remaining_tokens=max(total_token_limit - used_tokens, 0),
+        ),
+    )
+
+
+def _aggregate_lines(attempts: list[Attempt]) -> list[str]:
+    import json
+
+    return [
+        json.dumps(item, ensure_ascii=False, sort_keys=True)
+        for item in strategy_aggregates(attempts)
+    ]
 
 
 def _render_attempt(index: int, attempt: Attempt, limits: GenerationMemoryLimits) -> str:

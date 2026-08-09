@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from redcell.history import build_generation_memory, strategy_aggregates
+from redcell.arena.support_agent import SUPPORT_AGENT_POLICY
+from redcell.history import build_controller_evidence, build_generation_memory, strategy_aggregates
 from redcell.protocols import (
     AdapterOutput,
     ObservabilityLevel,
@@ -50,3 +51,17 @@ def test_aggregates_are_stable_and_do_not_contain_message_text() -> None:
     assert [summary["strategy_id"] for summary in summaries] == ["a", "b"]
     assert summaries[0]["mean_reward"] == 0.6
     assert "attack 0" not in str(summaries)
+
+
+def test_controller_evidence_contains_only_projected_history_and_budget() -> None:
+    evidence = build_controller_evidence(
+        [_attempt(0, "b", 0.2), _attempt(1, "a", 0.6)],
+        brief=SUPPORT_AGENT_POLICY.brief_for("customer_a"),
+        available_strategy_ids=["a", "b"],
+        total_token_limit=100,
+        used_tokens=30,
+    )
+
+    assert evidence.budget.remaining_tokens == 70
+    assert "strategy_aggregates" in evidence.rendered_history
+    assert evidence.available_strategy_ids == ["a", "b"]
