@@ -23,7 +23,12 @@ from redcell.failures import (
     StructuredExecutionError,
     safe_error_message,
 )
-from redcell.generation import AttackGenerationError, AttackGenerationRequest, AttackGenerator
+from redcell.generation import (
+    AttackGenerationError,
+    AttackGenerationRequest,
+    AttackGenerator,
+    GenerationMemory,
+)
 from redcell.llm.openai_compatible import (
     ProviderConfigurationError,
     ProviderProtocolError,
@@ -68,6 +73,7 @@ class ExecutionRequest(RedCellModel):
     target_temperature: float | None = None
     attacker_model: str | None = None
     attacker_temperature: float | None = None
+    cross_attempt_memory: GenerationMemory | None = None
 
 
 class ExecutionResult(RedCellModel):
@@ -175,6 +181,7 @@ class ConversationExecutor:
                         brief=brief,
                         turn_index=turn_index,
                         prior_turns=turns,
+                        cross_attempt_memory=request.cross_attempt_memory,
                         seed=derive_seed(seeds.generator_seed, "turn", turn_index),
                     )
                 )

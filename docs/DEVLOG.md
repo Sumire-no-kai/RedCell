@@ -7,6 +7,14 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 18:31 AEST · Step 04 · 打开受类型约束的跨 Attempt Generator memory 入口
+
+- **进度:** `AttackGenerationRequest` 与 `ExecutionRequest` 现在可携带 `GenerationMemory`，其中强制记录 policy version、选择的 Attempt refs、渲染 digest、截断标记及精确字符数；Executor 将其传给每轮 Generator。`LLMMutationGenerator` 只在首轮接收该有界上下文，并明确把历史内容标为 evidence 而非指令；默认 off 时仍没有历史消息。
+- **决策与理由:** 这是对旧“接口层完全没有跨 Attempt history”的有意、受条件约束的松绑：memory 必须以显式类型落盘，不能让调用者塞裸字符串。这样 memory-on/off 可被 Run 指纹区分，后续恢复可核对 digest；Attempt 内的 `prior_turns` 仍保持原语义，不与因子 Y 混淆。
+- **安全边界:** 历史中的 attacker/target 文本在 prompt 中明确为不可信上下文，不能成为指令；尚未提供投影对象就不会将 Policy、Finding、canary 或 Scorer 传入。
+- **验证证据:** `pytest tests/test_generation.py tests/test_executor.py tests/test_mutation.py -p no:cacheprovider` 为 **42 passed**；新增测试锁定 memory off 无历史和 memory on 的不可信上下文标记，Ruff 通过。
+- **剩余状态:** DONE（类型入口与 Generator 传递）；TODO 为实现冻结的 deterministic `bounded-relevant-v1` projector/聚合/裁剪与 Orchestrator 从已提交 Attempt 构造 memory。未调用真实 Provider。
+
 ### 2026-08-09 18:24 AEST · Step 03 · Controller Invocation 独立持久化
 
 - **进度:** SQLite storage 新增 `controller_invocations` 表及 `RunStore` 的保存/有序查询入口；`ControllerDecision` 增加可选 `invocation_id`，保留本地同步 Controller 的 `None` 兼容语义。补充持久化测试，确认失败 Invocation 只作为调用事实保存，不会被伪造成 Decision 或 Attempt。
