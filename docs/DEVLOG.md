@@ -7,6 +7,12 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 23:01 AEST · Step 32 · Phase 0.5 实现全量回归审计
+
+- **进度:** 对本分支的 Phase 0.5 实现进行最终本地回归：冻结条件、LLM Controller invocation/repair/recovery、bounded memory、角色 Token、攻击路径身份、提交前缀、paired bootstrap/permutation/Holm、seed plan、controls/validator 输入和 Controller preflight 均纳入测试与 CLI 可达路径。
+- **验证证据:** `.venv\\Scripts\\python.exe -m pytest -p no:cacheprovider` 为 **543 passed in 50.39s**；`ruff check .`、`black --check src tests`、`git diff --check` 通过；工作树干净。
+- **剩余状态:** IMPLEMENTATION DONE；正式 Gate 仍为 INCOMPLETE，原因是作者尚未提供真实未观察 seed 的 12+4 JSON，且尚未执行线上 preflight、完整六条件矩阵和 replay/controls 证据。这些是外部实验事实，不可由离线代码替代或捏造。
+
 ### 2026-08-09 22:52 AEST · Step 31 · Controller contract controls CLI
 
 - **进度:** 新增 `redcell controller-controls`。该命令只载入独立 `REDCELL_CONTROLLER_*` 配置，运行冻结的 12 条 Controller contract 输入，写出 JSON，并以 12/12 成功、至少 11 条首轮成功、12 条 usage 已知的既有阈值返回结果。
