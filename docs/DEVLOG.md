@@ -7,6 +7,12 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 21:31 AEST · Step 38 · Review remediation 推送与 PR
+
+- **进度:** `fix/phase-0-5-review-findings` 已推送到 origin，并创建 ready-for-review PR [#19](https://github.com/Sumire-no-kai/RedCell/pull/19)，目标分支为受保护的 `master`。PR 描述记录了四个实现/日志提交、核心设计取舍、562 项本地验证与真实 Gate 仍为 `INCOMPLETE` 的证据边界。
+- **验证证据:** 推送前刷新 `origin/master` 后分支状态为 behind 0 / ahead 4，`origin/master` 是当前 HEAD 的祖先；GitHub 报告 PR 为 `OPEN`、`MERGEABLE`、`CLEAN`、非 Draft。该仓库当前未为此分支返回远端 status checks，因此不把“无 checks”写成 CI 通过，本地全量门禁证据见 Step 37。
+- **剩余状态:** DONE（commit/push/PR 工作流）；PR 尚未合并，本次修复不越过 review 边界直接合并。
+
 ### 2026-08-09 21:28 AEST · Step 37 · Review remediation 全量回归与提交收尾
 
 - **进度:** 三个审查修复切片已经分别提交：`b382171` 修复 Provider usage/角色账本与 Controller 恢复，`f92604c` 冻结 Finding/attack-path 结构身份，`cb7700c` 完成 Gate、controls、checkpoint、validator 与 verdict 证据闭环。复核 `origin/master...HEAD` 只包含代码、测试与公开 DEVLOG；内部 `PRD.md`、`AGENTS.md`、`CLAUDE.md` 未被 Git 跟踪。
