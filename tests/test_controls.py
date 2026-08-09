@@ -21,7 +21,9 @@ from redcell.arena.support_agent import tools as arena_tools
 from redcell.arena.support_agent.benign import by_id
 from redcell.controls import (
     POSITIVE_CASES,
+    ControlOutcome,
     ControlsReport,
+    controls_conditions,
     run_negative_control,
     run_positive_control,
 )
@@ -159,8 +161,6 @@ async def test_an_unhelpful_agent_is_not_counted_as_a_control_failure() -> None:
 
 
 def test_report_requires_both_groups_to_pass() -> None:
-    from redcell.controls import ControlOutcome
-
     ok = ControlOutcome(id="a", passed=True, detail="")
     bad = ControlOutcome(id="b", passed=False, detail="")
 
@@ -168,6 +168,62 @@ def test_report_requires_both_groups_to_pass() -> None:
     assert not ControlsReport(positive=[bad], negative=[ok]).passed
     assert not ControlsReport(positive=[ok], negative=[bad]).passed
     assert "任何校准结果都无意义" in ControlsReport(positive=[bad], negative=[ok]).summary()
+
+
+def test_report_serializes_structured_utility_summary() -> None:
+    report = ControlsReport(
+        positive=[ControlOutcome(id="positive", passed=True, detail="", runs=3)],
+        negative=[
+            ControlOutcome(id="task_a", passed=True, detail="", runs=3, completed_runs=3),
+            ControlOutcome(id="task_b", passed=True, detail="", runs=3, completed_runs=1),
+        ],
+    )
+
+    assert report.utility is not None
+    assert report.utility.task_ids == ["task_a", "task_b"]
+    assert report.utility.task_runs == 6
+    assert report.utility.completed_task_runs == 4
+    assert report.utility.completion_rate == pytest.approx(2 / 3)
+    assert report.model_dump()["utility"]["completion_rate"] == pytest.approx(2 / 3)
+
+
+def test_report_without_structured_negative_outcomes_has_no_utility() -> None:
+    assert ControlsReport().utility is None
+    assert (
+        ControlsReport(negative=[ControlOutcome(id="legacy", passed=True, detail="")]).utility
+        is None
+    )
+
+
+def test_control_outcome_rejects_impossible_utility_count() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="不能大于"):
+        ControlOutcome(id="task", passed=True, detail="", runs=2, completed_runs=3)
+
+
+def test_controls_conditions_are_fingerprinted_without_credentials() -> None:
+    from redcell.protocols.run import ProviderRunConfiguration
+
+    conditions = controls_conditions(
+        target=ProviderRunConfiguration(
+            provider="test",
+            base_url="https://example.invalid/v1",
+            model="test-model",
+            temperature=0.7,
+            max_tokens=512,
+            rpm=0,
+            max_concurrency=1,
+            input_usd_per_mtok=0,
+            output_usd_per_mtok=0,
+        )
+    )
+    report = ControlsReport(conditions=conditions)
+
+    assert report.conditions_fingerprint == conditions.fingerprint()
+    dumped = report.model_dump()
+    assert dumped["conditions"]["target"]["model"] == "test-model"
+    assert "api_key" not in str(dumped)
 
 
 # ── 开跑前的重试(实测被一个 429 整个打断之后补的) ─────────────────────

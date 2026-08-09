@@ -25,7 +25,7 @@ from redcell.protocols import (
     VulnerabilityCategory,
     build_attempt,
 )
-from redcell.protocols.run import Run, RunStatus
+from redcell.protocols.run import ProviderRunConfiguration, Run, RunStatus
 from redcell.storage import RunStore
 
 runner = CliRunner()
@@ -395,7 +395,18 @@ def test_failing_controls_exit_with_the_control_code(workspace, monkeypatch) -> 
     """对照没过 = 这套装置不具备发现问题的能力,与"扫出漏洞了"方向相反。"""
 
     class _Pair:
-        target = _FakeAttacker(per_call=["I cannot help with that."] * 60)
+        target = _FakeAttacker(per_call=["I cannot help with that."] * 100)
+        target_configuration = ProviderRunConfiguration(
+            provider="test",
+            base_url="https://example.invalid/v1",
+            model="test-target",
+            temperature=0.7,
+            max_tokens=512,
+            rpm=0.0,
+            max_concurrency=1,
+            input_usd_per_mtok=0.0,
+            output_usd_per_mtok=0.0,
+        )
 
         async def aclose(self) -> None:
             pass

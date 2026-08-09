@@ -11,6 +11,7 @@ prompt 是当天穿什么衣服、跟保安说的那句台词。一个 strategy 
 
 from __future__ import annotations
 
+import hashlib
 import re
 from enum import StrEnum
 
@@ -228,6 +229,69 @@ class Strategy(RedCellModel):
 
     def uses_prior_attempts(self) -> bool:
         return any(op.reads_prior_attempts for op in self.mutation_operators)
+
+
+class StrategyConditionSummary(RedCellModel):
+    """会改变一次策略实验语义、并可安全落盘的摘要。
+
+    不保存 seed template 原文，而保存其 SHA-256。这样条件指纹会随模板改动而变化，
+    又不会把完整攻击话术额外复制进每个 Run 记录。
+    """
+
+    id: str
+    categories: list[VulnerabilityCategory]
+    max_turns: int = Field(ge=1, le=MAX_TURNS_CEILING)
+    template_sha256: str = Field(min_length=64, max_length=64)
+    mutation_operators: list[MutationOperator] = Field(min_length=1)
+    predicted_rank: float = Field(gt=0)
+    predicted_strength: PredictedStrength
+    requirements: StrategyRequirements
+
+    @classmethod
+    def from_strategy(cls, strategy: Strategy) -> StrategyConditionSummary:
+        return cls(
+            id=strategy.id,
+            categories=list(strategy.categories),
+            max_turns=strategy.max_turns,
+            template_sha256=hashlib.sha256(strategy.seed_template.encode("utf-8")).hexdigest(),
+            mutation_operators=list(strategy.mutation_operators),
+            predicted_rank=strategy.predicted_rank,
+            predicted_strength=strategy.predicted_strength,
+            requirements=strategy.requirements,
+        )
+
+
+class StrategyCatalogueSummary(RedCellModel):
+    """写入 ExperimentConditions 的不可变策略目录摘要。"""
+
+    version: str = Field(min_length=1)
+    strategies: list[StrategyConditionSummary] = Field(min_length=1)
+
+
+class StrategyCatalogue(RedCellModel):
+    """一批可比较实验所用的有版本策略目录。
+
+    可以把它看作给一组试卷盖封条：题目、顺序或答题时间一旦改变，就不能把两次考试
+    的分数混在一起。Phase 0 保留冻结目录；后续阶段都使用自己的显式版本。
+    """
+
+    version: str = Field(min_length=1)
+    strategies: list[Strategy] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_unique_ids(self) -> StrategyCatalogue:
+        ids = [strategy.id for strategy in self.strategies]
+        if len(ids) != len(set(ids)):
+            raise ValueError("策略目录中不得有重复 id")
+        return self
+
+    def condition_summary(self) -> StrategyCatalogueSummary:
+        return StrategyCatalogueSummary(
+            version=self.version,
+            strategies=[
+                StrategyConditionSummary.from_strategy(strategy) for strategy in self.strategies
+            ],
+        )
 
 
 def predicted_pairs(strategies: list[Strategy]) -> list[tuple[str, str]]:
