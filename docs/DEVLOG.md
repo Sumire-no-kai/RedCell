@@ -10,6 +10,7 @@
 ### 2026-08-09 22:20 AEST · Step 43 · PR #19 合并落地主干
 
 - **进度:** 通过仓库认证权限将 PR [#19](https://github.com/Sumire-no-kai/RedCell/pull/19) 以 merge commit 合入受保护的 `master`；PR 状态为 `MERGED`，合并提交为 `6e5bff3`。
+- **遇到的问题与解决方式:** 用于记录本条合并状态的小型 follow-up PR 通过 GitHub App integration 创建时同样返回 HTTP 403，进一步确认该集成缺少仓库写权限；继续使用已认证的 `gh` 创建并合并文档 PR，不改写或直接提交 `master`。
 - **验证证据:** 合并使用精确 expected head `25486b1` 防止竞态。刷新远端后 `origin/master` 为 `6e5bff3`，且 `git merge-base --is-ancestor 25486b1 origin/master` 返回成功，证明被审查的 PR head 实际包含在主干，而非仅依赖界面状态。远端仍无 status checks；工程验证证据保持 Step 40 的 563 passed 与完整四道格式门。
 - **剩余状态:** DONE（PR #19 已合并）；真实 Phase 0.5 Gate 仍为 `INCOMPLETE`，Step 39 的两项研究口径继续保持 `OPEN`，不得因代码合并改称实验 `SUPPORTED`。
 
