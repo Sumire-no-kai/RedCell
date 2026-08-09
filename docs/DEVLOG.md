@@ -7,6 +7,12 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 20:02 AEST · Step 18 · 当前 Phase 0.5 切片全量回归
+
+- **进度:** 对当前功能分支上的条件协议、LLM Controller、请求审计/恢复、历史投影、CLI、contract controls 与报告身份聚合运行全量验证；工作树在验证结束时无未提交变更。
+- **验证证据:** `pytest -p no:cacheprovider` 为 **526 passed in 28.59s**；`ruff check .`、`black --check src tests` 与 `git diff --check` 全部通过。
+- **剩余状态:** IN PROGRESS（Phase 0.5 整体）；未开始正式 Gate Provider controls 或任何新 seed/真实攻击运行。下一实现切片为角色化 Token accounting、Token 前缀/六条件 Gate 分析和 replay Validator；这些不是本条验证可替代的结果。
+
 ### 2026-08-09 19:33 AEST · Step 17 · 报告输出确定性 Finding 与攻击路径身份
 
 - **进度:** `ReportData` 现在同时输出 `finding_signature` 与 `attack_path_signature` 的去重计数和签名频次。签名来自已冻结的结构函数，不包含标题、canary 明文或具体参数值；报告可据此区分“同一结构漏洞的重复证据”和“固定 Strategy 确认的新攻击路径”。
