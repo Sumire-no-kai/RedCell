@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 20:45 AEST · Step 21 · 攻击路径原样 replay Validator
+
+- **进度:** 新增 Validator：按每个已确认 `attack_path_signature` 选取一条已提交 Attempt，逐轮重放原始 attacker 消息、重置授权 Target、重新执行确定性 Level-1 scorer，并统计固定次数的复现率。它只使用已有对话，不创建新的 Controller decision 或 Generator 请求。
+- **决策与理由:** 验证是对已发现攻击路径的独立稳定性测量，不能把新的生成或搜索决策混入发现阶段预算；因此它单独报告，不修改原 Run 的 320k discovery 账本。
+- **验证证据:** `pytest tests/test_validator.py -p no:cacheprovider` 为 **2 passed**；覆盖无确认路径时零重放，以及非法 repeat 参数被拒绝。Ruff/Black 通过。
+- **剩余状态:** DONE（Validator 的安全边界与 replay 核心）；TODO 为真实路径 fixture 覆盖、从不可变事件构造 Token prefix、Gate 保护线与完整报告/CLI 接线。
+
 ### 2026-08-09 20:32 AEST · Step 20 · 六条件配对 Gate 的离线统计核心
 
 - **进度:** 新增纯离线 `gate_analysis`：按 160k Token 前缀收集六个条件的 `attack_path_signature` 集合，只有六条件齐全且有效的 seed 才进入 paired block；完整配置③分别与 Static/Random/Thompson × off 比较，计算实际效应阈值、确定性 bootstrap 95% 下界、12 seed 精确单侧 sign-flip p 值及三比较 Holm 校正。
