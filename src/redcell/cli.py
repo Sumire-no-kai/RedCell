@@ -643,7 +643,7 @@ def gate_report(
 ) -> None:
     """从已落盘的 Run/Event/Finding 重建冻结的 Phase 0.5 Gate 分析。"""
     controls_result = (
-        ControlsReport.model_validate_json(controls_json.read_text(encoding="utf-8"))
+        ControlsReport.from_report_json(controls_json.read_text(encoding="utf-8"))
         if controls_json is not None
         else None
     )

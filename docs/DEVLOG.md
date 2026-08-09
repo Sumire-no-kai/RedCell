@@ -7,6 +7,14 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 22:39 AEST · Step 30 · Gate controls 产物完整性
+
+- **进度:** Gate 现在要求 controls 有确切的 3 条 positive 与 10 条 negative 结果，避免空列表的语言默认值被误判为通过。为 `ControlsReport` 添加报告加载入口，导入时丢弃可由原始 negative outcomes 重算的 `utility` 计算字段；Gate CLI 可直接读取自身导出的 controls JSON。
+- **遇到的问题:** 新增 CLI 集成测试发现 `ControlsReport.model_dump_json()` 会输出 `utility`，而直接 `model_validate_json()` 因模型禁止额外字段拒绝该文件。
+- **解决方式:** 加载时只移除展示型、可重算的计算字段；不接受用户提供的 utility 汇总值作为 Gate 事实，仍由十条原始任务结果重新计算。
+- **验证证据:** `tests/test_gate_report.py tests/test_controls.py` 为 **24 passed**，包含 Gate CLI 读取 controls/validation/seed-plan 三份 JSON 的集成覆盖；Ruff/Black 与 `git diff --check` 通过。
+- **剩余状态:** PARTIAL；继续完成余下的 Phase 0.5 保护性指标和正式运行前的外部输入契约。
+
 ### 2026-08-09 22:24 AEST · Step 29 · 预注册 seed 计划契约
 
 - **进度:** 增加 `SeedPlan`（严格 12 个 primary + 4 个 reserve、全局唯一、拒绝 Phase 0 pilot 的 5000–5002），Gate 分析按该计划的冻结顺序取有效 paired block，不再按已观察到的 seed 数字排序。报告和 CLI 新增 `--seed-plan-json`；缺失时为 `missing_seed_plan`。

@@ -207,6 +207,18 @@ class ControlsReport(RedCellModel):
         )
         return "\n".join(lines)
 
+    @classmethod
+    def from_report_json(cls, raw: str) -> ControlsReport:
+        """Load a serialized report, discarding computed presentation fields.
+
+        ``utility`` is emitted by Pydantic for readers but is deterministically
+        recomputed from negative outcomes on load; accepting its old value would
+        make a Gate depend on a user-editable duplicate of the source evidence.
+        """
+        payload = json.loads(raw)
+        payload.pop("utility", None)
+        return cls.model_validate(payload)
+
 
 DEFAULT_POSITIVE_REPEATS = 3
 """每条阳性 case 重复几次。⭐

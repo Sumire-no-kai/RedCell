@@ -82,6 +82,8 @@ def build_gate_report(
         failures.append("no_phase_0_5_prefixes")
     if controls is None:
         failures.append("missing_controls")
+    elif len(controls.positive) != 3 or len(controls.negative) != 10:
+        failures.append("controls_shape_invalid")
     elif not controls.passed:
         failures.append("controls_failed")
     elif (
