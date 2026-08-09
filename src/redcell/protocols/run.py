@@ -21,6 +21,11 @@ from redcell.failures import FailureRecord
 from redcell.protocols.common import REDCELL_PROTOCOL_VERSION, RedCellModel, new_id
 from redcell.protocols.strategy import StrategyCatalogueSummary
 from redcell.reliability import ReliabilityPolicy, SelectionReliabilityPolicy
+from redcell.versions import (
+    ATTACK_PATH_SIGNATURE_VERSION,
+    FINDING_SIGNATURE_VERSION,
+    LEVEL1_SCORER_VERSION,
+)
 
 
 class RunStatus(StrEnum):
@@ -171,6 +176,9 @@ class ExperimentConditions(RedCellModel):
     search: SearchConfiguration | None = None
     generation_memory: GenerationMemoryConfiguration | None = None
     controller: ControllerRunConfiguration | None = None
+    scorer_version: str = LEVEL1_SCORER_VERSION
+    finding_signature_version: str = FINDING_SIGNATURE_VERSION
+    attack_path_signature_version: str = ATTACK_PATH_SIGNATURE_VERSION
 
     def fingerprint(self) -> str:
         payload = json.dumps(

@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 20:55 AEST · Step 35 · Finding 结构身份与实验版本冻结
+
+- **进度:** Finding signature v2 现同时绑定工具名、参数键、JSON 类型、约束参数/种类，以及受保护数据的位置和 canary 的 SHA-256 摘要；具体参数值与 canary 明文仍不进入签名。Level-1 scorer 在 Evidence 中显式记录这些结构语义。`ExperimentConditions` 新增 scorer、finding signature、attack-path signature 三项版本，任一变化都会改变完整实验指纹。
+- **决策与理由:** 同一个金额字段从 10 变成 500 仍是同一结构漏洞，因此值不进入身份；但 `amount:number` 与 `recipient:string`、`max_value` 与 `bound_to_actor` 会导向不同修复，必须区分。canary 采用“位置 + 密文摘要”而不是只写 response，也不保存明文，兼顾可区分性和脱敏。
+- **验证证据:** Ruff 通过；Finding/Phase 0.5 条件/Level-1/Finding 协议定向回归 **60 passed**。新增测试覆盖同键同类型不同值保持同一身份、键/类型/约束改变时身份改变、canary 明文不进入签名，以及三项语义版本改变时实验指纹改变。
+- **剩余状态:** DONE（身份与版本切片）；继续完成 Gate checkpoint、重复 block、controls 环境绑定和全部冻结保护指标。
+
 ### 2026-08-09 20:52 AEST · Step 34 · Token 账本与 Controller 恢复语义修复
 
 - **进度:** `BudgetManager` 新增 Attempt 原子记账入口：总账只增加一次，Generator/Target 仅解释同一笔总账；成功与失败调用均保留 cached input Token，并按角色分摊。Provider 缺失 usage 不再伪装成已知零值，Controller 或 Attempt 任一远程调用出现 unknown usage 时均使 Run fail-closed。Controller evidence digest 改为覆盖 TargetBrief、候选策略、历史和预算的完整规范化摘要；恢复时发现“已成功调用但未形成 Decision”的孤儿 Invocation，会补记其已知成本并使 Run 失效，不重放付费模型调用。
