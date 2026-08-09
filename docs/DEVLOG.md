@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 18:58 AEST · Step 07 · 将 Generator memory 接入现有 Orchestrator
+
+- **进度:** `RunOrchestrator` 在每次生成 `ExecutionRequest` 前读取 Run 的显式 `generation_memory` 条件。只有 `bounded-relevant-v1` 才调用 projector；默认 off、历史 Phase 0 Run 或缺少条件均稳定传递 `None`。Projector 输入为内存中已原子提交成功的 Attempt 列表，resume 路径则先从 Store 读回同一列表。
+- **决策与理由:** Orchestrator 持有“哪些 Attempt 已提交”为唯一事实，因此应在这里决定何时构造历史；禁止 Generator 自行查询 Store，否则生成层既得到存储依赖又可能读到 partial/未提交记录。memory enabled 却缺少冻结 policy/limits 被显式视为运行时不变量错误，不能静默按 off 继续。
+- **验证证据:** `pytest tests/test_orchestrator.py tests/test_executor.py -p no:cacheprovider` 为 **27 passed**；Ruff/Black 通过。
+- **剩余状态:** DONE（Generator memory runtime 接线）；下一步 TODO 为将 `ControllerDriver` 取代 Orchestrator 的直接 `SearchController` 调用，按 Invocation/Decision/Attempt 三段事务接线，并新增 ControllerEvidence projector。
+
 ### 2026-08-09 18:50 AEST · Step 06 · 确定性 bounded-relevant-v1 history projector
 
 - **进度:** 新增 `redcell.history`，将已提交的完整 Attempt 投影为 Generator memory：固定选择最近两场、当前 Strategy 的最高 reward 场与最近场，按 Attempt ID 去重并按执行顺序渲染；每条和总历史均按冻结上限裁剪、标记 `[TRUNCATED]` 并计算 SHA-256 digest。新增稳定的每 Strategy 聚合，按 ID 排序且不包含原始消息。

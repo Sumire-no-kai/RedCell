@@ -34,9 +34,11 @@ from redcell.failures import (
     SideEffectStatus,
     safe_error_message,
 )
+from redcell.generation import GenerationMemory
+from redcell.history import build_generation_memory
 from redcell.protocols.common import RedCellModel, new_id
 from redcell.protocols.finding import Finding
-from redcell.protocols.run import Run, RunEvent, RunEventType, RunStatus
+from redcell.protocols.run import GenerationMemoryMode, Run, RunEvent, RunEventType, RunStatus
 from redcell.protocols.strategy import Strategy
 from redcell.protocols.trace import Attempt, CostRecord
 from redcell.randomness import controller_seed_for, derive_seed
@@ -263,6 +265,7 @@ class RunOrchestrator:
                     target_temperature=run.target_temperature,
                     attacker_model=run.attacker_model,
                     attacker_temperature=run.attacker_temperature,
+                    cross_attempt_memory=self._generation_memory(run, attempts, strategy_id),
                 )
 
                 try:
@@ -819,6 +822,28 @@ class RunOrchestrator:
             controller_seed=controller_seed_for(run.seed or 0), decisions=decisions
         )
         return self._controller
+
+    @staticmethod
+    def _generation_memory(
+        run: Run, attempts: list[Attempt], strategy_id: str
+    ) -> GenerationMemory | None:
+        """仅显式 memory-enabled 条件才从已提交 Attempt 构造 Generator memory。"""
+        conditions = run.experiment_conditions
+        if (
+            conditions is None
+            or conditions.generation_memory is None
+            or conditions.generation_memory.mode is GenerationMemoryMode.OFF
+        ):
+            return None
+        memory = conditions.generation_memory
+        if memory.limits is None or memory.policy_version is None:
+            raise RuntimeError("memory-enabled Run 缺少冻结的 memory policy/limits")
+        return build_generation_memory(
+            attempts,
+            current_strategy_id=strategy_id,
+            policy_version=memory.policy_version,
+            limits=memory.limits,
+        )
 
     def _require_latest_decision(self) -> ControllerDecision:
         """取最近一次决策;不存在即为内部不变量被破坏,不静默兜底。"""
