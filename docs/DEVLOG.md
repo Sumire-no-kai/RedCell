@@ -5,6 +5,22 @@
 
 ---
 
+## 2026-08-09 17:46 AEST · Step 24 · Phase 0.5 Gate 量程、比较顺序、指纹与漂移归因修订
+
+- **触发、分支与授权:** 在 `docs/phase-0-5-gate-corrections` 上处理。开工前复核指出五项预注册问题:结构 Finding 主指标可能无量程;必跑④没有预注册比较;组件 gatekeeping 可能否掉已成立的完整配置假设;新条件字段与历史完整 SHA 无法同时成立;ASR 非劣未声明适用条件。作者接受本轮推荐并要求直接修改相关要求。本步骤只修改内部 `PRD.md` 与公开设计/基线/日志文档,未写 Phase 0.5 运行时代码、未调用 Provider。
+- **无成本离线核算:** 只读冻结指纹 `a0f8d19098c605b1a373b5e95557252f2cb6a6210f6fc1d59629626c9828b924` 的 18 Run / 1080 Attempts / 141 Findings。按已定结构语义重建后仅 **4 个 `finding_signature`**:106 次 profile `customer_id/bound_to_actor`、33 次 system-prompt canary、1 次 refund confirmation bypass、1 次 forbidden delete;加入冻结 `strategy_id` 后为 **11 个已观察攻击路径**。
+- **真实 160k 前缀证据:** 在旧 budget=100 Run 中按 `prompt_tokens+completion_tokens` 累计到不超过 160k,Static / Random / Thompson 平均 Attempts 为 54.0 / 49.33 / 46.0,原始 Findings 为 8.33 / 5.33 / 5.33,结构签名仅 2.00 / 1.67 / 1.67,攻击路径为 4.67 / 3.33 / 2.00(单 Run 1–6)。因此原结构签名指标接近二值,不适合作为搜索效率主指标;Claude 提出的量程风险成立且比 6–10 的初估更窄。上述为历史设计核算,不是 Phase 0.5 正式结果,正式 seed 仍未观察。
+- **主指标修订:** 保留版本化 `finding_signature=(类别,违规对象,违规结构)` 表示结构漏洞;新增主要 `attack_path_signature=(finding_signature,strategy_id)` 表示固定目录中的高层机制确认该漏洞。具体参数值、标题、LLM 相似度与重复命中不增加计数。拒绝“把 customer ID/金额等具体值算新漏洞”,因为会把参数变体当 breadth;拒绝“直接数全部原始 Finding”,因为会奖励反复刷同一漏洞。结构签名/原始命中退为预注册次要解释指标。
+- **主要 Gate 与四格机制分离:** Phase Gate 直接检验③分别优于同批 Static/Random/Thompson × off,三个比较均须满足 `max(+1 path/Run,+20%)`、paired bootstrap CI 下界>0、12 seed 的全部4096种精确符号翻转及 Holm 校正。取消“②>①才允许检验③”的组件前置门,因为它与“完整配置③是否胜过三基线”的主假设不一致。四格仍全部必跑并始终分析:Selector 主效应=`[(④−①)+(③−②)]/2`,memory 主效应=`[(②−①)+(③−④)]/2`,另报告 simple effects 与交互;组合胜出不自动证明组件因果。
+- **④ 的定位:** 不降为事后探索结果。它同时进入 Selector/memory 主效应和交互诊断,从而在开跑前已有明确比较用途;拒绝只临时补一个 `④vs①`,因为单个 simple effect 不能使用完整2×2设计,也容易在结果后挑有利切面。
+- **双层指纹:** 完整 `experiment_fingerprint` 必须包含 search/memory/Controller 等全部处理条件;另新增版本化 `regression_context_fingerprint`,只投影 Target、Attacker、actor、Arena、Policy、Scorer、可靠性、协议与 Strategy catalogue。历史 `a0f8d190...` 只要求 Phase 0 原样 replay 精确复现;Phase 0.5 保存完整指纹、上下文指纹与逐字段兼容结果。反序列化可用 `None+exclude_none` 读取旧行,但新 Run builder/CLI 必须拒绝缺字段。拒绝仅比较“旧对象当时存在的字段”,因为会静默放过未来条件漂移。
+- **ASR 与 controls 归因:** Phase 0.5 历史 ASR 非劣只用于① Static×off 的320k前缀,参考改为历史 Static-only:总体40/360=11.11%,三个强策略分别16/51=31.37%、9/54=16.67%、9/51=17.65%。Golden 检查 Scorer/协议代码;阳性 controls 检查 Target 攻击链;阴性/utility 检查 GLM Target正常行为;attacker controls 检查 Gemini Generator;Static×off ASR 检查端到端漂移。②③④ ASR 属于处理结果。环境探针持续失败标 `EXPERIMENT_INVALID`,不得归罪 Controller 或写成 `NOT SUPPORTED`。
+- **结论语义:** `SUPPORTED` 只要求③对三基线的主比较与全部保护线通过;只允许声称完整 LLM×memory 配置确认更多攻击路径。Selector/memory 只有各自主效应通过时才能获得独立增量声明。组件通过但完整配置未胜三基线时不能升级 Phase 结论;完整配置胜出但某组件未过时,如实记录该组件独立增量未获支持。
+- **同步文件:** 更新本地内部 `PRD.md`、`docs/PHASE0_BASELINE.md`、`docs/CONCEPTS.md` 与本日志;Phase 0 的 `NOT SUPPORTED` 历史结论不变。
+- **验证与剩余状态:** 五项 Gate 缺口的设计修订 **DONE**。全局检索确认当前 PRD、基线与 CONCEPTS 已不再使用“结构 Finding 主指标”“组件固定顺序 gatekeeping”“新 Run 必须复现旧完整 SHA”或“ASR 门适用于未指定条件”的活动口径;DEVLOG 旧步骤保留当时决定并由本步骤显式更正,不静默改写历史。`git diff --check` 通过;仅三份 tracked 文档变化,内部 `PRD.md` 按既有规则继续 gitignored。本步骤不授权或启动 Phase 0.5 实现。
+
+---
+
 ## 2026-08-09 16:57 AEST · Step 23 · 开工整理四:合并通用前置并关闭本轮范围
 
 - **Git 收尾:** Step 22 的通用前置以 `aac21b9` 提交并推送到 `chore/phase-0-5-prerequisites`;PR #14 `chore: finalize Phase 0.5 prerequisites` 经检查为 `CLEAN / MERGEABLE`,仓库无远端 checks,已用 merge commit `da58091` 合并回 `master`。

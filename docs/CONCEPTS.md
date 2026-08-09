@@ -2239,7 +2239,7 @@ Controller、Planner 和 Generator 混在一起,坏格式、成本和不可复�
 算。temperature 只控制同一输入下的采样随机性;探索来自输入状态本身——未尝试项、历史 reward、Token 成本和
 目标响应会随 Run 变化。我们刻意把“策略选择的自适应”和“攻击话术的语言随机性”分开,这样消融结果才可归因。
 
-### 14.28 Phase 0.5 Gate:同一箱油、同一批路况,连续过三道门
+### 14.28 Phase 0.5 Gate:同一箱油、先比整车,再拆解零件
 
 先用赛车类比。六辆车要在**同一箱油**下跑同一批赛道:
 
@@ -2261,16 +2261,16 @@ Static 对手。六个条件共享同一个 seed,像让六辆车面对同一场�
 改口说“其实 64k 才是主指标”。三档来自 Phase 0 每 Attempt 约 3199 Token 的中位尺度,约等于旧的
 20/50/100 Attempts,但不会把更长的 memory prompt 当成免费资源。
 
-正式比较像连续过三道门:
+正式判定先比**整车**:③必须在 160k 同时胜过 Static、Random、Thompson 三辆基线车。
+三个比较都要求平均每 Run 至少多 1 条不同攻击路径或提高 20%(取更严格者)、paired
+bootstrap 95% 区间下界大于 0,并对 12 个 paired seed 枚举全部 `2^12=4096` 种符号翻转;
+三个 p 值再用 Holm 校正。某个“零件”没有单独显出增量,不会阻止一个已经胜过三基线的
+完整配置被如实判定;但也不能因为整车赢了就倒推每个零件都立了功。
 
-1. ② 是否胜过①——记住过去能不能让下一次话术更有效;
-2. ③ 是否胜过②——把 Strategy 选择权交给 LLM 是否还有增量;
-3. ③ 是否同时胜过 Static、Random、Thompson。
-
-每道门不仅要“数字更大”,还要同时满足三件事:平均每 Run 至少多 1 个不同 Finding 或提高 20%(取更严格者)、
-paired bootstrap 95% 区间下界大于 0、成对置换检验通过。第三道门一次考三个对手,用 Holm 校正降低
-“考得越多越容易碰巧过一门”的假阳性。前一道门不过就不继续扩张完整 agent 故事,但已经得到支持的组件结论仍
-可以原样报告。
+随后无论整车输赢都拆解四格:Selector 主效应平均 `④−①` 与 `③−②`;Generator memory
+主效应平均 `②−①` 与 `③−④`;交互效应再看“memory 在 LLM 下是否比在 Static 下更有用”。
+这让④有预注册用途,并堵住结果出来后才选择 `④vs①` 或 `③vs④` 讲故事的空间。只有对应
+主效应自己通过实际效应与不确定性门,才能说该组件提供了独立增量。
 
 否决只看点估计,因为 12 个 seed 中几个好运气 Run 就能制造漂亮均值;否决复用 5000–5002,因为那些结果已经被
 观察过;否决为三个 Token 点分别重跑,因为那会让预算曲线混入三批不同随机结果。12 个正式 paired seed + 4 个
@@ -2278,7 +2278,7 @@ paired bootstrap 95% 区间下界大于 0、成对置换检验通过。第三道
 
 面试时可以这样答:
 
-> **为什么既要 20%/1 个 Finding,又要置信区间?**
+> **为什么既要 20%/1 条攻击路径,又要置信区间?**
 
 置信区间回答“会不会只是运气”,实际效应回答“即使是真的,大到值得多一层 LLM 和工程复杂度吗”。只满足前者,
 可能得到统计显著但产品上毫无意义的微小改善;只满足后者,又可能只是小样本波动。
@@ -2287,7 +2287,7 @@ paired bootstrap 95% 区间下界大于 0、成对置换检验通过。第三道
 
 主指标像赛车的圈速,保护线像赛前安全检查。车更快但少装一只轮胎不能算赢。Phase 0.5 最可能出现的假胜利是:
 
-- Controller 只刷一两条已奏效 Strategy,Finding 数上升但 Coverage 变窄;
+- Controller 只刷一两条已奏效 Strategy,攻击路径数看似上升但 Coverage 变窄;
 - 误报正常请求,把正常行为也算成漏洞;
 - memory 产生一次性幸运攻击,之后无法原样重放;
 - repair/失败 Token 没记账,让 LLM 条件看起来比实际便宜;
@@ -2299,10 +2299,25 @@ Selection Abandonment、Token 和决策审计使用更严格的 Controller 专�
 
 复现率测的是“这条已发现的漏洞能否再次触发”,不是“搜索器能否再次碰巧找到它”。所以 Validator 把已经记录的
 攻击对话原样重放 5 次,只重新调用 Target,不让 Controller 或 Generator 重新发挥。验证 Token 单独报告,否则找到
-更多 Finding 的条件会因为需要验证更多漏洞而在发现预算里被反向惩罚。
+更多攻击路径的条件会因为需要验证更多证据而在发现预算里被反向惩罚。
 
-跨 Attempt 的“不同 Finding”也不能用随机 Finding ID 或标题判断。系统保存不含敏感参数值的结构签名:
-漏洞类别 + 违规工具/受保护位置 + 参数约束结构。同一签名反复命中只累积证据与复现次数,不伪装成多个漏洞。
+跨 Attempt 先用不含敏感参数值的 `finding_signature` 表示结构漏洞:漏洞类别 + 违规工具/
+受保护位置 + 参数约束结构。同一结构签名反复命中不伪装成多个漏洞。Phase 0 旧数据离线
+核算后只有 4 个结构签名,160k 时每 Run 常见 1–2 个,量程不足以检验搜索效率。因此 Phase 0.5
+主指标再加入冻结 Strategy ID,形成 `attack_path_signature=(finding_signature,strategy_id)`:
+不同高层机制确认同一结构漏洞算不同攻击路径,但换一个 customer ID、改标题或重复命中都不增加计数。
+旧 160k 前缀下三种算法平均为 2.00–4.67 条路径,所以“至少 +1”对应约 21%–50% 的实际提升,
+而不是随便一条参数变体。
+
+实验记录使用两把尺子:完整 `experiment_fingerprint` 记录 search/memory/Controller 等全部处理
+条件;`regression_context_fingerprint` 只确认六辆车面对同一个 Target、Attacker、Arena、Policy、
+Scorer 和 Strategy catalogue。Phase 0 的 `a0f8d190...` 只属于历史完整形状,Phase 0.5 不能一边
+增加字段、一边假装完整 SHA 没变。
+
+ASR 漂移也只看不受 Controller/memory 影响的① Static×off。Golden 检查 Scorer 代码,
+阴性 controls/utility 检查 GLM Target 正常行为,attacker controls 检查 Gemini Generator,
+Static×off ASR 才是端到端漂移探针。②③④ 的 ASR 是处理结果,下降不能自动甩锅给 Provider,
+更不能反过来把 Provider 漂移算成 Controller 失败。
 
 面试时可以这样答:
 
