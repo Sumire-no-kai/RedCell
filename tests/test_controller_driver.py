@@ -89,6 +89,29 @@ async def test_llm_adapter_repairs_once_without_changing_evidence() -> None:
     assert "same evidence" in provider.calls[1][-1].content
 
 
+async def test_llm_adapter_truncates_audit_fields_without_repairing_choice() -> None:
+    provider = ScriptedProvider(
+        [
+            '{"selected_strategy_id":"direct","rationale":"'
+            + "x" * 501
+            + '","evidence_refs":["a","b","c","d","e"]}'
+        ]
+    )
+    adapter = LLMControllerAdapter(
+        provider=provider,
+        run_id="run-1",
+        prompt_version="controller-prompt-v1",
+        model="test",
+    )
+
+    result = await adapter.select(_evidence())
+
+    assert not result.repaired
+    assert result.warnings == ["rationale_truncated", "evidence_refs_truncated"]
+    assert result.choice.rationale is not None and len(result.choice.rationale) == 500
+    assert len(result.choice.evidence_refs) == 4
+
+
 async def test_llm_adapter_abandons_after_one_invalid_repair() -> None:
     provider = ScriptedProvider(["{}", '{"selected_strategy_id":"not-available"}'])
     adapter = LLMControllerAdapter(

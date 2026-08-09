@@ -207,9 +207,11 @@ class LLMControllerAdapter(ControllerDriver):
             ) from exc
         parsed = self._parse(raw, evidence.available_strategy_ids)
         if parsed is not None:
+            choice, warnings = parsed
             return ControllerSelection(
-                choice=parsed,
+                choice=choice,
                 invocation=self._invocation(requested, 0, raw, cost),
+                warnings=warnings,
             )
 
         repair_messages = [
@@ -237,10 +239,12 @@ class LLMControllerAdapter(ControllerDriver):
             wall_ms=cost.wall_ms + repair_cost.wall_ms,
         )
         if repaired is not None:
+            choice, warnings = repaired
             return ControllerSelection(
-                choice=repaired,
+                choice=choice,
                 invocation=self._invocation(requested, 1, repair_raw, total),
                 repaired=True,
+                warnings=warnings,
             )
         failed = requested.model_copy(
             update={
@@ -283,7 +287,7 @@ class LLMControllerAdapter(ControllerDriver):
             LLMMessage(role=Role.USER, content=json.dumps(payload, ensure_ascii=False)),
         ]
 
-    def _parse(self, raw: str, available: list[str]) -> ControllerChoice | None:
+    def _parse(self, raw: str, available: list[str]) -> tuple[ControllerChoice, list[str]] | None:
         try:
             value = json.loads(raw)
             if not isinstance(value, dict) or set(value) - {
@@ -292,12 +296,34 @@ class LLMControllerAdapter(ControllerDriver):
                 "evidence_refs",
             }:
                 return None
-            choice = ControllerChoice.model_validate(value)
-        except (json.JSONDecodeError, ValueError):
+            selected = value.get("selected_strategy_id")
+            if not isinstance(selected, str):
+                return None
+            rationale = value.get("rationale")
+            references = value.get("evidence_refs", [])
+            if rationale is not None and not isinstance(rationale, str):
+                return None
+            if not isinstance(references, list) or not all(
+                isinstance(reference, str) for reference in references
+            ):
+                return None
+        except json.JSONDecodeError:
             return None
+        warnings: list[str] = []
+        if rationale is not None and len(rationale) > 500:
+            rationale = rationale[:500]
+            warnings.append("rationale_truncated")
+        if len(references) > 4:
+            references = references[:4]
+            warnings.append("evidence_refs_truncated")
+        choice = ControllerChoice(
+            selected_strategy_id=selected,
+            rationale=rationale,
+            evidence_refs=references,
+        )
         if choice.selected_strategy_id not in available:
             return None
-        return choice
+        return choice, warnings
 
     def _requested_invocation(
         self, index: int, evidence: ControllerEvidence

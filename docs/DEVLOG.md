@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 19:25 AEST · Step 16 · Controller audit 字段的有界归一化
+
+- **进度:** 合法 `selected_strategy_id` 现在可伴随超长 rationale 或超过 4 条的 audit refs；Adapter 会确定性截断并记录 warning，而不为这些非控制字段额外发起 repair。schema 外控制字段、非法 JSON、候选集外 Strategy 仍保持唯一 repair 后失败的严格语义。
+- **决策与理由:** rationale/ref 是低强度审计辅助信息，不能改变被执行的 Strategy；把它们的长度瑕疵升级为选择失败会无谓放大 Provider 格式噪声。相反，任何试图增加控制字段或越出候选集的输出仍必须拒绝，避免把动作空间交给模型。
+- **验证证据:** `pytest tests/test_controller_driver.py tests/test_controller_controls.py -p no:cacheprovider` 为 **9 passed**；新增测试锁定 audit 截断不触发 repair、而 warning 与上限可审计。Ruff/Black 通过。
+- **剩余状态:** DONE（输出契约的 audit-field 归一化）；TODO 为 CLI controls 候选比较、角色化 Token 分栏、Gate runner、Validator 与报告聚合。
+
 ### 2026-08-09 19:18 AEST · Step 15 · Controller contract controls 基础执行器
 
 - **进度:** 新增 `controller-contract-controls-v1` 的固定 12 条本地 Evidence：3 条冷启动、3 条受限候选集（含单候选不变量）、3 条历史状态，以及 3 条提示注入样本。执行器只调用候选 Controller，不触发 Target、Generator、Finding 或 Gate seed，并按 12/12 合法选择、至少 11/12 首次成功、12/12 已知 Token usage 计算通过状态。
