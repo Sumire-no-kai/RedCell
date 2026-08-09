@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from redcell.budget import BudgetLimits
 from redcell.protocols import (
     ArenaRunConfiguration,
     ControllerRunConfiguration,
@@ -10,6 +11,7 @@ from redcell.protocols import (
     GenerationMemoryLimits,
     GenerationMemoryMode,
     ProviderRunConfiguration,
+    Run,
     SearchConfiguration,
     SearchSelector,
     StrategyCatalogue,
@@ -116,3 +118,42 @@ def test_regression_context_ignores_treatment_but_complete_fingerprint_does_not(
     )
     assert static.fingerprint() != llm.fingerprint()
     assert static.regression_context_fingerprint() == llm.regression_context_fingerprint()
+
+
+def test_experiment_fingerprint_binds_scorer_and_identity_versions() -> None:
+    baseline = _conditions()
+
+    assert (
+        baseline.fingerprint()
+        != baseline.model_copy(update={"scorer_version": "level1-v-next"}).fingerprint()
+    )
+    assert (
+        baseline.fingerprint()
+        != baseline.model_copy(
+            update={"finding_signature_version": "finding-signature-v-next"}
+        ).fingerprint()
+    )
+    assert (
+        baseline.fingerprint()
+        != baseline.model_copy(
+            update={"attack_path_signature_version": "attack-path-signature-v-next"}
+        ).fingerprint()
+    )
+
+
+def test_gate_context_fingerprint_binds_budget_contract() -> None:
+    run = Run(
+        target_name="target",
+        policy_version="policy-v1",
+        adapter_type="arena",
+        algorithm="static",
+        limits=BudgetLimits(max_total_tokens=320000),
+        experiment_conditions=_conditions(),
+    )
+
+    assert (
+        run.gate_context_fingerprint()
+        != run.model_copy(
+            update={"limits": BudgetLimits(max_total_tokens=160000)}
+        ).gate_context_fingerprint()
+    )

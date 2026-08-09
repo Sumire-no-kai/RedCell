@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from redcell._base import CostRecord
 from redcell.budget import BudgetLimit, BudgetLimits, BudgetManager
 
 
@@ -141,6 +142,19 @@ def test_role_token_breakdown_is_a_projection_of_the_single_budget() -> None:
 
     usage = manager.usage()
     assert usage.total_tokens == usage.role_total_tokens == 21
+
+
+def test_attempt_usage_records_total_once_and_allocates_roles() -> None:
+    manager = _manager(max_total_tokens=100)
+    manager.record_attempt_usage(
+        total=CostRecord(prompt_tokens=7, completion_tokens=5, cached_input_tokens=2),
+        generator=CostRecord(prompt_tokens=3, completion_tokens=2, cached_input_tokens=1),
+        target=CostRecord(prompt_tokens=4, completion_tokens=3, cached_input_tokens=1),
+    )
+
+    usage = manager.usage()
+    assert usage.total_tokens == usage.role_total_tokens == 12
+    assert usage.cached_input_tokens == usage.role_cached_input_tokens == 2
 
 
 # ── 放弃的 attempt 会不会悄悄吃掉样本量 ─────────────────────────────────

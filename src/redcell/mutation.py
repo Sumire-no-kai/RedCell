@@ -210,6 +210,8 @@ class LLMMutationGenerator(AttackGenerator):
             cost=CostRecord(
                 prompt_tokens=response.prompt_tokens,
                 completion_tokens=response.completion_tokens,
+                cached_input_tokens=response.cached_input_tokens,
+                usage_known=response.usage_known,
                 usd=response.cost_usd,
             ),
         )

@@ -7,6 +7,79 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 22:18 AEST · Step 42 · PR #19 合并前复核与权限回退
+
+- **进度:** 作者明确授权合并 PR #19。合并前重新刷新 `origin/master`，确认工作树干净、分支 behind 0 / ahead 7、PR head 为 `9889fa1`；GitHub 返回 PR 可合并，且无 review、无未解决 review thread。
+- **遇到的问题:** 仓库没有配置远端 status checks，因此只能如实沿用 Step 40 的本地 563 项测试和四道格式门证据；首次通过 GitHub App integration 发起带 expected-head 保护的 merge commit 时返回 HTTP 403 `Resource not accessible by integration`，属于集成权限不足，不是代码或 PR 冲突。
+- **解决方式:** 不降低保护、不改写主干，改用仓库已有认证的 `gh` 权限执行相同的 merge-commit 流程；本条先提交推送，再以新的精确 PR head SHA 重新核验并合并，避免在记录变更后误合旧 head。
+- **剩余状态:** IN PROGRESS；TODO 为推送本条日志、重新确认 PR head/mergeability、执行合并并验证 `origin/master` 实际包含 PR head。
+
+### 2026-08-09 22:02 AEST · Step 41 · 二次互检修复提交、推送与 PR 刷新
+
+- **进度:** 行尾门、报告脱敏、Gate limitation 与测试修复已提交为 `1d7bee3`（`fix: close report and formatting review gaps`），并推送到现有 `fix/phase-0-5-review-findings`；PR [#19](https://github.com/Sumire-no-kai/RedCell/pull/19) 描述已同步新增修复、563 项验证、Ruff format 门和两项待作者冻结的实验口径。
+- **验证证据:** 提交仅含 `.gitattributes`、README、公开 DEVLOG、实现与测试共 9 个文件；内部 `PRD.md` / `AGENTS.md` / `CLAUDE.md` 继续由 `.gitignore` 排除。推送后本地与 `origin/fix/phase-0-5-review-findings` 为 behind 0 / ahead 0；GitHub 报告 PR 为 `OPEN`、非 Draft、`MERGEABLE`、`CLEAN`，当前仍没有远端 status checks，故不声称 CI 通过。
+- **剩余状态:** DONE（修复/commit/push/PR 更新）；PR 尚未合并。正式 Gate 仍为 `INCOMPLETE`，两项研究口径保持 `OPEN` 等待作者确认。
+
+### 2026-08-09 21:55 AEST · Step 40 · 二次互检修复全量回归
+
+- **进度:** `ruff format .` 一次性规范化了 24 个文件（23 个既有格式失败文件加本轮新改文件），随后逐字节扫描全部 102 个受跟踪 Python 文件，确认混合行尾数为 **0**。报告脱敏、Gate Limitations、格式门文档与回归测试均已完成。
+- **验证证据:** 定向报告/Gate 测试为 **29 passed**。四道全量门依次为：`.venv\Scripts\python.exe -m pytest -p no:cacheprovider` **563 passed in 63.35s**；`ruff check .` 全部通过；`ruff format --check .` 确认 **110 files already formatted**；`black --check src tests` 确认 **101 files would be left unchanged**；`git diff --check` 通过。随后把脱敏不变量加强到 `ReportData` 直接构造路径后，相关 **22 passed**，Ruff/Black/diff 门再次通过，最终全量 pytest 再次为 **563 passed in 56.11s**。该证据补齐了 Step 37 遗漏的 Ruff format check。
+- **剩余状态:** DONE（无需作者拍板的实现修复与验证）；TODO 为索引行尾 renormalize、提交并推送现有 PR。正式 Gate 仍不得起跑，直到 Step 39 记录的两项 `OPEN` 研究口径由作者确认；工程测试通过不等于 Phase 0.5 `SUPPORTED`。
+
+### 2026-08-09 21:51 AEST · Step 39 · 二次互检复现、行尾门与报告脱敏
+
+- **进度:** 复现 `.venv\Scripts\python.exe -m ruff format --check .` 失败为 **23 files would be reformatted**，并确认 `_base.py` 为 CRLF 56 / bare-LF 10、`finding_identity.py` 为 CRLF 0 / bare-LF 94、`orchestrator.py` 为 CRLF 1366 / bare-LF 34、`budget.py` 为 CRLF 428 / bare-LF 6。新增 `.gitattributes` 固定 `*.py text eol=lf`，并把 pytest、Ruff lint、Ruff format check、Black 四道门写入公开贡献说明与内部合并清单；这同时更正 Step 37 的证据边界：当时只跑了 Ruff lint 与 Black，漏掉了唯一会抓住混合行尾的 Ruff format check。
+- **决策与理由:** 报告层现在会复制并清空所有带 `protected_location` 的 Evidence `matched_value`，HTML 只显示脱敏位置标记；原始 SQLite/Finding 不变，继续支持本地确定性检测与复现。这样 JSON/HTML 均不再输出 canary 等受保护明文，同时不销毁内部证据。攻击路径默认 Limitations 新增“`strategy_id`/策略铺开可能放大路径 breadth”的明确警告，并要求联读结构签名与策略分配。
+- **遇到的问题:** `attack_path_signature` 的策略铺开偏差如何影响主要指标，以及机制主效应实际阈值的“对照均值”如何定义，都属于正式实验解释与预注册口径，不能在代码修复中擅自拍板。已有 HTML 渲染 canary 明文的行为还与 PRD ④ 的文字承诺直接冲突。
+- **解决方式:** 两项研究口径已在内部 PRD 标为 `OPEN`，列出当前方案与替代方案，并明确作者确认前正式 Gate 不得起跑；当前计算与 identity 算法保持不变。canary 冲突按既有 PRD 约束直接修复，并新增 JSON/HTML 双格式回归测试，同时断言原始 Finding 未被变异。
+- **验证证据:** 当前完成代码与测试落盘；下一步先执行一次 `ruff format .` 规范化存量行尾，再运行定向测试与四道全量门。未调用真实 Provider、未生成新 Gate seed 或实验结果。
+- **剩余状态:** IN PROGRESS；TODO 为规范化 23 个文件、确认全仓无混合 Python 行尾、跑全量验证并提交推送现有 PR。两项正式实验口径保持 `OPEN`，等待作者确认。
+
+### 2026-08-09 21:31 AEST · Step 38 · Review remediation 推送与 PR
+
+- **进度:** `fix/phase-0-5-review-findings` 已推送到 origin，并创建 ready-for-review PR [#19](https://github.com/Sumire-no-kai/RedCell/pull/19)，目标分支为受保护的 `master`。PR 描述记录了四个实现/日志提交、核心设计取舍、562 项本地验证与真实 Gate 仍为 `INCOMPLETE` 的证据边界。
+- **验证证据:** 推送前刷新 `origin/master` 后分支状态为 behind 0 / ahead 4，`origin/master` 是当前 HEAD 的祖先；GitHub 报告 PR 为 `OPEN`、`MERGEABLE`、`CLEAN`、非 Draft。该仓库当前未为此分支返回远端 status checks，因此不把“无 checks”写成 CI 通过，本地全量门禁证据见 Step 37。
+- **剩余状态:** DONE（commit/push/PR 工作流）；PR 尚未合并，本次修复不越过 review 边界直接合并。
+
+### 2026-08-09 21:28 AEST · Step 37 · Review remediation 全量回归与提交收尾
+
+- **进度:** 三个审查修复切片已经分别提交：`b382171` 修复 Provider usage/角色账本与 Controller 恢复，`f92604c` 冻结 Finding/attack-path 结构身份，`cb7700c` 完成 Gate、controls、checkpoint、validator 与 verdict 证据闭环。复核 `origin/master...HEAD` 只包含代码、测试与公开 DEVLOG；内部 `PRD.md`、`AGENTS.md`、`CLAUDE.md` 未被 Git 跟踪。
+- **验证证据:** `.venv\Scripts\python.exe -m pytest -p no:cacheprovider` 为 **562 passed in 67.63s**；`.venv\Scripts\python.exe -m ruff check .` 全部通过；`.venv\Scripts\python.exe -m black --check src tests` 确认 **101 files would be left unchanged**；`git diff --check HEAD^ HEAD` 通过。测试数量由审查前 543 增至 562，新增用例覆盖九项已确认缺陷及完整 `SUPPORTED` 合成证据路径。
+- **遇到的问题:** 仓库根目录 `.pytest_cache` 在当前权限下不可写；最终全量测试使用 `-p no:cacheprovider` 关闭非功能性缓存，测试本身无跳过、无失败。Git 读取用户级 global ignore 时仍打印权限 warning，但工作树状态、差异与提交均可正常核验。
+- **剩余状态:** CODE REVIEW REMEDIATION DONE；真实 Phase 0.5 实验 Gate 仍为 `INCOMPLETE`，不得从 562 个工程测试推导为实验 `SUPPORTED`。下一步仅剩提交本条日志、刷新远端、推送当前分支并创建 ready-for-review PR；不在本步骤直接合并。
+
+### 2026-08-09 21:25 AEST · Step 36 · Phase 0.5 Gate 证据闭环与判定语义修复
+
+- **进度:** 重写 Gate 的冻结证据核验面：从同一 320k 事件流投影 64k/160k/320k 前缀，只有实际达到 checkpoint、Run 以 Token 上限结束且总账与三角色账守恒时才可进入 paired block；重复的 seed×condition 不再覆盖，缺失 primary、计划外 seed 与 Controller 配置漂移均显式失败。160k 主分析保留 LLM×memory 对 Static/Random/Thompson 的三项成对检验，并补齐 Selector/Memory 主效应、四项 simple effect 与交互诊断。新增 Level-1 golden、完整 positive/negative/utility controls、Attacker controls、Controller contract controls、Static×off 320k ASR 漂移、Strategy/漏洞类别 coverage、Token/attack-path 成本、逐 Run×path 五次重放和 LLM Invocation→Decision 审计保护线。报告现在明确区分 `SUPPORTED`、`NOT_SUPPORTED`、`EXPERIMENT_INVALID` 与尚未形成实验结论的 `INCOMPLETE`。
+- **决策与理由:** Gate 被实现为集中、fail-closed 的证据模块，而不是在 CLI 中分散布尔判断。对照报告不仅看 `passed`，还绑定正式 Target/Attacker/Controller 配置、策略目录、TargetBrief digest、冻结 case ID、重复次数与样本数；理由是“同样 12 条/同样 5 次”不足以证明跑的是预注册条件。`NOT_SUPPORTED` 只保留给完整有效实验中主效应或 treatment 保护线未过；preflight、历史 ASR、Token/审计/环境/数据完整性故障归为 `EXPERIMENT_INVALID`，缺少尚未执行的证据归为 `INCOMPLETE`，避免把工程故障伪装成算法负结果。
+- **遇到的问题:** 定向测试首先发现 Attacker control 的新条件模型在 CLI 的错误边界之外验证 `samples=1`，使本应为 `BAD_CONFIG` 的输入泄漏成未处理异常；修复为在加载 Provider、消耗 quota 之前拒绝。继续复核前缀口径时发现 Selection/Attempt abandonment 的累计 Token 虽已进入 BudgetManager，却未全部写入事件 payload，且投影只从 committed Attempt 更新成本，会低估“没有形成 Attempt 的已知用量”。
+- **解决方式:** 所有会改变累计远程用量的 selection/attempt abandonment 事件现在同步保存 usage；前缀从每条带 usage 的不可变事件取不超过 checkpoint 的最大累计值，并在应带 usage 的事件缺失快照时使 prefix 失效。Validator 的去重键从单一 path 改为 `(run_id, attack_path)`，避免不同 run 的相同路径互相覆盖；Gate 同时拒绝 unknown/missing replay usage、重复 Controller invocation 引用和未知用量的失败 Invocation。
+- **验证证据:** Ruff 与 Black 定向检查通过；Gate/CLI/analysis/validator/conditions/controller-controls/attacker-controls 定向回归 **61 passed**，Gate+analysis+validator+orchestrator 回归 **38 passed**。新增 12 seed × 6 condition 的全证据合成测试，确认合法矩阵能够得到 `SUPPORTED`；另覆盖重复单元格、未达 checkpoint、无 usage 事件、无 Attempt 的 selection 成本、跨 Run 同路径重放以及四类 verdict。
+- **剩余状态:** DONE（审查发现的 Gate/前缀/controls/validator 切片）；TODO 为执行全量测试与格式检查、同步最终证据、提交、推送并创建 PR。正式 Phase 0.5 Gate 仍为 `INCOMPLETE`：真实未观察 seed 计划、在线 preflight、六条件矩阵与 replay 证据尚未执行，代码测试不得替代这些外部实验事实。
+
+### 2026-08-09 20:55 AEST · Step 35 · Finding 结构身份与实验版本冻结
+
+- **进度:** Finding signature v2 现同时绑定工具名、参数键、JSON 类型、约束参数/种类，以及受保护数据的位置和 canary 的 SHA-256 摘要；具体参数值与 canary 明文仍不进入签名。Level-1 scorer 在 Evidence 中显式记录这些结构语义。`ExperimentConditions` 新增 scorer、finding signature、attack-path signature 三项版本，任一变化都会改变完整实验指纹。
+- **决策与理由:** 同一个金额字段从 10 变成 500 仍是同一结构漏洞，因此值不进入身份；但 `amount:number` 与 `recipient:string`、`max_value` 与 `bound_to_actor` 会导向不同修复，必须区分。canary 采用“位置 + 密文摘要”而不是只写 response，也不保存明文，兼顾可区分性和脱敏。
+- **验证证据:** Ruff 通过；Finding/Phase 0.5 条件/Level-1/Finding 协议定向回归 **60 passed**。新增测试覆盖同键同类型不同值保持同一身份、键/类型/约束改变时身份改变、canary 明文不进入签名，以及三项语义版本改变时实验指纹改变。
+- **剩余状态:** DONE（身份与版本切片）；继续完成 Gate checkpoint、重复 block、controls 环境绑定和全部冻结保护指标。
+
+### 2026-08-09 20:52 AEST · Step 34 · Token 账本与 Controller 恢复语义修复
+
+- **进度:** `BudgetManager` 新增 Attempt 原子记账入口：总账只增加一次，Generator/Target 仅解释同一笔总账；成功与失败调用均保留 cached input Token，并按角色分摊。Provider 缺失 usage 不再伪装成已知零值，Controller 或 Attempt 任一远程调用出现 unknown usage 时均使 Run fail-closed。Controller evidence digest 改为覆盖 TargetBrief、候选策略、历史和预算的完整规范化摘要；恢复时发现“已成功调用但未形成 Decision”的孤儿 Invocation，会补记其已知成本并使 Run 失效，不重放付费模型调用。
+- **决策与理由:** 否决给 `record_usage` 增加 `count_total=False` 布尔开关，因为调用者一旦传错仍会静默重复或漏记；采用 `record_attempt_usage(total, generator, target)` 并强制三组 Token 精确守恒。对孤儿 Invocation 否决“根据 response digest 推断 Decision”（digest 不能恢复原始结构）和“直接重调”（会双花且可能改变选择），采用保守失效语义。
+- **遇到的问题:** 首轮回归暴露孤儿 Invocation 的 ID 列表不能写入 `FailureRecord.details` 的标量契约；改为逗号连接的审计字符串。另，pytest 尝试写 `.pytest_cache` 时因当前权限产生 warning，但测试执行与结果未受影响。
+- **验证证据:** Ruff 全部通过；预算/provider/controller/orchestrator/executor 定向回归 **89 passed**。新增非零 Generator+Target 用量测试锁定 `total_tokens == role_total_tokens == 15`，cached input 同样守恒；新增 unknown usage、完整 evidence digest 和崩溃窗口恢复测试，恢复路径确认不会再次调用 Provider。
+- **剩余状态:** DONE（账本、unknown usage、Controller digest/恢复切片）；继续修复 Finding identity、冻结指纹与完整 Gate 保护线。
+
+### 2026-08-09 20:38 AEST · Step 33 · Phase 0.5 review remediation 启动
+
+- **进度:** 在 `fix/phase-0-5-review-findings` 分支启动合并后代码审查修复，范围为 Token 重复记账、unknown usage、Controller 崩溃恢复/evidence digest、Finding identity、Gate checkpoint/重复 block/controls 环境绑定与全部冻结保护线。
+- **决策与理由:** 沿用 PRD 已冻结的实验合同，不调整阈值。总 Token 只记一次，角色数字作为同一账目的分配；任一远程角色 usage 未知即使 Run 失效；Gate 对缺少证据一律 fail-closed。否决“在 CLI 分散补 if”的方案，规则集中在 BudgetManager、Controller Adapter/恢复 seam 和 Gate 分析模块。
+- **遇到的问题:** Step 32 的“IMPLEMENTATION DONE”被本次审查证伪；543 个测试通过只证明既有测试面通过，没有覆盖实验合同语义。另，本机当前时钟早于先前会话写入的 23:01 时间，保留原历史并以当前系统时间记录本次更正，不静默改写。
+- **验证证据:** 审查探针复现 `total_tokens=24`、`role_total_tokens=12`；现有全量测试仍为 543 passed，说明需要新增能捕获语义缺口的回归测试。
+- **剩余状态:** IN PROGRESS；Step 32 的完成结论撤回，待本分支修复、全量验证与新 PR。
+
 ### 2026-08-09 23:01 AEST · Step 32 · Phase 0.5 实现全量回归审计
 
 - **进度:** 对本分支的 Phase 0.5 实现进行最终本地回归：冻结条件、LLM Controller invocation/repair/recovery、bounded memory、角色 Token、攻击路径身份、提交前缀、paired bootstrap/permutation/Holm、seed plan、controls/validator 输入和 Controller preflight 均纳入测试与 CLI 可达路径。

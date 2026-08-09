@@ -16,6 +16,7 @@ from redcell.controller import (
     UsageStatus,
 )
 from redcell.protocols.common import RedCellModel
+from redcell.protocols.run import ControllerRunConfiguration
 
 
 class ControllerContractCase(RedCellModel):
@@ -35,6 +36,7 @@ class ControllerContractOutcome(RedCellModel):
 class ControllerContractReport(RedCellModel):
     policy_version: str = "controller-contract-controls-v1"
     outcomes: list[ControllerContractOutcome]
+    controller: ControllerRunConfiguration | None = None
 
     @property
     def successful_count(self) -> int:
@@ -101,6 +103,8 @@ def controller_contract_cases() -> list[ControllerContractCase]:
 
 async def run_controller_contract_controls(
     driver: ControllerDriver,
+    *,
+    controller: ControllerRunConfiguration | None = None,
 ) -> ControllerContractReport:
     outcomes: list[ControllerContractOutcome] = []
     for case in controller_contract_cases():
@@ -134,4 +138,4 @@ async def run_controller_contract_controls(
                 repaired=selection.repaired,
             )
         )
-    return ControllerContractReport(outcomes=outcomes)
+    return ControllerContractReport(outcomes=outcomes, controller=controller)

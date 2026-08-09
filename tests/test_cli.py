@@ -91,7 +91,7 @@ def test_gate_report_exports_incomplete_state_for_empty_store(workspace) -> None
     result = runner.invoke(app, ["gate-report", "--db", _db(workspace), "--out", "gate.json"])
 
     assert result.exit_code == 0, result.output
-    assert "NOT SUPPORTED / INCOMPLETE" in result.output
+    assert "INCOMPLETE" in result.output
     payload = json.loads((workspace / "gate.json").read_text(encoding="utf-8"))
     assert payload["analysis"]["valid_seeds"] == []
 

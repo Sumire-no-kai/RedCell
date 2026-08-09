@@ -21,6 +21,11 @@ from redcell.failures import FailureRecord
 from redcell.protocols.common import REDCELL_PROTOCOL_VERSION, RedCellModel, new_id
 from redcell.protocols.strategy import StrategyCatalogueSummary
 from redcell.reliability import ReliabilityPolicy, SelectionReliabilityPolicy
+from redcell.versions import (
+    ATTACK_PATH_SIGNATURE_VERSION,
+    FINDING_SIGNATURE_VERSION,
+    LEVEL1_SCORER_VERSION,
+)
 
 
 class RunStatus(StrEnum):
@@ -74,6 +79,7 @@ class ProviderRunConfiguration(RedCellModel):
     max_concurrency: int = Field(ge=0)
     input_usd_per_mtok: float = Field(ge=0.0)
     output_usd_per_mtok: float = Field(ge=0.0)
+    cached_input_usd_per_mtok: float = Field(default=0.0, ge=0.0)
     extra_body: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -170,6 +176,9 @@ class ExperimentConditions(RedCellModel):
     search: SearchConfiguration | None = None
     generation_memory: GenerationMemoryConfiguration | None = None
     controller: ControllerRunConfiguration | None = None
+    scorer_version: str = LEVEL1_SCORER_VERSION
+    finding_signature_version: str = FINDING_SIGNATURE_VERSION
+    attack_path_signature_version: str = ATTACK_PATH_SIGNATURE_VERSION
 
     def fingerprint(self) -> str:
         payload = json.dumps(
@@ -198,6 +207,9 @@ class ExperimentConditions(RedCellModel):
                 if self.strategy_catalogue is not None
                 else None
             ),
+            "scorer_version": self.scorer_version,
+            "finding_signature_version": self.finding_signature_version,
+            "attack_path_signature_version": self.attack_path_signature_version,
         }
         encoded = json.dumps(
             payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")
@@ -279,6 +291,26 @@ class Run(RedCellModel):
     @property
     def has_auditable_conditions(self) -> bool:
         return self.experiment_conditions is not None and self.experiment_fingerprint is not None
+
+    def gate_context_fingerprint(self) -> str:
+        """Bind every non-treatment contract that can change Gate eligibility."""
+        if self.experiment_conditions is None:
+            raise ValueError("Gate context requires experiment_conditions")
+        payload = {
+            "version": "phase-0.5-gate-context-v1",
+            "target_name": self.target_name,
+            "policy_version": self.policy_version,
+            "adapter_type": self.adapter_type,
+            "protocol_version": self.protocol_version,
+            "regression_context": self.experiment_conditions.regression_context_fingerprint(),
+            "limits": self.limits.model_dump(mode="json"),
+            "reliability": self.reliability.model_dump(mode="json"),
+            "selection_reliability": self.selection_reliability.model_dump(mode="json"),
+        }
+        encoded = json.dumps(
+            payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
     @property
     def is_conclusive(self) -> bool:

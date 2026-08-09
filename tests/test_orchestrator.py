@@ -36,11 +36,13 @@ from redcell.protocols import (
     AdapterCapabilities,
     AdapterInput,
     AdapterOutput,
+    CostRecord,
     DeliveryObservability,
     IdempotencySupport,
     ObservabilityLevel,
     ResetScope,
     TargetAdapter,
+    TraceMetadata,
 )
 from redcell.protocols.run import Run, RunEventType, RunStatus
 from redcell.randomness import controller_seed_for
@@ -123,6 +125,26 @@ class StableAdapter(FlakyAdapter):
         )
 
 
+class CostedAdapter(StableAdapter):
+    def __init__(self, *, usage_known: bool = True) -> None:
+        super().__init__()
+        self.usage_known = usage_known
+
+    async def send(self, payload: AdapterInput) -> AdapterOutput:
+        self.send_calls += 1
+        return AdapterOutput(
+            assistant_message="No.",
+            observability=ObservabilityLevel.FULL,
+            trace_metadata=TraceMetadata(
+                prompt_tokens=7,
+                completion_tokens=2,
+                cached_input_tokens=2,
+                usage_known=self.usage_known,
+                cost_usd=0.07,
+            ),
+        )
+
+
 class CrashOnSecondSendAdapter(StableAdapter):
     """Models a process death after selection has been durably recorded."""
 
@@ -158,6 +180,32 @@ class FlakyGenerator(AttackGenerator):
                 )
             )
         return AttackMessage(content="test attack", generator=self.name)
+
+
+class CostedGenerator(AttackGenerator):
+    def __init__(self, *, usage_known: bool = True) -> None:
+        self.usage_known = usage_known
+
+    @property
+    def name(self) -> str:
+        return "costed"
+
+    @property
+    def reports_cost(self) -> bool:
+        return True
+
+    async def generate(self, request: AttackGenerationRequest) -> AttackMessage:
+        return AttackMessage(
+            content="test attack",
+            generator=self.name,
+            cost=CostRecord(
+                prompt_tokens=5,
+                completion_tokens=1,
+                cached_input_tokens=1,
+                usage_known=self.usage_known,
+                usd=0.03,
+            ),
+        )
 
 
 def _executor(adapter: TargetAdapter, generator: AttackGenerator) -> ConversationExecutor:
@@ -230,6 +278,38 @@ async def test_serial_run_reaches_budget_and_commits_every_outcome(store: RunSto
     assert event_types.count(RunEventType.ATTEMPT_COMMITTED) == 2
 
 
+async def test_attempt_usage_total_is_not_double_counted_by_role_breakdown(
+    store: RunStore,
+) -> None:
+    result = await _execute(
+        store=store,
+        adapter=CostedAdapter(),
+        generator=CostedGenerator(),
+    )
+
+    usage = result.run.usage
+    assert usage.total_tokens == usage.role_total_tokens == 15
+    assert usage.cached_input_tokens == usage.role_cached_input_tokens == 3
+    assert usage.generator_prompt_tokens + usage.generator_completion_tokens == 6
+    assert usage.target_prompt_tokens + usage.target_completion_tokens == 9
+    assert usage.cost_usd == pytest.approx(0.10)
+
+
+async def test_unknown_attempt_usage_invalidates_the_run(store: RunStore) -> None:
+    with pytest.raises(RunFailedError) as raised:
+        await _execute(
+            store=store,
+            adapter=CostedAdapter(usage_known=False),
+            generator=CostedGenerator(),
+        )
+
+    assert raised.value.failure.stage is FailureStage.USAGE_ACCOUNTING
+    assert raised.value.failure.code == "provider_usage_missing"
+    assert raised.value.run.usage.total_tokens == 15
+    assert raised.value.run.usage.role_total_tokens == 15
+    assert store.attempts_for(raised.value.run.id) == []
+
+
 async def test_llm_driver_persists_invocation_before_executing_attempt(store: RunStore) -> None:
     strategy = _one_turn_strategy()
     provider = ScriptedProvider(
@@ -257,6 +337,63 @@ async def test_llm_driver_persists_invocation_before_executing_attempt(store: Ru
     assert store.controller_invocations_for(run.id)[0].status.value == "succeeded"
     assert store.decisions_for(run.id)[0].invocation_id is not None
     assert len(store.attempts_for(result.run.id)) == 1
+
+
+async def test_resume_invalidates_orphaned_successful_controller_invocation(
+    store: RunStore,
+    monkeypatch,
+) -> None:
+    strategy = _one_turn_strategy()
+    first_provider = ScriptedProvider(
+        [f'{{"selected_strategy_id":"{strategy.id}"}}'], tokens_per_call=(5, 2)
+    )
+    run = _run().model_copy(
+        update={"algorithm": "llm", "limits": BudgetLimits(max_attempts=1, max_total_tokens=100)}
+    )
+    request = RunExecutionRequest(run=run, strategies=[strategy], actor="customer_a")
+    original_save = store.save_controller_invocation
+
+    def crash_after_terminal_save(invocation) -> None:
+        original_save(invocation)
+        if invocation.status.value == "succeeded":
+            raise KeyboardInterrupt("crash after terminal invocation")
+
+    monkeypatch.setattr(store, "save_controller_invocation", crash_after_terminal_save)
+    first = RunOrchestrator(
+        executor=_executor(StableAdapter(), CostedGenerator()),
+        driver=LLMControllerAdapter(
+            provider=first_provider,
+            run_id=run.id,
+            prompt_version="controller-prompt-v1",
+            model="scripted",
+        ),
+        store=store,
+    )
+
+    with pytest.raises(KeyboardInterrupt, match="terminal invocation"):
+        await first.execute(request)
+
+    monkeypatch.setattr(store, "save_controller_invocation", original_save)
+    resume_provider = ScriptedProvider()
+    resumed = RunOrchestrator(
+        executor=_executor(StableAdapter(), CostedGenerator()),
+        driver=LLMControllerAdapter(
+            provider=resume_provider,
+            run_id=run.id,
+            prompt_version="controller-prompt-v1",
+            model="scripted",
+        ),
+        store=store,
+    )
+
+    with pytest.raises(RunFailedError) as raised:
+        await resumed.resume(request)
+
+    assert resume_provider.call_count == 0
+    assert raised.value.failure.code == "orphaned_succeeded_controller_invocation"
+    assert raised.value.run.usage.total_tokens == 7
+    assert raised.value.run.usage.controller_prompt_tokens == 5
+    assert raised.value.run.usage.controller_completion_tokens == 2
 
 
 async def test_llm_selection_abandonment_invalidates_without_creating_attempt(

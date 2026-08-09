@@ -23,6 +23,7 @@ from redcell.protocols.common import (
     VulnerabilityCategory,
     new_id,
 )
+from redcell.protocols.policy import ConstraintKind, ProtectedDataLocation
 
 IMPACT_CAVEAT_TEMPLATE = (
     "Impact 无法验证 —— 目标可观测性为 {level}。"
@@ -36,8 +37,17 @@ class Evidence(RedCellModel):
     description: str
     turn_index: int | None = None
     matched_value: str | None = None
+    protected_location: ProtectedDataLocation | None = None
+    constraint_parameter: str | None = None
+    constraint_kind: ConstraintKind | None = None
     tool_call: ToolCall | None = None
     side_effect: SideEffect | None = None
+
+    @model_validator(mode="after")
+    def _bind_constraint_identity(self) -> Evidence:
+        if (self.constraint_parameter is None) != (self.constraint_kind is None):
+            raise ValueError("constraint_parameter and constraint_kind must be recorded together")
+        return self
 
 
 class ViolationTriad(RedCellModel):

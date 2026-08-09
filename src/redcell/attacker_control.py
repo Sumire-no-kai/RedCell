@@ -39,15 +39,18 @@ A(如实报告靶场不产生分化)与 B(受限重设计靶场)。它把原因�
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from statistics import mean
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from redcell._base import RedCellModel
 from redcell.generation import AttackGenerationRequest, AttackGenerator
 from redcell.protocols.policy import TargetBrief
-from redcell.protocols.strategy import Strategy
+from redcell.protocols.run import ProviderRunConfiguration
+from redcell.protocols.strategy import Strategy, StrategyCatalogueSummary
 from redcell.randomness import derive_seed
 from redcell.retry import RetryPolicy, retry_provider_call
 
@@ -61,12 +64,55 @@ SIMILARITY_MARGIN = 0.10
 把它包装成统计检验会给人一种它有推断效力的错觉。
 """
 
+DEFAULT_ATTACKER_CONTROL_SAMPLES = 5
+
 
 class StrategySamples(RedCellModel):
     """一个策略生成出来的一组话术。"""
 
     strategy_id: str
     messages: list[str]
+
+
+class AttackerControlConditions(RedCellModel):
+    attacker: ProviderRunConfiguration
+    strategy_catalogue: StrategyCatalogueSummary
+    target_brief_digest: str
+    samples_per_strategy: int = Field(ge=2)
+    seed: int
+
+    def fingerprint(self) -> str:
+        payload = json.dumps(
+            self.model_dump(mode="json"),
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        attacker: ProviderRunConfiguration,
+        strategy_catalogue: StrategyCatalogueSummary,
+        brief: TargetBrief,
+        samples_per_strategy: int,
+        seed: int,
+    ) -> AttackerControlConditions:
+        brief_payload = json.dumps(
+            brief.model_dump(mode="json"),
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return cls(
+            attacker=attacker,
+            strategy_catalogue=strategy_catalogue,
+            target_brief_digest=hashlib.sha256(brief_payload).hexdigest(),
+            samples_per_strategy=samples_per_strategy,
+            seed=seed,
+        )
 
 
 class AttackerControlReport(RedCellModel):
@@ -77,6 +123,22 @@ class AttackerControlReport(RedCellModel):
     """同一策略内部,话术两两之间的平均相似度。"""
 
     between_similarity: float = Field(ge=0.0, le=1.0)
+    conditions: AttackerControlConditions | None = None
+    conditions_fingerprint: str | None = None
+
+    @model_validator(mode="after")
+    def _bind_conditions(self) -> AttackerControlReport:
+        if self.conditions is None:
+            if self.conditions_fingerprint is not None:
+                raise ValueError("conditions_fingerprint requires conditions")
+            return self
+        expected = self.conditions.fingerprint()
+        if self.conditions_fingerprint is None:
+            self.__dict__["conditions_fingerprint"] = expected
+        elif self.conditions_fingerprint != expected:
+            raise ValueError("conditions_fingerprint does not match conditions")
+        return self
+
     """不同策略之间,话术两两之间的平均相似度。"""
 
     @property
@@ -111,9 +173,10 @@ async def run_attacker_control(
     strategies: list[Strategy],
     brief: TargetBrief,
     *,
-    samples_per_strategy: int = 5,
+    samples_per_strategy: int = DEFAULT_ATTACKER_CONTROL_SAMPLES,
     seed: int = 0,
     retry_policy: RetryPolicy | None = None,
+    conditions: AttackerControlConditions | None = None,
 ) -> AttackerControlReport:
     """对每个策略各生成若干条话术,比较组内 / 组间相似度。
 
@@ -148,6 +211,7 @@ async def run_attacker_control(
         samples=collected,
         within_similarity=_within(collected),
         between_similarity=_between(collected),
+        conditions=conditions,
     )
 
 

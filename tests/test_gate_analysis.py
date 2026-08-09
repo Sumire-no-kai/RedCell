@@ -73,3 +73,45 @@ def test_seed_plan_rejects_pilot_seed_and_wrong_cardinality() -> None:
         SeedPlan(primary=[1], reserve=[2])
     with pytest.raises(ValueError, match="pilot seeds"):
         SeedPlan(primary=[5000, *range(1, 12)], reserve=[12, 13, 14, 15])
+
+
+def test_gate_analysis_rejects_duplicate_seed_condition_cells() -> None:
+    prefixes = [
+        TokenPrefix(seed=seed, condition=condition, checkpoint_tokens=160000)
+        for seed in range(12)
+        for condition in GateCondition
+    ]
+    prefixes.append(
+        TokenPrefix(
+            run_id="duplicate",
+            seed=0,
+            condition=GateCondition.STATIC_OFF,
+            checkpoint_tokens=160000,
+        )
+    )
+
+    analysis = analyse_phase_0_5(prefixes, bootstrap_samples=10)
+
+    assert analysis.duplicate_cells == ["0:static-off"]
+    assert analysis.invalid_seeds == [0]
+    assert analysis.valid_seeds == list(range(1, 12))
+    assert not analysis.passed
+
+
+def test_gate_analysis_rejects_a_prefix_that_did_not_reach_checkpoint() -> None:
+    prefixes = [
+        TokenPrefix(
+            seed=seed,
+            condition=condition,
+            checkpoint_tokens=160000,
+            checkpoint_reached=not (seed == 0 and condition is GateCondition.LLM_MEMORY),
+        )
+        for seed in range(12)
+        for condition in GateCondition
+    ]
+
+    analysis = analyse_phase_0_5(prefixes, bootstrap_samples=10)
+
+    assert analysis.invalid_seeds == [0]
+    assert analysis.valid_seeds == list(range(1, 12))
+    assert not analysis.passed

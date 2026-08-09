@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import UTC, datetime
 
-from pydantic import Field, computed_field
+from pydantic import Field, computed_field, field_validator
 
 from redcell.finding_identity import attack_path_signature, finding_signature
 from redcell.protocols.common import ImpactStatus, RedCellModel, VulnerabilityCategory
@@ -66,6 +66,16 @@ class ImpactBreakdown(RedCellModel):
         return self.realized + self.not_realized + self.unknown
 
 
+def _redact_protected_evidence(finding: Finding) -> Finding:
+    """Keep protected plaintext in raw evidence, but never copy it into reports."""
+    report_evidence = []
+    for evidence in finding.evidence:
+        if evidence.protected_location is not None:
+            evidence = evidence.model_copy(update={"matched_value": None})
+        report_evidence.append(evidence)
+    return finding.model_copy(update={"evidence": report_evidence})
+
+
 class ReportData(RedCellModel):
     run: Run
     findings: list[Finding] = Field(default_factory=list)
@@ -90,6 +100,11 @@ class ReportData(RedCellModel):
     execution_retries: int = 0
     disclaimer: str = DISCLAIMER
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @field_validator("findings")
+    @classmethod
+    def redact_protected_evidence(cls, findings: list[Finding]) -> list[Finding]:
+        return [_redact_protected_evidence(finding) for finding in findings]
 
     @property
     def unverifiable_impact_count(self) -> int:

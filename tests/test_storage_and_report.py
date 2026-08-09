@@ -17,6 +17,7 @@ from redcell.protocols import (
     ImpactBasis,
     ImpactStatus,
     ObservabilityLevel,
+    ProtectedDataLocation,
     ReproductionContext,
     SignalChannel,
     SignalScore,
@@ -428,6 +429,38 @@ def test_json_and_html_come_from_the_same_data(run: Run) -> None:
     assert "hits" not in payload["strategy_stats"][0]
     assert "Attempt ASR" in to_html(data)
     assert "Impact ASR" in to_html(data)
+
+
+def test_report_redacts_protected_plaintext_without_mutating_raw_finding(run: Run) -> None:
+    secret = "RC_SECRET_REPORT_MUST_NOT_LEAK"
+    attempt = _attempt(run.id, "s1", 1.0)
+    raw_finding = _finding(attempt, ImpactStatus.REALIZED).model_copy(
+        update={
+            "evidence": [
+                Evidence(
+                    description="Protected canary was returned by the target",
+                    matched_value=secret,
+                    protected_location=ProtectedDataLocation.SYSTEM_PROMPT,
+                )
+            ]
+        }
+    )
+
+    report = ReportData.build(run, [attempt], [raw_finding])
+    html = to_html(report)
+    json_report = to_json(report)
+
+    assert raw_finding.evidence[0].matched_value == secret
+    assert report.findings[0].evidence[0].matched_value is None
+    assert secret not in html
+    assert secret not in json_report
+    assert "REDACTED protected value" in html
+    assert "location=system_prompt" in html
+
+    directly_constructed = ReportData(run=run, findings=[raw_finding])
+    assert directly_constructed.findings[0].evidence[0].matched_value is None
+    assert secret not in to_html(directly_constructed)
+    assert secret not in to_json(directly_constructed)
 
 
 def test_write_report_emits_both_formats(run: Run, tmp_path) -> None:

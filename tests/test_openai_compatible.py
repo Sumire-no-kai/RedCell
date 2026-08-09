@@ -188,7 +188,11 @@ async def test_pricing_is_recorded_for_audit() -> None:
     provider = _provider(pricing=TokenPricing(input_usd_per_mtok=0.14, output_usd_per_mtok=0.28))
     raw = (await provider.complete(_user("你好"))).raw
 
-    assert raw["pricing"] == {"input_usd_per_mtok": 0.14, "output_usd_per_mtok": 0.28}
+    assert raw["pricing"] == {
+        "input_usd_per_mtok": 0.14,
+        "output_usd_per_mtok": 0.28,
+        "cached_input_usd_per_mtok": 0.0,
+    }
 
 
 # ── 失败分类 ────────────────────────────────────────────────
@@ -318,6 +322,7 @@ async def test_missing_usage_does_not_crash() -> None:
 
     assert response.content == "ok"
     assert response.total_tokens == 0
+    assert not response.usage_known
 
 
 # ── 不自己重试(避免与 retry.py 叠加)──────────────────────────

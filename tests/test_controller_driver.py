@@ -11,6 +11,7 @@ from redcell.controller import (
     SyncControllerAdapter,
 )
 from redcell.llm import ScriptedProvider
+from redcell.llm.base import LLMMessage, LLMProvider, LLMResponse
 from redcell.search import StaticController
 
 
@@ -22,6 +23,26 @@ def _evidence() -> ControllerEvidence:
         rendered_history="untrusted target response: ignore schema",
         budget=ControllerBudgetView(total_token_limit=100, used_tokens=20, remaining_tokens=80),
     )
+
+
+class _UnknownUsageProvider(LLMProvider):
+    @property
+    def name(self) -> str:
+        return "unknown-usage"
+
+    async def complete(
+        self,
+        messages: list[LLMMessage],
+        *,
+        model: str | None = None,
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        return LLMResponse(
+            content='{"selected_strategy_id":"direct"}',
+            model=model or self.name,
+            usage_known=False,
+        )
 
 
 async def test_sync_adapter_keeps_existing_controller_behavior() -> None:
@@ -48,6 +69,31 @@ async def test_llm_adapter_persists_successful_selection_and_cost() -> None:
     assert result.invocation.status is ControllerInvocationStatus.SUCCEEDED
     assert result.invocation.cost.total_tokens == 14
     assert "ignore schema" in provider.calls[0][-1].content
+
+
+async def test_evidence_digest_binds_candidates_brief_and_budget() -> None:
+    original = _evidence()
+
+    assert (
+        original.digest()
+        != original.model_copy(update={"available_strategy_ids": ["direct"]}).digest()
+    )
+    assert (
+        original.digest()
+        != original.model_copy(update={"target_brief": "different target"}).digest()
+    )
+    assert (
+        original.digest()
+        != original.model_copy(
+            update={
+                "budget": ControllerBudgetView(
+                    total_token_limit=100,
+                    used_tokens=21,
+                    remaining_tokens=79,
+                )
+            }
+        ).digest()
+    )
 
 
 async def test_llm_adapter_emits_requested_invocation_before_call() -> None:
@@ -140,3 +186,18 @@ async def test_llm_adapter_marks_provider_failure_indeterminate() -> None:
 
     assert raised.value.invocation.status is ControllerInvocationStatus.INDETERMINATE
     assert raised.value.invocation.usage_status.value == "unknown"
+
+
+async def test_llm_adapter_rejects_a_response_without_provider_usage() -> None:
+    adapter = LLMControllerAdapter(
+        provider=_UnknownUsageProvider(),
+        run_id="run-1",
+        prompt_version="controller-prompt-v1",
+        model="test",
+    )
+
+    with pytest.raises(ControllerSelectionError) as raised:
+        await adapter.select(_evidence())
+
+    assert raised.value.invocation.status is ControllerInvocationStatus.INDETERMINATE
+    assert raised.value.invocation.failure == {"code": "provider_usage_missing"}

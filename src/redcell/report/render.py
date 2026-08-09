@@ -124,8 +124,10 @@ _TEMPLATE = """<!doctype html>
    · reproduced {{ '%.0f%%'|format(100 * f.reproduction_rate) }}
    of {{ f.reproduction_runs }}{% endif %}</p>
  {% if f.impact_caveat %}<div class="note">{{ f.impact_caveat }}</div>{% endif %}
- {% for e in f.evidence %}<div class="ev">▸ {{ e.description }}
-  {% if e.matched_value %}— <code>{{ e.matched_value }}</code>{% endif %}</div>{% endfor %}
+{% for e in f.evidence %}<div class="ev">▸ {{ e.description }}
+ {% if e.protected_location %}— <code>[REDACTED protected value]</code>
+ <span>location={{ e.protected_location.value }}</span>
+ {% elif e.matched_value %}— <code>{{ e.matched_value }}</code>{% endif %}</div>{% endfor %}
  {% if f.recommended_mitigation %}<div class="ev">→ {{ f.recommended_mitigation }}</div>{% endif %}
 {% endfor %}
 
@@ -136,8 +138,17 @@ _TEMPLATE = """<!doctype html>
 """
 
 
+def _safe_json_payload(data: ReportData) -> dict:
+    payload = data.model_dump(mode="json")
+    for finding in payload["findings"]:
+        for evidence in finding["evidence"]:
+            if evidence["protected_location"] is not None:
+                evidence["matched_value"] = None
+    return payload
+
+
 def to_json(data: ReportData, *, indent: int = 2) -> str:
-    return json.dumps(data.model_dump(mode="json"), indent=indent, ensure_ascii=False)
+    return json.dumps(_safe_json_payload(data), indent=indent, ensure_ascii=False)
 
 
 def to_html(data: ReportData) -> str:

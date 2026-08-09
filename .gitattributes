@@ -1,0 +1,2 @@
+# Keep Python formatter input deterministic across Windows and POSIX checkouts.
+*.py text eol=lf

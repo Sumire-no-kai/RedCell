@@ -125,6 +125,26 @@ class AttemptExecutionError(RuntimeError):
     def cost(self) -> CostRecord:
         return self.failure.usage
 
+    @property
+    def generator_cost(self) -> CostRecord:
+        generator, _ = _role_costs(self.partial_turns)
+        failed_call = _remaining_cost(self.failure.usage, _cost_of(self.partial_turns))
+        if self.failure.stage is FailureStage.GENERATION:
+            generator = _sum_costs(generator, failed_call)
+        return generator
+
+    @property
+    def target_cost(self) -> CostRecord:
+        _, target = _role_costs(self.partial_turns)
+        failed_call = _remaining_cost(self.failure.usage, _cost_of(self.partial_turns))
+        if self.failure.stage in {
+            FailureStage.RESET,
+            FailureStage.TARGET_SEND,
+            FailureStage.TOOL_EXECUTION,
+        }:
+            target = _sum_costs(target, failed_call)
+        return target
+
 
 class ConversationExecutor:
     """通过同一接口执行单轮/多轮 Strategy。"""
@@ -393,8 +413,46 @@ def _cost_of(turns: list[Turn]) -> CostRecord:
             t.output.trace_metadata.completion_tokens + t.attacker_cost.completion_tokens
             for t in turns
         ),
+        cached_input_tokens=sum(
+            t.output.trace_metadata.cached_input_tokens + t.attacker_cost.cached_input_tokens
+            for t in turns
+        ),
+        usage_known=all(
+            t.output.trace_metadata.usage_known and t.attacker_cost.usage_known for t in turns
+        ),
         usd=sum(t.output.trace_metadata.cost_usd + t.attacker_cost.usd for t in turns),
         wall_ms=sum(t.output.trace_metadata.latency_ms for t in turns),
+    )
+
+
+def _role_costs(turns: list[Turn]) -> tuple[CostRecord, CostRecord]:
+    generator = CostRecord(
+        prompt_tokens=sum(turn.attacker_cost.prompt_tokens for turn in turns),
+        completion_tokens=sum(turn.attacker_cost.completion_tokens for turn in turns),
+        cached_input_tokens=sum(turn.attacker_cost.cached_input_tokens for turn in turns),
+        usage_known=all(turn.attacker_cost.usage_known for turn in turns),
+        usd=sum(turn.attacker_cost.usd for turn in turns),
+    )
+    target = CostRecord(
+        prompt_tokens=sum(turn.output.trace_metadata.prompt_tokens for turn in turns),
+        completion_tokens=sum(turn.output.trace_metadata.completion_tokens for turn in turns),
+        cached_input_tokens=sum(turn.output.trace_metadata.cached_input_tokens for turn in turns),
+        usage_known=all(turn.output.trace_metadata.usage_known for turn in turns),
+        usd=sum(turn.output.trace_metadata.cost_usd for turn in turns),
+        wall_ms=sum(turn.output.trace_metadata.latency_ms for turn in turns),
+    )
+    return generator, target
+
+
+def _remaining_cost(total: CostRecord, accounted: CostRecord) -> CostRecord:
+    """Return usage reported by the failing call but absent from completed turns."""
+    return CostRecord(
+        prompt_tokens=max(0, total.prompt_tokens - accounted.prompt_tokens),
+        completion_tokens=max(0, total.completion_tokens - accounted.completion_tokens),
+        cached_input_tokens=max(0, total.cached_input_tokens - accounted.cached_input_tokens),
+        usage_known=total.usage_known,
+        usd=max(0.0, total.usd - accounted.usd),
+        wall_ms=max(0, total.wall_ms - accounted.wall_ms),
     )
 
 
@@ -628,6 +686,8 @@ def _sum_costs(left: CostRecord, right: CostRecord) -> CostRecord:
     return CostRecord(
         prompt_tokens=left.prompt_tokens + right.prompt_tokens,
         completion_tokens=left.completion_tokens + right.completion_tokens,
+        cached_input_tokens=left.cached_input_tokens + right.cached_input_tokens,
+        usage_known=left.usage_known and right.usage_known,
         usd=left.usd + right.usd,
         wall_ms=left.wall_ms + right.wall_ms,
     )

@@ -277,12 +277,16 @@ git clone https://github.com/Sumire-no-kai/RedCell.git
 cd RedCell
 python -m venv .venv && .venv/Scripts/activate   # Linux/macOS: source .venv/bin/activate
 pip install -e ".[dev]"
-pytest
+python -m pytest -p no:cacheprovider
+python -m ruff check .
+python -m ruff format --check .
+python -m black --check src tests
 ```
 
 The test suite runs entirely offline against a scripted LLM provider, so it needs
 no API key and costs nothing. Please keep it that way: model calls belong behind
-the `LLMProvider` abstraction.
+the `LLMProvider` abstraction. All four checks above are required before merge;
+the Ruff format check also rejects mixed line endings that Black can tolerate.
 
 ## Responsible Disclosure
 
