@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 20:32 AEST · Step 20 · 六条件配对 Gate 的离线统计核心
+
+- **进度:** 新增纯离线 `gate_analysis`：按 160k Token 前缀收集六个条件的 `attack_path_signature` 集合，只有六条件齐全且有效的 seed 才进入 paired block；完整配置③分别与 Static/Random/Thompson × off 比较，计算实际效应阈值、确定性 bootstrap 95% 下界、12 seed 精确单侧 sign-flip p 值及三比较 Holm 校正。
+- **决策与理由:** 统计层只消费已落盘的 token-prefix 身份集合，不调用 Provider、不生成攻击、也不按 Finding 结果挑 seed。缺任意一个条件的 block 整体排除，防止在某个不利条件失败后仍保留其余五格造成配对偏差。
+- **验证证据:** `pytest tests/test_gate_analysis.py -p no:cacheprovider` 为 **1 passed**；覆盖 12 个完整 block、一个不完整 block 的排除，以及三项主比较的路径计数与通过状态。Ruff/Black 通过。
+- **剩余状态:** DONE（Gate 统计核心）；TODO 为从不可变 Run/Event 事实构造 Token 前缀、四格机制效应/保护线、Validator 与最终 Gate 报告。
+
 ### 2026-08-09 20:18 AEST · Step 19 · 三角色 Token 分栏账本
 
 - **进度:** `BudgetUsage` 保留唯一的总 Token/美元硬预算，同时新增 Controller、Generator、Target 的输入/输出 Token 分栏。LLM Controller Invocation 在成功、repair 后成功或已知失败时按 Controller 角色记账；完整 Attempt 从已保存 Turn 的 attacker/target usage 确定性投影到 Generator/Target 分栏。
