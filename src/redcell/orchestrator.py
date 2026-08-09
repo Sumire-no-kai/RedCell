@@ -17,7 +17,12 @@ from typing import TypeVar
 from sqlalchemy.exc import OperationalError
 
 from redcell.budget import BudgetLimit, BudgetManager
-from redcell.controller import ControllerDriver, ControllerSelectionError, LLMControllerAdapter
+from redcell.controller import (
+    ControllerDriver,
+    ControllerInvocationStatus,
+    ControllerSelectionError,
+    LLMControllerAdapter,
+)
 from redcell.executor import (
     AttemptExecutionError,
     ConversationExecutor,
@@ -205,6 +210,7 @@ class RunOrchestrator:
             attempts: list[Attempt] = []
             findings: list[Finding] = []
             consecutive_abandoned = 0
+            consecutive_abandoned_selections = 0
         else:
             budget = BudgetManager.from_usage(run.limits, run.usage)
             run, budget = await self._resolve_interrupted_attempt(run, budget, retry_rng)
@@ -216,6 +222,7 @@ class RunOrchestrator:
             attempts = await self._persist(lambda: self._store.attempts_for(run.id), retry_rng)
             findings = await self._persist(lambda: self._store.findings_for(run.id), retry_rng)
             consecutive_abandoned = _trailing_abandoned(decisions)
+            consecutive_abandoned_selections = 0
 
         by_id = {strategy.id: strategy for strategy in strategies}
         current_attempt_id: str | None = None
@@ -233,9 +240,64 @@ class RunOrchestrator:
                     )
                     break
 
-                strategy_id = await self._select_strategy(
-                    run, available, attempts, budget, retry_rng, request.actor
-                )
+                try:
+                    strategy_id = await self._select_strategy(
+                        run, available, attempts, budget, retry_rng, request.actor
+                    )
+                except ControllerSelectionError as exc:
+                    if exc.invocation.status is ControllerInvocationStatus.INDETERMINATE:
+                        failure = _indeterminate_controller_failure(exc.invocation.failure)
+                        failed = self._failed_run(
+                            run.model_copy(update={"usage": budget.usage()}), failure
+                        )
+                        failed_event = self._event(
+                            failed,
+                            RunEventType.RUN_FAILED,
+                            payload={"failure": failure.model_dump(mode="json")},
+                        )
+                        await self._persist(
+                            partial(
+                                self._store.commit_run_state,
+                                run=failed,
+                                run_event=failed_event,
+                            ),
+                            retry_rng,
+                        )
+                        raise RunFailedError(failed, failure) from exc
+                    budget.abandon_selection()
+                    consecutive_abandoned_selections += 1
+                    run = run.model_copy(update={"usage": budget.usage()})
+                    if run.selection_reliability.invalidates(
+                        successful=run.usage.successful_selections,
+                        abandoned=run.usage.abandoned_selections,
+                        consecutive_abandoned=consecutive_abandoned_selections,
+                    ):
+                        failure = _selection_reliability_failure(run, exc.invocation.failure)
+                        failed = self._failed_run(run, failure)
+                        failed_event = self._event(
+                            failed,
+                            RunEventType.RUN_FAILED,
+                            payload={"failure": failure.model_dump(mode="json")},
+                        )
+                        await self._persist(
+                            partial(
+                                self._store.commit_run_state,
+                                run=failed,
+                                run_event=failed_event,
+                            ),
+                            retry_rng,
+                        )
+                        raise RunFailedError(failed, failure) from exc
+                    event = self._event(
+                        run,
+                        RunEventType.SELECTION_ABANDONED,
+                        payload={"selection_abandonment": exc.invocation.model_dump(mode="json")},
+                    )
+                    await self._persist(
+                        partial(self._store.commit_run_state, run=run, run_event=event), retry_rng
+                    )
+                    continue
+                consecutive_abandoned_selections = 0
                 strategy = by_id[strategy_id]
                 attempt_index = budget.usage().attempts
                 attempt_id = new_id()
@@ -873,6 +935,11 @@ class RunOrchestrator:
             await self._persist(
                 lambda: self._store.save_controller_invocation(invocation), retry_rng
             )
+            budget.record_usage(
+                prompt_tokens=invocation.cost.prompt_tokens,
+                completion_tokens=invocation.cost.completion_tokens,
+                cost_usd=invocation.cost.usd,
+            )
             raise
         if selection.invocation is not None:
             await self._persist(
@@ -898,6 +965,7 @@ class RunOrchestrator:
         )
         self._driver_decisions.append(decision)
         self._driver_pending = decision.attempt_index
+        budget.complete_selection()
         return decision.selected_strategy_id
 
     def _complete_selection(self, strategy_id: str, score: float) -> None:
@@ -1074,6 +1142,38 @@ def _reliability_failure(run: Run, last_failure: FailureRecord) -> FailureRecord
             "abandoned_attempts": run.usage.abandoned_attempts,
             "last_failure_kind": last_failure.kind.value,
         },
+    )
+
+
+def _selection_reliability_failure(run: Run, last_failure: dict[str, str] | None) -> FailureRecord:
+    return FailureRecord(
+        kind=FailureKind.EXPERIMENT_INVALID,
+        stage=FailureStage.CONTROLLER_SELECTION,
+        code="controller_selection_reliability_exceeded",
+        message="Controller selection 连续失败或超过冻结阈值，本 Run 不可用于实验结论",
+        cause_type="redcell.controller.ControllerSelectionError",
+        retry_safety=RetrySafety.UNSAFE,
+        delivery_status=DeliveryStatus.NOT_SENT,
+        side_effect_status=SideEffectStatus.NONE,
+        details={
+            "successful_selections": run.usage.successful_selections,
+            "abandoned_selections": run.usage.abandoned_selections,
+            "last_selection_failure": (last_failure or {}).get("code"),
+        },
+    )
+
+
+def _indeterminate_controller_failure(last_failure: dict[str, str] | None) -> FailureRecord:
+    return FailureRecord(
+        kind=FailureKind.EXPERIMENT_INVALID,
+        stage=FailureStage.CONTROLLER_SELECTION,
+        code="controller_invocation_indeterminate",
+        message="Controller request has unknown delivery or token usage; this Gate Run is censored",
+        cause_type="redcell.controller.ControllerSelectionError",
+        retry_safety=RetrySafety.UNSAFE,
+        delivery_status=DeliveryStatus.UNKNOWN,
+        side_effect_status=SideEffectStatus.UNKNOWN,
+        details={"controller_failure": (last_failure or {}).get("code")},
     )
 
 

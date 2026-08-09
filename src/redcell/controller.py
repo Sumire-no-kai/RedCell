@@ -17,6 +17,7 @@ from enum import StrEnum
 from pydantic import Field, model_validator
 
 from redcell._base import CostRecord
+from redcell.failures import safe_error_message
 from redcell.llm.base import LLMMessage, LLMProvider
 from redcell.protocols.common import RedCellModel, Role, new_id
 from redcell.search.base import SearchController
@@ -178,7 +179,13 @@ class LLMControllerAdapter(ControllerDriver):
     async def select(self, evidence: ControllerEvidence) -> ControllerSelection:
         index = self._selection_index
         self._selection_index += 1
-        raw, cost = await self._complete(self._messages(evidence))
+        try:
+            raw, cost = await self._complete(self._messages(evidence))
+        except Exception as exc:
+            raise ControllerSelectionError(
+                self._indeterminate_invocation(index, 0, evidence, exc),
+                "Controller request delivery or usage is indeterminate",
+            ) from exc
         parsed = self._parse(raw, evidence.available_strategy_ids)
         if parsed is not None:
             return ControllerSelection(
@@ -196,7 +203,13 @@ class LLMControllerAdapter(ControllerDriver):
                 ),
             ),
         ]
-        repair_raw, repair_cost = await self._complete(repair_messages)
+        try:
+            repair_raw, repair_cost = await self._complete(repair_messages)
+        except Exception as exc:
+            raise ControllerSelectionError(
+                self._indeterminate_invocation(index, 1, evidence, exc),
+                "Controller repair delivery or usage is indeterminate",
+            ) from exc
         repaired = self._parse(repair_raw, evidence.available_strategy_ids)
         total = CostRecord(
             prompt_tokens=cost.prompt_tokens + repair_cost.prompt_tokens,
@@ -287,6 +300,27 @@ class LLMControllerAdapter(ControllerDriver):
             evidence_digest=evidence.history_digest,
             prompt_version=self._prompt_version,
             response_digest=_digest(raw),
+        )
+
+    def _indeterminate_invocation(
+        self,
+        index: int,
+        retry_index: int,
+        evidence: ControllerEvidence,
+        exc: Exception,
+    ) -> ControllerInvocation:
+        return ControllerInvocation(
+            run_id=self._run_id,
+            logical_selection_index=index,
+            retry_index=retry_index,
+            status=ControllerInvocationStatus.INDETERMINATE,
+            usage_status=UsageStatus.UNKNOWN,
+            evidence_digest=evidence.history_digest,
+            prompt_version=self._prompt_version,
+            failure={
+                "code": type(exc).__name__,
+                "message": safe_error_message(exc),
+            },
         )
 
 

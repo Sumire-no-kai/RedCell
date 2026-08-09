@@ -20,7 +20,7 @@ from redcell.budget import BudgetLimit, BudgetLimits, BudgetUsage
 from redcell.failures import FailureRecord
 from redcell.protocols.common import REDCELL_PROTOCOL_VERSION, RedCellModel, new_id
 from redcell.protocols.strategy import StrategyCatalogueSummary
-from redcell.reliability import ReliabilityPolicy
+from redcell.reliability import ReliabilityPolicy, SelectionReliabilityPolicy
 
 
 class RunStatus(StrEnum):
@@ -41,6 +41,7 @@ class RunEventType(StrEnum):
     DECISION_SELECTED = "decision_selected"
     TURN_COMPLETED = "turn_completed"
     RETRY_SCHEDULED = "retry_scheduled"
+    SELECTION_ABANDONED = "selection_abandoned"
     ATTEMPT_COMMITTED = "attempt_committed"
     ATTEMPT_ABANDONED = "attempt_abandoned"
     RUN_RESUMED = "run_resumed"
@@ -229,6 +230,9 @@ class Run(RedCellModel):
 
     limits: BudgetLimits
     reliability: ReliabilityPolicy = Field(default_factory=ReliabilityPolicy)
+    selection_reliability: SelectionReliabilityPolicy = Field(
+        default_factory=SelectionReliabilityPolicy
+    )
     """这次 Run 用的可靠性阈值 —— **必须随 Run 落盘**。
 
     它决定了"这次 run 算不算数",而事后只看结果是看不出当时用的是哪组阈值的。

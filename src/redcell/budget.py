@@ -114,6 +114,8 @@ class BudgetUsage(RedCellModel):
     attempts: int = 0
     completed_attempts: int = 0
     abandoned_attempts: int = 0
+    successful_selections: int = 0
+    abandoned_selections: int = 0
     retries: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -304,6 +306,16 @@ class BudgetManager:
     def abandon_attempt(self) -> None:
         self._usage = self._usage.model_copy(
             update={"abandoned_attempts": self._usage.abandoned_attempts + 1}
+        )
+
+    def complete_selection(self) -> None:
+        self._usage = self._usage.model_copy(
+            update={"successful_selections": self._usage.successful_selections + 1}
+        )
+
+    def abandon_selection(self) -> None:
+        self._usage = self._usage.model_copy(
+            update={"abandoned_selections": self._usage.abandoned_selections + 1}
         )
 
     def record_retry(self) -> None:

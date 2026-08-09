@@ -259,6 +259,44 @@ async def test_llm_driver_persists_invocation_before_executing_attempt(store: Ru
     assert len(store.attempts_for(result.run.id)) == 1
 
 
+async def test_llm_selection_abandonment_invalidates_without_creating_attempt(
+    store: RunStore,
+) -> None:
+    strategy = _one_turn_strategy()
+    provider = ScriptedProvider(["{}", "{}", "{}", "{}"], tokens_per_call=(5, 2))
+    run = _run().model_copy(
+        update={"algorithm": "llm", "limits": BudgetLimits(max_attempts=1, max_total_tokens=100)}
+    )
+    orchestrator = RunOrchestrator(
+        executor=_executor(StableAdapter(), ScriptedAttackGenerator({strategy.id: ["attack"]})),
+        driver=LLMControllerAdapter(
+            provider=provider,
+            run_id=run.id,
+            prompt_version="controller-prompt-v1",
+            model="scripted",
+        ),
+        store=store,
+    )
+
+    with pytest.raises(RunFailedError) as raised:
+        await orchestrator.execute(
+            RunExecutionRequest(run=run, strategies=[strategy], actor="customer_a")
+        )
+
+    assert raised.value.run.failure is not None
+    assert raised.value.run.failure.kind is FailureKind.EXPERIMENT_INVALID
+    assert raised.value.run.failure.stage is FailureStage.CONTROLLER_SELECTION
+    assert raised.value.run.usage.successful_selections == 0
+    assert raised.value.run.usage.abandoned_selections == 2
+    assert raised.value.run.usage.total_tokens == 28
+    assert store.attempts_for(run.id) == []
+    assert store.decisions_for(run.id) == []
+    assert len(store.controller_invocations_for(run.id)) == 2
+    assert [event.event_type for event in store.events_for(run.id)].count(
+        RunEventType.SELECTION_ABANDONED
+    ) == 1
+
+
 async def test_network_failure_gets_broader_retry_and_stable_ids(store: RunStore) -> None:
     adapter = FlakyAdapter(
         failures_before_success=3,

@@ -7,6 +7,15 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 18:48 AEST · Step 12 · Controller Selection Abandonment 与未知送达语义
+
+- **进度:** 为 LLM Controller 增加独立的 `successful_selections` / `abandoned_selections` 账本、冻结的 5%（最少 20 次）与连续 2 次可靠性门，并新增 `selection_abandoned` 事件。JSON/候选集错误经唯一 repair 后仍失败时，只持久化失败 Invocation 和 abandonment，不创建 Decision/Attempt；成功选择（含 repair 成功）单独计数。Provider 抛出、断线或用量未知则持久化 `INDETERMINATE` Invocation，并立即以 `EXPERIMENT_INVALID` 删除本 Gate Run，不进入 Selection Abandonment 分母。
+- **决策与理由:** 一次 Controller 请求、一个合法 Decision 和一次 Target Attempt 是三件不同的事实。将格式失败塞入 Attempt 会污染 reward/ASR；将未知送达当成普通格式失败又会假装 Token 与调用状态已知。故将“已知送达但无合法选择”作为可计数的独立样本缺失，将未知送达/Token 作为立即删失条件；两者都不会静默降级到 Static/Random。
+- **遇到的问题:** 首次接线将失败事件暂借用 `retry_scheduled`，并漏记成功 LLM selection 的逻辑计数；Ruff 还指出 loop 内延迟执行的 lambda 会捕获后续变量。
+- **解决方式:** 增加专用事件、在合法 Decision 建立时记 successful selection，并用 `partial` 绑定持久化参数。Controller provider 异常显式转换为带安全错误摘要的 `INDETERMINATE` Invocation；已知的 repair 成本仍随 Invocation 计入预算。
+- **验证证据:** `pytest tests/test_controller_driver.py tests/test_orchestrator.py -p no:cacheprovider` 为 **22 passed**；新增用例覆盖 provider 耗尽的 unknown usage，以及两次 Selection Abandonment 使 Run 标为 `EXPERIMENT_INVALID` 且不产生 Attempt/Decision。相关 Ruff 与 Black 均通过。
+- **剩余状态:** DONE（Selection Abandonment 运行时语义）；TODO 为 LLM resume/REQUESTED 崩溃窗口、角色化 Token 分栏、Controller contract controls、Gate runner、Validator 与报告聚合。
+
 ### 2026-08-09 20:05 AEST · Step 11 · Phase 0.5 CLI 正交条件与独立 Controller 配置
 
 - **进度:** `redcell run` 新增 `--search static|random|thompson|llm` 与 `--cross-attempt-memory off|bounded-relevant-v1`。新参数写入强类型 `ExperimentConditions`、冻结策略目录和完整指纹；旧 `--algorithm` 仍兼容，但与 `--search` 同时提供时立即拒绝。Controller 新增独立 `REDCELL_CONTROLLER_*` settings / loader。

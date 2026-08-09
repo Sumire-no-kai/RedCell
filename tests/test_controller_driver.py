@@ -82,3 +82,18 @@ async def test_llm_adapter_abandons_after_one_invalid_repair() -> None:
 
     assert raised.value.invocation.status is ControllerInvocationStatus.FAILED
     assert raised.value.invocation.retry_index == 1
+
+
+async def test_llm_adapter_marks_provider_failure_indeterminate() -> None:
+    adapter = LLMControllerAdapter(
+        provider=ScriptedProvider(),
+        run_id="run-1",
+        prompt_version="controller-prompt-v1",
+        model="test",
+    )
+
+    with pytest.raises(ControllerSelectionError) as raised:
+        await adapter.select(_evidence())
+
+    assert raised.value.invocation.status is ControllerInvocationStatus.INDETERMINATE
+    assert raised.value.invocation.usage_status.value == "unknown"
