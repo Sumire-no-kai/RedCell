@@ -5,6 +5,15 @@
 
 ---
 
+## 2026-08-09 17:55 AEST · Step 25 · Phase 0.5 Gate 修订合并与正式开发分支交接
+
+- **提交与合并:** Step 24 的公开文档修订以 `ca5212a` 提交到 `docs/phase-0-5-gate-corrections`，推送后创建 PR #16 `docs: correct Phase 0.5 gate design`。PR 状态为 `CLEAN / MERGEABLE`，仓库没有配置远端 checks；已按作者授权用 merge commit `69561bf` 合并回 `master`。内部 `PRD.md` 继续保持 gitignored，只在本地同步需求真相，没有进入提交或远端。
+- **验证证据:** 合并前 `git diff --check` 与 staged diff 检查均通过；PR #16 已由 GitHub 报告为 `MERGED`。本轮只更正 Gate 预注册、回归基线、概念说明和日志，没有写 Phase 0.5 运行时代码，也没有调用任何 LLM Provider。
+- **交接边界:** 本条日志合并后，从最新 `master` 创建并停留在干净的 `feat/phase-0-5-runtime` 分支，作为作者明确下达“开始 Phase 0.5 开发”后的正式实现起点。创建分支不等于启动实现，本轮到此停止。
+- **剩余状态:** 五项开跑前统计设计缺口、公开文档同步、PR #16 合并和 Git 日志闭环均为 **DONE**；Phase 0.5 runtime implementation 仍为 **TODO / NOT STARTED**。
+
+---
+
 ## 2026-08-09 17:46 AEST · Step 24 · Phase 0.5 Gate 量程、比较顺序、指纹与漂移归因修订
 
 - **触发、分支与授权:** 在 `docs/phase-0-5-gate-corrections` 上处理。开工前复核指出五项预注册问题:结构 Finding 主指标可能无量程;必跑④没有预注册比较;组件 gatekeeping 可能否掉已成立的完整配置假设;新条件字段与历史完整 SHA 无法同时成立;ASR 非劣未声明适用条件。作者接受本轮推荐并要求直接修改相关要求。本步骤只修改内部 `PRD.md` 与公开设计/基线/日志文档,未写 Phase 0.5 运行时代码、未调用 Provider。
