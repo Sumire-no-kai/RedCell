@@ -5,6 +5,15 @@
 
 ---
 
+## 2026-08-09 16:57 AEST · Step 23 · 开工整理四:合并通用前置并关闭本轮范围
+
+- **Git 收尾:** Step 22 的通用前置以 `aac21b9` 提交并推送到 `chore/phase-0-5-prerequisites`;PR #14 `chore: finalize Phase 0.5 prerequisites` 经检查为 `CLEAN / MERGEABLE`,仓库无远端 checks,已用 merge commit `da58091` 合并回 `master`。
+- **最终状态:** 主干同时包含 PR #13 的设计/环境就绪记录与 PR #14 的 utility/策略目录前置协议。全量 **499 passed**、Ruff/Black 通过的证据对应 PR #14 提交内容;本条只纠正合并后的日志状态,不改变实现或测试。
+- **范围确认:** 未实现 RAG、统一 Driver、Controller、跨 Attempt memory、Validator、Finding signature、六条件 runner 或其他 Phase 0.5 运行时功能;未调用任何 LLM Provider。作者再次明确说“开始 Phase 0.5 开发”前不继续这些工作。
+- **剩余状态:** 本轮授权的现有整理、commit/push/PR/merge 与主干收口 **DONE**。本条随仅文档的收尾 PR 入主干后停止。
+
+---
+
 ## 2026-08-09 16:53 AEST · Step 22 · 开工整理三:选择性整合回归证据与策略目录前置协议
 
 - **范围与边界:** 从未合并的旧 Phase 1/RAG 分支中只抽取两项已经设计并已有测试的通用前置设施:utility controls 结构化证据、策略目录版本/指纹。明确未带入 RAG 靶场、RAG Strategy/Scorer、三轮执行、CLI 靶场接线、统一 Driver、Controller、memory 或 Validator;Phase 0.5 运行时开发仍未开始。
@@ -14,7 +23,7 @@
 - **决策与理由:** 策略目录像给同一套试卷盖版本封条:题目、顺序或时间改变后不能把两次成绩混在一起。拒绝只记录 Strategy ID,因为模板/轮数/算子改变仍会被误判为同条件;拒绝把模板原文复制进每个 Run,因为会扩散攻击内容且没有审计增益。哈希能检测变化而不额外落下完整话术。
 - **遇到的问题:** `apply_patch` 在既有 CRLF Python 文件中加入 LF 片段,Ruff format-check 正确识别 7 个混合换行文件。用已固定的 Ruff 0.16.1 做机械格式化后,Black 24.10.0 不再产生差异。
 - **验证证据:** 先跑相关 66 项测试全部通过;补齐旧报告缺失 utility 的边界用例后,最终全量 pytest 为 **499 passed in 26.32s**。`ruff check .`、`ruff format --check .`、`black --check src tests` 全部通过;新增测试覆盖 utility 结构化序列化、不可能完成数拒绝、旧报告明确留空、条件指纹不含凭据、策略模板变化导致实验指纹变化、Phase 0 旧 payload 兼容与重复 Strategy ID 拒绝。
-- **剩余状态:** 通用前置整合与本地质量门 **DONE**。待完成本分支 commit/push/PR/merge 及最终主干干净性复核;没有调用任何 LLM Provider。
+- **剩余状态:** 通用前置整合与本地质量门 **DONE**;后续 Git 收尾见 Step 23。没有调用任何 LLM Provider。
 
 ---
 
