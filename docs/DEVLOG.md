@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 18:55 AEST · Step 13 · Resume 按落盘的 Phase 0.5 条件重建 Controller
+
+- **进度:** `redcell resume` 现在从已存 `ExperimentConditions` 读取 selector、memory、策略目录与 Controller 协议版本；当且仅当原 Run 为 `search=llm` 时，重新装配独立 `REDCELL_CONTROLLER_*` 连接并比较完整指纹，再创建 `LLMControllerAdapter`。本地 selector 仍按原有私有 seed 控制器恢复。
+- **决策与理由:** 恢复的真相是已落盘条件，而不是命令行默认值。若把 LLM Run 恢复成 Static/Random，或把当前环境的 Controller 配置不经比对地带入，都会把同一 Run 的处理条件悄悄换掉；因此不匹配一律在请求前拒绝，已持久化 Decision 仍由 Orchestrator 复用而不重调。
+- **验证证据:** `pytest tests/test_cli.py -p no:cacheprovider` 为 **24 passed**；`ruff check src/redcell/cli.py` 与 `black --check src/redcell/cli.py` 通过。
+- **剩余状态:** DONE（条件一致的 Controller resume composition）；TODO 为 REQUESTED 崩溃窗口的持久化恢复、角色化 Token 分栏、contract controls、Gate runner、Validator 与报告聚合。
+
 ### 2026-08-09 18:48 AEST · Step 12 · Controller Selection Abandonment 与未知送达语义
 
 - **进度:** 为 LLM Controller 增加独立的 `successful_selections` / `abandoned_selections` 账本、冻结的 5%（最少 20 次）与连续 2 次可靠性门，并新增 `selection_abandoned` 事件。JSON/候选集错误经唯一 repair 后仍失败时，只持久化失败 Invocation 和 abandonment，不创建 Decision/Attempt；成功选择（含 repair 成功）单独计数。Provider 抛出、断线或用量未知则持久化 `INDETERMINATE` Invocation，并立即以 `EXPERIMENT_INVALID` 删除本 Gate Run，不进入 Selection Abandonment 分母。

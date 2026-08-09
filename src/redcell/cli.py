@@ -484,6 +484,7 @@ def resume(
     policy = SUPPORT_AGENT_POLICY
     strategies = select_applicable(list(PHASE_0_STRATEGIES), policy)
     conditions = stored.experiment_conditions
+    controller_provider = None
     try:
         target_provider, generator, providers = _providers(conditions.online)
         defense = DefenseLevel(conditions.arena.defense)
@@ -495,6 +496,33 @@ def resume(
             enforce_permissions=conditions.arena.enforce_permissions,
             enforce_confirmation=conditions.arena.enforce_confirmation,
         )
+        controller_configuration = None
+        if conditions.search is not None and conditions.search.selector is SearchSelector.LLM:
+            if not conditions.online or conditions.controller is None:
+                raise ValueError("已落盘的 LLM Controller 条件不完整")
+            controller_provider, controller_configuration = load_controller()
+        current_conditions = current_conditions.model_copy(
+            update={
+                "strategy_catalogue": conditions.strategy_catalogue,
+                "search": conditions.search,
+                "generation_memory": conditions.generation_memory,
+                "controller": (
+                    ControllerRunConfiguration(
+                        provider=controller_configuration,
+                        connection_id=f"controller:{controller_configuration.provider}",
+                        connection_fingerprint=controller_configuration.base_url,
+                        prompt_version=conditions.controller.prompt_version,
+                        evidence_policy_version=conditions.controller.evidence_policy_version,
+                        output_schema_version=conditions.controller.output_schema_version,
+                        budget_view_policy_version=conditions.controller.budget_view_policy_version,
+                        thinking_disabled=conditions.controller.thinking_disabled,
+                    )
+                    if controller_configuration is not None
+                    else None
+                ),
+            }
+        )
+        current_conditions.require_phase_0_5()
         if current_conditions.fingerprint() != stored.experiment_fingerprint:
             raise ValueError(
                 "当前 provider / temperature / attacker / actor 或靶场开关与原 Run 不一致"
@@ -502,6 +530,8 @@ def resume(
     except (ProviderConfigError, ValueError) as exc:
         if "providers" in locals() and providers is not None:
             asyncio.run(providers.aclose())
+        if controller_provider is not None:
+            asyncio.run(controller_provider.aclose())
         store.close()
         typer.secho(f"恢复配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(ExitCode.BAD_CONFIG) from exc
@@ -512,6 +542,21 @@ def resume(
         enforce_permissions=conditions.arena.enforce_permissions,
         enforce_confirmation=conditions.arena.enforce_confirmation,
     )
+    controller = None
+    driver = None
+    if conditions.search is not None and conditions.search.selector is SearchSelector.LLM:
+        if controller_provider is None or conditions.controller is None:
+            raise AssertionError("LLM Controller provider must be built during resume preflight")
+        driver = LLMControllerAdapter(
+            provider=controller_provider,
+            run_id=stored.id,
+            prompt_version=conditions.controller.prompt_version,
+            model=conditions.controller.provider.model,
+            temperature=conditions.controller.provider.temperature,
+            max_tokens=conditions.controller.provider.max_tokens,
+        )
+    else:
+        controller = _controller(stored.algorithm, stored.seed or 0)
     orchestrator = RunOrchestrator(
         executor=ConversationExecutor(
             adapter=adapter,
@@ -519,7 +564,8 @@ def resume(
             scorer=Level1Scorer(policy),
             policy=policy,
         ),
-        controller=_controller(stored.algorithm, stored.seed or 0),
+        controller=controller,
+        driver=driver,
         store=store,
     )
 
@@ -531,6 +577,8 @@ def resume(
         finally:
             if providers is not None:
                 await providers.aclose()
+            if controller_provider is not None:
+                await controller_provider.aclose()
 
     try:
         result = asyncio.run(_resume_and_close())
