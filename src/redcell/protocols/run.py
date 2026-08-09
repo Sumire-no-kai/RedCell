@@ -19,6 +19,7 @@ from pydantic import Field, model_validator
 from redcell.budget import BudgetLimit, BudgetLimits, BudgetUsage
 from redcell.failures import FailureRecord
 from redcell.protocols.common import REDCELL_PROTOCOL_VERSION, RedCellModel, new_id
+from redcell.protocols.strategy import StrategyCatalogueSummary
 from redcell.reliability import ReliabilityPolicy
 
 
@@ -91,10 +92,15 @@ class ExperimentConditions(RedCellModel):
     target: ProviderRunConfiguration
     attacker: ProviderRunConfiguration
     arena: ArenaRunConfiguration
+    strategy_catalogue: StrategyCatalogueSummary | None = None
+    """Phase 0.5 起的新实验必须提供；None 仅用于复现 Phase 0 既有条件指纹。"""
 
     def fingerprint(self) -> str:
         payload = json.dumps(
-            self.model_dump(mode="json"), ensure_ascii=True, sort_keys=True, separators=(",", ":")
+            self.model_dump(mode="json", exclude_none=True),
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
         ).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
 

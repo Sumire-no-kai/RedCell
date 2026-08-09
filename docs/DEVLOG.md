@@ -5,6 +5,28 @@
 
 ---
 
+## 2026-08-09 16:53 AEST · Step 22 · 开工整理三:选择性整合回归证据与策略目录前置协议
+
+- **范围与边界:** 从未合并的旧 Phase 1/RAG 分支中只抽取两项已经设计并已有测试的通用前置设施:utility controls 结构化证据、策略目录版本/指纹。明确未带入 RAG 靶场、RAG Strategy/Scorer、三轮执行、CLI 靶场接线、统一 Driver、Controller、memory 或 Validator;Phase 0.5 运行时开发仍未开始。
+- **utility 整理:** `ControlOutcome` 显式记录 `runs/completed_runs`;`ControlsReport` 计算正常任务完成率,并保存无凭据的 controls 条件与 SHA-256 指纹。CLI 将实际 Target 的非秘密运行配置写入报告。阴性默认重复次数固定为已冻结合同要求的每任务 5 次。旧/手造报告缺少完成次数时 utility 明确为 `None`,不猜测历史值。
+- **回归基线更正:** `docs/PHASE0_BASELINE.md` 修正历史“11 个任务”为实际 10 个,保留第一次 40/50 但阳性仅 2/3 的无效观测,冻结唯一一次完整复查的 **37/50=74%** 正式基线与总体下限 **32/50=64%**。同步写入 golden、零误报、可靠性、总体/强策略 ASR 阈值及“调查后最多用新独立 seed 重跑一次”的既定规则。
+- **策略目录协议:** 新增有版本的 `StrategyCatalogue` 和可落盘摘要;摘要保存策略顺序、类别、轮数、算子、预测秩/强度、requirements 与 seed template 的 SHA-256,不复制完整攻击话术。`ExperimentConditions` 可纳入摘要并改变条件指纹;`None` 被 `exclude_none` 排除,确保冻结的 Phase 0 旧指纹不漂移。Phase 0.5 新实验必须显式提供目录,兼容 `None` 仅服务历史复现。
+- **决策与理由:** 策略目录像给同一套试卷盖版本封条:题目、顺序或时间改变后不能把两次成绩混在一起。拒绝只记录 Strategy ID,因为模板/轮数/算子改变仍会被误判为同条件;拒绝把模板原文复制进每个 Run,因为会扩散攻击内容且没有审计增益。哈希能检测变化而不额外落下完整话术。
+- **遇到的问题:** `apply_patch` 在既有 CRLF Python 文件中加入 LF 片段,Ruff format-check 正确识别 7 个混合换行文件。用已固定的 Ruff 0.16.1 做机械格式化后,Black 24.10.0 不再产生差异。
+- **验证证据:** 先跑相关 66 项测试全部通过;补齐旧报告缺失 utility 的边界用例后,最终全量 pytest 为 **499 passed in 26.32s**。`ruff check .`、`ruff format --check .`、`black --check src tests` 全部通过;新增测试覆盖 utility 结构化序列化、不可能完成数拒绝、旧报告明确留空、条件指纹不含凭据、策略模板变化导致实验指纹变化、Phase 0 旧 payload 兼容与重复 Strategy ID 拒绝。
+- **剩余状态:** 通用前置整合与本地质量门 **DONE**。待完成本分支 commit/push/PR/merge 及最终主干干净性复核;没有调用任何 LLM Provider。
+
+---
+
+## 2026-08-09 16:45 AEST · Step 21 · 开工整理二:合并 Phase 0.5 设计与环境就绪记录
+
+- **进度:** 将此前已冻结的 Phase 0.5 设计决策、概念说明、开发环境修复和工具版本固定提交为 `02f8c8a`;推送 `docs/phase-0-5-agent-criteria`,创建 PR #13 `chore: finalize Phase 0.5 start readiness`。
+- **审查与合并:** PR 显示 clean/mergeable 且仓库没有配置远端 checks;按作者本轮授权使用 merge commit 合并回 `master`,合并提交为 `b93461f`。随后从最新主干创建独立的 `chore/phase-0-5-prerequisites` 承载余下通用前置整理,避免把未合并的 RAG 功能分支整体带入。
+- **范围控制:** 本 PR 未实现 Phase 0.5 功能、未调用 Provider、未提交内部 `PRD.md`/`AGENTS.md`、`.env` 或 run/trace 产物。
+- **剩余状态:** PR #13 **MERGED**;通用前置设施的选择性整合转入 Step 22。
+
+---
+
 ## 2026-08-09 16:43 AEST · Step 20 · 开工整理一:恢复本地质量门与固定开发工具版本
 
 - **范围与边界:** 作者授权完成 Phase 0.5 开工前的现有整理、Git/PR 收尾与可安全合并;明确要求在其再次说“开始 Phase 0.5 开发”前停止。因此本步骤只修复开发环境和既有格式基线,不实现 Controller、memory、Validator 或其他 Phase 0.5 功能。

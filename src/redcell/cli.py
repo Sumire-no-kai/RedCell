@@ -30,7 +30,12 @@ from redcell.config import (
     load_attacker,
     load_providers,
 )
-from redcell.controls import ControlsReport, run_negative_control, run_positive_control
+from redcell.controls import (
+    ControlsReport,
+    controls_conditions,
+    run_negative_control,
+    run_positive_control,
+)
 from redcell.executor import ConversationExecutor
 from redcell.failures import FailureStage
 from redcell.generation import AttackGenerator, TemplateAttackGenerator
@@ -525,7 +530,11 @@ def controls(
             negative = await run_negative_control(
                 ArenaAdapter(pair.target, defense=DefenseLevel.STANDARD), scorer
             )
-            return ControlsReport(positive=positive, negative=negative)
+            return ControlsReport(
+                positive=positive,
+                negative=negative,
+                conditions=controls_conditions(target=pair.target_configuration),
+            )
         finally:
             await pair.aclose()
 

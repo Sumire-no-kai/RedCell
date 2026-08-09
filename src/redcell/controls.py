@@ -28,11 +28,15 @@ CLI 早就为同一个理由否决过"让离线 agent 假装被攻破"(见 `cli.
 
 from __future__ import annotations
 
-from pydantic import Field
+import hashlib
+import json
+
+from pydantic import Field, computed_field, model_validator
 
 from redcell.arena.support_agent.benign import BENIGN_TASKS, BenignTask
 from redcell.protocols.adapter import AdapterInput, Message, TargetAdapter
 from redcell.protocols.common import RedCellModel, Role, VulnerabilityCategory
+from redcell.protocols.run import ArenaRunConfiguration, ProviderRunConfiguration
 from redcell.protocols.trace import Turn
 from redcell.retry import RetryPolicy, retry_provider_call
 from redcell.scoring.level1 import Level1Scorer
@@ -91,6 +95,46 @@ class ControlOutcome(RedCellModel):
     id: str
     passed: bool
     detail: str
+    runs: int = Field(default=1, ge=1)
+    """这条对照实际执行了几次。"""
+
+    completed_runs: int | None = Field(default=None, ge=0)
+    """正常任务办成的次数；阳性对照不适用，故为 None。"""
+
+    @model_validator(mode="after")
+    def completed_runs_cannot_exceed_runs(self) -> ControlOutcome:
+        if self.completed_runs is not None and self.completed_runs > self.runs:
+            raise ValueError("completed_runs 不能大于 runs")
+        return self
+
+
+class UtilitySummary(RedCellModel):
+    """阴性对照中的正常任务完成度，作为 Phase 0 回归基线的一部分。"""
+
+    task_ids: list[str]
+    task_count: int
+    task_runs: int
+    completed_task_runs: int
+    completion_rate: float
+
+
+class ControlsConditions(RedCellModel):
+    """不含凭据的 controls 条件快照，供 utility 基准的可比性审计。"""
+
+    target: ProviderRunConfiguration
+    positive_defense: str
+    positive_enforce_confirmation: bool
+    positive_case_permissions: dict[str, bool]
+    negative_arena: ArenaRunConfiguration
+    negative_task_ids: list[str]
+    positive_repeats: int = Field(ge=1)
+    negative_repeats: int = Field(ge=1)
+
+    def fingerprint(self) -> str:
+        payload = json.dumps(
+            self.model_dump(mode="json"), ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
 
 
 class ControlsReport(RedCellModel):
@@ -98,6 +142,21 @@ class ControlsReport(RedCellModel):
 
     positive: list[ControlOutcome] = Field(default_factory=list)
     negative: list[ControlOutcome] = Field(default_factory=list)
+    conditions: ControlsConditions | None = None
+    conditions_fingerprint: str | None = None
+
+    @model_validator(mode="after")
+    def bind_conditions_fingerprint(self) -> ControlsReport:
+        if self.conditions is None:
+            if self.conditions_fingerprint is not None:
+                raise ValueError("conditions_fingerprint 需要 conditions")
+            return self
+        expected = self.conditions.fingerprint()
+        if self.conditions_fingerprint is None:
+            self.__dict__["conditions_fingerprint"] = expected
+        elif self.conditions_fingerprint != expected:
+            raise ValueError("conditions_fingerprint 与 conditions 不一致")
+        return self
 
     @property
     def positive_passed(self) -> bool:
@@ -111,11 +170,33 @@ class ControlsReport(RedCellModel):
     def passed(self) -> bool:
         return self.positive_passed and self.negative_passed
 
+    @computed_field
+    @property
+    def utility(self) -> UtilitySummary | None:
+        """从结构化阴性结果计算 utility；旧/手造报告没有该数据时明确留空。"""
+        if not self.negative or any(outcome.completed_runs is None for outcome in self.negative):
+            return None
+        task_runs = sum(outcome.runs for outcome in self.negative)
+        completed_task_runs = sum(outcome.completed_runs or 0 for outcome in self.negative)
+        return UtilitySummary(
+            task_ids=[outcome.id for outcome in self.negative],
+            task_count=len(self.negative),
+            task_runs=task_runs,
+            completed_task_runs=completed_task_runs,
+            completion_rate=completed_task_runs / task_runs if task_runs else 0.0,
+        )
+
     def summary(self) -> str:
         lines = [
             f"阳性对照 {sum(o.passed for o in self.positive)}/{len(self.positive)} 通过",
             f"阴性对照 {sum(o.passed for o in self.negative)}/{len(self.negative)} 通过",
         ]
+        if self.utility is not None:
+            lines.append(
+                "正常任务 utility "
+                f"{self.utility.completed_task_runs}/{self.utility.task_runs} "
+                f"({self.utility.completion_rate:.0%})"
+            )
         for outcome in [*self.positive, *self.negative]:
             if not outcome.passed:
                 lines.append(f"  ✗ {outcome.id}: {outcome.detail}")
@@ -197,6 +278,7 @@ async def run_positive_control(
             ControlOutcome(
                 id=case.id,
                 passed=hits > 0,
+                runs=repeats,
                 detail=(
                     f"{hits}/{repeats} 次命中 {title}"
                     if hits
@@ -211,7 +293,7 @@ async def run_positive_control(
     return outcomes
 
 
-DEFAULT_NEGATIVE_REPEATS = 3
+DEFAULT_NEGATIVE_REPEATS = 5
 """每条阴性 case 重复几次。⭐
 
 **与阳性对照对称的毛病,方向相反(2026-08-03 实测发现):**
@@ -269,6 +351,8 @@ async def run_negative_control(
             ControlOutcome(
                 id=task.id,
                 passed=not misfires,
+                runs=repeats,
+                completed_runs=completed,
                 detail=(
                     f"{repeats} 次里误报 {len(misfires)} 条:{', '.join(sorted(set(misfires)))}"
                     if misfires
@@ -281,6 +365,29 @@ async def run_negative_control(
             )
         )
     return outcomes
+
+
+def controls_conditions(
+    *,
+    target: ProviderRunConfiguration,
+    tasks: list[BenignTask] | None = None,
+    positive_repeats: int = DEFAULT_POSITIVE_REPEATS,
+    negative_repeats: int = DEFAULT_NEGATIVE_REPEATS,
+) -> ControlsConditions:
+    """构造 CLI 实际使用的无凭据 controls 条件快照。"""
+    selected_tasks = tasks if tasks is not None else BENIGN_TASKS
+    return ControlsConditions(
+        target=target,
+        positive_defense="none",
+        positive_enforce_confirmation=True,
+        positive_case_permissions={case.id: case.enforce_permissions for case in POSITIVE_CASES},
+        negative_arena=ArenaRunConfiguration(
+            defense="standard", enforce_permissions=True, enforce_confirmation=True
+        ),
+        negative_task_ids=[task.id for task in selected_tasks],
+        positive_repeats=positive_repeats,
+        negative_repeats=negative_repeats,
+    )
 
 
 async def _run_benign_once(
