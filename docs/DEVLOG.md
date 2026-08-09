@@ -7,6 +7,13 @@
 
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
+### 2026-08-09 21:32 AEST · Step 25 · 真实持久化事件的 Token 前缀集成覆盖
+
+- **进度:** 增加从真实 `redcell run` SQLite 产物读取 Run/Event/Finding 并构造三个 TokenPrefix 的集成测试，覆盖实际条件映射为 `static-off` 与冻结的 64k/160k/320k checkpoint 顺序。
+- **决策与理由:** 手工模型 fixture 只能验证 projector 的局部逻辑；CLI→Store→Event→prefix 覆盖证明报告读取的是与实际运行相同的持久化形态。
+- **验证证据:** `pytest tests/test_gate_report.py -p no:cacheprovider` 为 **2 passed**；Ruff/Black 通过。
+- **剩余状态:** DONE（真实事件投影集成覆盖）；TODO 为 Gate 保护线和 Validator 的正向 replay fixture、全量审计。
+
 ### 2026-08-09 21:22 AEST · Step 24 · 从 SQLite 重建并导出 Gate 报告
 
 - **进度:** 新增 `GateReport` 与 `redcell gate-report`。命令只读取 SQLite 中的 Run/Event/Finding，重建前缀和成对统计，并输出 JSON；报告显式保存回归环境指纹集合、主/备用/无效 block 以及主比较。空库或条件不完整时显示 `NOT SUPPORTED / INCOMPLETE`，不会伪造正向结论。
