@@ -93,7 +93,7 @@ _TEMPLATE = """<!doctype html>
       {{ d.run.limits.max_cost_usd or '—' }} USD</dd>
   <dt>Used</dt><dd>{{ d.run.usage.attempts }} attempts ·
       {{ d.run.usage.total_tokens }} tokens ·
-      {{ '%.4f'|format(d.run.usage.cost_usd) }} USD</dd>
+      {{ ('%.4f USD'|format(d.run.usage.cost_usd)) if d.estimated_cost_known else 'N/A' }}</dd>
 </dl>
 
 <h2>Budget allocation by strategy</h2>

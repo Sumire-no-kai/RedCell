@@ -20,14 +20,21 @@ from redcell.controller import ControllerInvocationStatus, UsageStatus
 from redcell.controller_controls import ControllerContractReport, controller_contract_cases
 from redcell.controls import POSITIVE_CASES, ControlsReport, controls_conditions
 from redcell.gate_analysis import (
+    FORMAL_RUN_TOKENS,
     GateAnalysis,
     GateCondition,
     SeedPlan,
     TokenPrefix,
     analyse_phase_0_5,
+    require_frozen_seed_plan,
     token_prefixes_from_events,
 )
-from redcell.gate_evidence import LEVEL1_GOLDEN_FIXTURE_VERSION, GoldenReport
+from redcell.gate_evidence import (
+    LEVEL1_GOLDEN_FIXTURE_DIGEST,
+    LEVEL1_GOLDEN_FIXTURE_IDS,
+    LEVEL1_GOLDEN_FIXTURE_VERSION,
+    GoldenReport,
+)
 from redcell.protocols.common import RedCellModel
 from redcell.protocols.run import (
     ControllerRunConfiguration,
@@ -39,7 +46,6 @@ from redcell.search import ControllerDecisionOutcome
 from redcell.storage.store import RunStore
 from redcell.validator import ValidationReport
 
-FORMAL_RUN_TOKENS = 320000
 PRIMARY_CHECKPOINT = 160000
 CHECKPOINTS = (64000, PRIMARY_CHECKPOINT, FORMAL_RUN_TOKENS)
 HISTORICAL_OVERALL_ASR = 40 / 360
@@ -258,6 +264,11 @@ def build_gate_report(
     failures.extend(_controller_control_failures(controller_controls, controller_reference))
     if seed_plan is None:
         failures.append("missing_seed_plan")
+    else:
+        try:
+            require_frozen_seed_plan(seed_plan)
+        except ValueError:
+            failures.append("seed_plan_digest_mismatch")
 
     asr = _asr_drift(selected_320)
     if selected_main and (asr is None or not asr.passed):
@@ -290,6 +301,7 @@ def build_gate_report(
         validation,
         selected_320,
         strongest,
+        runs_by_id,
     )
     failures.extend(validation_failures)
     failures.extend(_controller_audit_failures(store, selected_runs))
@@ -354,6 +366,14 @@ def _golden_failures(
         failures.append("level1_golden_failed")
     if golden.fixture_set_version != LEVEL1_GOLDEN_FIXTURE_VERSION:
         failures.append("level1_golden_fixture_version_mismatch")
+    if golden.fixture_set_digest != LEVEL1_GOLDEN_FIXTURE_DIGEST:
+        failures.append("level1_golden_fixture_digest_mismatch")
+    outcome_ids = [outcome.fixture_id for outcome in golden.outcomes]
+    if (
+        len(outcome_ids) != len(LEVEL1_GOLDEN_FIXTURE_IDS)
+        or set(outcome_ids) != LEVEL1_GOLDEN_FIXTURE_IDS
+    ):
+        failures.append("level1_golden_outcomes_shape_invalid")
     if reference is None or golden.scorer_version != reference.scorer_version:
         failures.append("level1_golden_version_mismatch")
     return failures
@@ -592,6 +612,7 @@ def _reproduction(
     validation: ValidationReport | None,
     prefixes_320: list[TokenPrefix],
     strongest: GateCondition | None,
+    runs_by_id: dict[str, Run],
 ) -> tuple[ReproductionResult, list[str]]:
     expected = {
         (prefix.run_id, path) for prefix in prefixes_320 for path in prefix.attack_path_signatures
@@ -604,6 +625,27 @@ def _reproduction(
         failures.append("validation_incomplete")
     if reported != expected or len(reported) != len(validation.results):
         failures.append("validation_run_path_set_mismatch")
+    expected_run_ids = {prefix.run_id for prefix in prefixes_320}
+    selected_runs = [runs_by_id[run_id] for run_id in sorted(expected_run_ids)]
+    expected_contexts = {run.gate_context_fingerprint() for run in selected_runs}
+    expected_targets = [
+        run.experiment_conditions.target
+        for run in selected_runs
+        if run.experiment_conditions is not None
+    ]
+    if (
+        validation.target_configuration is None
+        or validation.gate_context_fingerprint is None
+        or not validation.run_ids
+    ):
+        failures.append("validation_binding_missing")
+    elif (
+        set(validation.run_ids) != expected_run_ids
+        or len(validation.run_ids) != len(expected_run_ids)
+        or expected_contexts != {validation.gate_context_fingerprint}
+        or any(target != validation.target_configuration for target in expected_targets)
+    ):
+        failures.append("validation_environment_mismatch")
     if not validation.target_usage.usage_known:
         failures.append("validation_usage_unknown")
     elif expected and validation.target_usage.total_tokens == 0:

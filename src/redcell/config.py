@@ -68,11 +68,10 @@ class ProviderSettings(BaseSettings):
     (`*-flash-lite` 实测无此问题:512 下 0/7 截断,报的 token 与正文长度相符)。
     """
 
-    # 免费档默认按 0 成本处理:这是一句"我确认它免费"的显式声明,
-    # 让预算上限可信。若接入付费模型,应在这里填真实单价。
-    input_usd_per_mtok: float = Field(default=0.0, ge=0.0)
-    output_usd_per_mtok: float = Field(default=0.0, ge=0.0)
-    cached_input_usd_per_mtok: float = Field(default=0.0, ge=0.0)
+    # 未填价格 = 不知道，不能伪装成免费。免费档也要把三项都显式填 0。
+    input_usd_per_mtok: float | None = Field(default=None, ge=0.0)
+    output_usd_per_mtok: float | None = Field(default=None, ge=0.0)
+    cached_input_usd_per_mtok: float | None = Field(default=None, ge=0.0)
 
     extra_body: dict[str, object] = Field(default_factory=dict)
     """原样并入每次请求 payload 的厂商专属字段,JSON 写在 `.env` 里。
@@ -110,17 +109,24 @@ class ProviderSettings(BaseSettings):
                 f"{name} provider 配置不完整 —— 检查 .env 里对应的 "
                 "PROVIDER / BASE_URL / API_KEY / MODEL 四项是否都填了。"
             )
+        rates = (
+            self.input_usd_per_mtok,
+            self.output_usd_per_mtok,
+            self.cached_input_usd_per_mtok,
+        )
+        pricing = None
+        if all(rate is not None for rate in rates):
+            pricing = TokenPricing(
+                input_usd_per_mtok=rates[0],
+                output_usd_per_mtok=rates[1],
+                cached_input_usd_per_mtok=rates[2],
+            )
         return OpenAICompatibleProvider(
             base_url=self.base_url,
             model=self.model,
             api_key=self.api_key,
             name=name,
-            # 单价永远显式给:免费就是 (0, 0) 的确认,而不是"忘了填"。
-            pricing=TokenPricing(
-                input_usd_per_mtok=self.input_usd_per_mtok,
-                output_usd_per_mtok=self.output_usd_per_mtok,
-                cached_input_usd_per_mtok=self.cached_input_usd_per_mtok,
-            ),
+            pricing=pricing,
             min_interval_seconds=(60.0 / self.rpm) if self.rpm > 0 else 0.0,
             max_concurrency=self.max_concurrency,
             extra_body=self.extra_body,
@@ -192,6 +198,16 @@ def load_controller() -> tuple[OpenAICompatibleProvider, ProviderRunConfiguratio
     """构造 Controller 的独立连接与不含凭据的运行快照。"""
     settings = ControllerSettings()
     return settings.build(name="controller"), settings.run_configuration()
+
+
+def load_target() -> tuple[OpenAICompatibleProvider, ProviderRunConfiguration]:
+    """构造 Target 的独立连接与不含凭据的运行快照。
+
+    Replay validation 只会重放已冻结的攻击路径，不应顺带创建 attacker 或
+    Controller 连接。把单独加载入口放在配置层，也避免 CLI 复制 env 解析规则。
+    """
+    settings = TargetSettings()
+    return settings.build(name="target"), settings.run_configuration()
 
 
 def load_providers() -> ProviderPair:

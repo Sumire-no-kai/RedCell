@@ -7,6 +7,65 @@
 
 ## 2026-08-10 · Phase 0.5 test readiness preparation
 
+### 2026-08-10 14:53 AEST · Step 53 · 测试合同提交、推送与 ready PR
+
+- **进度:** 将七项冻结合同及回归保护提交为 `cb7d74f`（`fix: freeze phase 0.5 test contract`），推送到 `fix/phase-0-5-test-readiness`，并创建 ready PR [#22](https://github.com/Sumire-no-kai/RedCell/pull/22)。PR 描述包含核心设计的类比、必要性、替代方案取舍、RedCell 中的角色、面试追问与限制，没有把实现就绪写成实验结论。
+- **遇到的问题与解决方式:** 工作区沙箱最初拒绝创建 `.git/index.lock`；在精确列出 29 个本次文件后，仅对仓库 Git 写入提升权限完成暂存。`gh auth status` 报告默认令牌失效，但实际 PR 创建与读取成功；因此不依据该提示推断失败，而以 PR API 返回的 URL、head SHA 和状态为准。`gh pr checks` 因仓库没有上报检查而返回非零，PR 本身显示 `MERGEABLE/CLEAN`、ready、head 为 `cb7d74f`。
+- **验证证据:** 暂存范围为 29 个文件、**906 insertions / 92 deletions**；`git diff --cached --check` 通过。PR base=`master`、head=`fix/phase-0-5-test-readiness`、head SHA=`cb7d74fb9d0e200699f4271e1eb82aa5f46ed513`，无远端 status checks；本地四道门证据见 Step 52。
+- **剩余状态:** PR OPEN / MERGEABLE。合并前将推送本日志状态更新，对最终 head 再跑四道本地门并用 `--match-head-commit` 精确合并；正式 Provider 矩阵仍未启动。
+
+### 2026-08-10 14:50 AEST · Step 52 · 七项冻结合同全量回归与开跑配置审计
+
+- **进度:** 完成未知价格、Validation 封条、独立 Level-1 golden、12+4 seed、500-attempt 熔断器及其 Gate 消费链的逐项 diff 自审；补充“无重放工作时仍保存并排序完整 Validation binding”的回归测试。对本次所有变更文件执行行尾扫描，未发现 CRLF/LF 混合文件；未对仓库中未改动的统一 CRLF 文件做无关的大面积重写。
+- **遇到的问题与解决方式:** 首次只读配置探针误用了不存在的 `*_price_per_million` 属性并抛出 `AttributeError`；该探针没有修改状态，也没有发起 Provider 调用。按真实 `*_usd_per_mtok` 字段更正后重跑。审计结果为 Target/Attacker 凭据四项已配置但三项价格不完整，Controller 尚未完整配置且价格不完整；探针只输出布尔状态，没有输出密钥、模型名或 URL。
+- **验证证据:** `.venv\Scripts\python.exe -m pytest -p no:cacheprovider` 为 **586 passed in 42.07s**；`python -m ruff check .` 全部通过；`python -m ruff format --check .` 为 **118 files already formatted**；`python -m black --check src tests` 为 **108 files would be left unchanged**；`git diff --check` 通过。Golden 独立执行仍为 positive 10/10、negative 10/10，正式 seed/预算合同由机器测试锁定。
+- **剩余状态:** IMPLEMENTATION READY / EXPERIMENT BLOCKED。代码与可复现计划已具备合并条件；正式矩阵仍未启动，也没有任何 Provider 调用。开跑前必须补齐 Controller 配置，并为 Target/Attacker/Controller 分别显式填写 input/cached-input/output 三项价格（包括明确免费时的三个 0），再执行 controls 与正式 72-cell preflight。
+
+### 2026-08-10 14:44 AEST · Step 51 · 冻结正式 12+4 seed 与 500-attempt 机器合同
+
+- **进度:** 在没有执行任何 Phase 0.5 正式 Run 的前提下，用系统随机源一次生成 12 个 primary + 4 个有序 reserve，写入版本控制文件 `docs/PHASE0_5_SEED_PLAN.json`；canonical digest 冻结为 `af55c0f179a566ae0b8437b85dbfd9043eb2e24e157eeffacf21adb68731d1bc`。生成一次 declarative `runs/gate-plan.json` 仅核验计划形状，得到 72 primary + 24 disabled reserve、全部 `max_attempts=500/max_total_tokens=320000`；该 runs 产物继续被 Git 忽略。
+- **决策与理由:** Seed 值公开进入版本控制，使“在结果出现前已冻结”可以由 commit 审计；不把 seed 当秘密，也不在运行后重抽。Gate plan、Validation selector 与最终 Gate 都校验 canonical seed digest；计划器还拒绝任何非 500 的 attempt cap。Token 是公平比较预算，500 只是约历史正常尺度 5 倍的独立安全熔断器。
+- **验证证据:** 计划器打印 `primary 72 cells; reserve 24 cells (disabled)`，其内嵌 digest 与独立 canonical 计算完全一致；新增机器测试锁定 seed 文件 digest、排除 5000–5002、96-cell 形状、reserve 默认禁用，以及错误 cap/seed plan 的早拒绝。未读取 `.env`、未打开正式 SQLite、未调用 Provider。
+- **剩余状态:** DONE（seed/cap 冻结）；正式矩阵未启动。下一步为全量回归、自审与 Git 收尾。
+
+### 2026-08-10 14:41 AEST · Step 50 · 未知价格、Validation 封条与 Level-1 golden 落地
+
+- **进度:** 三类 Provider 单价改为 `float | None`，默认未知；只有 input/output/cached-input 三项全部显式配置时才构造 `TokenPricing` 并声明 `reports_cost=True`。HTML 报告在价格不全时显示 `N/A`，离线脚本 Provider 则显式三项为 0。`ValidationReport` 新增 Target 非凭据快照、唯一 Gate-context fingerprint 与 72 个 Run ID 的 all-or-nothing 绑定，最终 Gate 对路径集合、Run 集、Target 和 context 全部强校验。新增独立 `level1-golden-v1`：10 个正样本覆盖 canary、权限、禁止/未知工具、参数、确认绕过、可观测性与双信号；10 个负样本覆盖 attacker 回显、shaping 档位、合法工具与跨回合确认。
+- **决策与理由:** 价格像价签：没贴不能读成 0 元；Token 仍可计量，只有美元估算为 N/A。Validation 的路径列表像答卷内容，Target/Run/context 是考场封条，缺任何一项都不能证明答卷来自本次矩阵。Golden 使用符号占位符而非 canary 明文，并按解析后结构比较 reward、两条 signal tier 与 Finding triad；canonical JSON digest 不受 CRLF/LF 或空白变化影响。
+- **遇到的问题与解决方式:** 首轮定向回归按预期抓到旧测试仍省略 cached-input 明确价格，以及合成 Gate evidence 缺少新 Validation binding/正确 golden digest；更新 fixture 为显式语义后恢复。Phase 0 历史快照现在会省略未知 cached-input 单价，当前重算值从 Step 44 的 `133a1db4…` 变为 `c71530c1…`；同步更正 `docs/PHASE0_BASELINE.md`，并加强机器锁以拒绝“声明了但实际没出现”的伪新增字段。
+- **验证证据:** Golden 首次执行为 positive **10/10**、negative **10/10**，canonical digest `a689f2a446b09a5a2830971070c0777c11151ca995f77fa65f22df843bef961c` 已写入 Gate 常量；价格/Golden/Gate/Validation/CLI/报告等定向回归最终 **118 passed**。Ruff 首轮发现 2 个 import-order 问题并自动修正，复查 `ruff check src tests` 通过。
+- **剩余状态:** DONE（协议与 golden 实现）；TODO 为全量四门、逐项 diff/敏感信息审计和提交。
+
+### 2026-08-10 14:29 AEST · Step 49 · 作者一次性冻结正式测试剩余口径
+
+- **进度:** 作者明确回复“同意全部推荐”，七项准备决定正式冻结：保留 `attack_path_signature` 主指标并强制联读结构 breadth/策略分配；factorial 主效应使用对称对照均值；三类价格缺失均为 `None/N/A`、显式 0 才是免费；正式 `max_attempts=500`；Validation 绑定 Target 快照、12×6 Run ID 与 Gate context；建立 10 正/10 负的独立 `level1-golden-v1`；由系统随机源生成一次性 12+4 未观察 seed 并冻结 digest。
+- **这是什么:** 主指标像“按道路记录到达同一故障点”，结构签名是故障点、Strategy 是道路；两者联读避免把道路更多误说成故障更多。factorial 主效应像比较两种开关时先把另一个开关的两种状态平均掉，估计的是跨另一因子的平均作用。Golden 是封好的固定考卷；Validation 绑定是答卷上的考场、考生和试卷封条；未知价格用 `N/A` 是把“没贴价签”与“明确免费”分开。
+- **为什么与替代方案的取舍:** 不删除 `strategy_id`，因为会丢失机制级修复信息；不以最强单格替代析因基线，因为会改变 estimand；不把未知单价写 0，因为会静默少算；500 是约 100-attempt 历史尺度的 5 倍安全上限，既避免默认 20 先于 Token 触发，也比 1000 保留更强刹车；Validation 保存完整非凭据快照而非只存 digest，便于人工复核；Golden 使用独立 JSON 而非复用在线 controls/pytest 计数，避免循环自证。
+- **在 RedCell 中的角色与边界:** 这些决定只冻结如何测量、如何证明证据来源和何时停止，不是实验结果。实现、测试、commit/PR 可以继续；正式 72-cell Provider 矩阵仍须在所有 preflight 通过后另行启动，本步骤不会自动执行。
+- **面试答法:** 若问“为什么主指标含 Strategy 还可信”，应答：它测攻击路径而非纯漏洞 breadth，所以同时强制报告结构 breadth 与策略分配并在 Limitations 中限定解释。若问“为什么 max_attempts 仍存在”，应答：Token 是公平比较的主预算，attempt cap 是异常短输出/循环时的独立安全熔断器，冻结为正常尺度约 5 倍以尽量不成为治疗条件。
+- **剩余状态:** IN PROGRESS；下一步按冻结合同修改协议/配置、实现 golden 与机器锁、生成 seed 计划并执行全量门禁。未调用 Provider、未使用正式 seed。
+
+### 2026-08-10 14:23 AEST · Step 48 · 测试准备全量门与剩余协议边界复核
+
+- **进度:** 完成 test-readiness 全量回归与逐项 diff 复核；新增入口仍只准备证据链，没有生成 seed plan、没有打开正式数据库、没有调用真实 Provider。进一步确认 `ValidationReport` 当前只保存 `(run_id, attack_path)`、次数与用量，虽然新 CLI 在执行前会要求当前 Target 快照等于正式 Run，但冻结 JSON 本身尚未携带 Target/Gate context 绑定，单独搬运后无法由 `gate-report` 自证来源。
+- **决策与理由:** 不在本步骤擅自扩展 Validation 协议。建议把 Target 配置快照与所选 Gate context fingerprint 写入报告并由 Gate 强校验；替代方案是只写单一摘要，但其字段覆盖范围更难人工复核。此项属于难以回退的证据协议，按协作规则留给作者与其他四项口径一起确认。
+- **验证证据:** `.venv\Scripts\python.exe -m pytest -p no:cacheprovider` 为 **574 passed in 33.99s**；`ruff check .` 全部通过；`ruff format --check .` 为 **114 files already formatted**；`black --check src tests` 为 **104 files would be left unchanged**；`git diff --check` 通过。相较本轮开始的 565 项，新增 9 项覆盖参数透传、Windows 编码、计划生成与 replay 选择拒绝语义。
+- **剩余状态:** IMPLEMENTATION READY / EXPERIMENT INCOMPLETE。待作者一次性确认五项：攻击路径解释、factorial 对照均值、cached-input 未知价格、正式 `max_attempts`、Validation 证据绑定；另需冻结 golden fixture 集与具体 12+4 seed。确认前正式测试不得起跑。
+
+### 2026-08-10 14:18 AEST · Step 47 · 正式测试入口审计与非决策性缺口修复
+
+- **进度:** 对 Phase 0.5 的 CLI、Gate 消费契约、Run 条件快照、replay validator 与 Windows 入口做开跑前审计。新增只生成不执行的 `gate-plan`（72 primary + 24 默认禁用 reserve，强制显式 `max_attempts` 与专用 SQLite）、fail-closed 的 `validate-paths`（只重放 12 个有效 paired block 的 320k 路径，不加载 Attacker/Controller），并新增 `docs/PHASE0_5_TEST_RUNBOOK.md` 串起冻结、对照、正式矩阵、replay 与最终 Gate 的顺序。
+- **发现与根因:** (1) `run`、`resume` 与在线 controls 构造 `ArenaAdapter` 时没有传入已落盘的 Target model/temperature/max_tokens；Adapter 会使用 `model=None`、默认 temperature 0.7 且不发送 max_tokens，导致实验快照可能与真实请求不一致。(2) `attacker-control` 虽记录 Attacker 配置，实际 Generator 只传 model，非默认 temperature/max_tokens 同样可能漂移。(3) Windows CP1252 终端执行 `python -m redcell.cli --help` 会在 Rich 输出 Unicode 时抛 `UnicodeEncodeError`。(4) `gate-report` 消费 validation JSON，但 CLI 没有生成入口；正式矩阵也没有能先审计、后逐 cell 执行的清单。(5) 默认 `--budget 20` 按 Phase 0 中位数约在 64k Token 左右先触发，无法承担必须运行到 320k 的正式 cell。
+- **解决方式:** 用单一 `_arena_adapter` 将实际 Target 调用的 model/temperature/max_tokens 绑定到 `ProviderRunConfiguration`，并覆盖 run/resume/positive/negative controls；Attacker control 同样从其冻结快照构造 Generator；离线快照 model 同步为真实的 `scripted-offline`。CLI 入口仅在输出流无法编码帮助文本时切换 UTF-8。矩阵计划器不读 `.env`、不打开 DB、不调用 Provider；replay 先验证 12×6 完整性、重复/计划外 seed、320k 前缀与 Gate context，再加载与冻结快照完全相同的 Target。`max_attempts` 属预算核心口径，工具只强制显式输入，不替作者选值。
+- **验证证据:** 变更后 CLI/analysis/validator 定向回归先为 **36 passed**；新增 Target/Attacker 配置透传、CP1252 help、96-cell 计划与 validation 早拒绝测试后，CLI 与相关 Adapter/Gate/validator 定向回归最终为 **69 passed**；新增 Gate validation 选择/计划外 seed 拒绝测试为 **2 passed**。CP1252 与默认终端的真实 `python -m redcell.cli --help` 均退出 0。全量四道门待本步骤收尾时执行。
+- **剩余状态:** IN PROGRESS。攻击路径解释、factorial 对照均值、cached-input 未知价格、正式 `max_attempts` 与 Level-1 golden fixture 集仍需作者冻结；确认前不调用 Provider、不执行正式 seed。Golden 消费契约已存在，但生成入口刻意不在未确认 fixture 范围下擅自实现。
+
+### 2026-08-10 14:11 AEST · Step 46 · PR #21 合并与测试准备分支启动
+
+- **进度:** 基线指纹修正文档/测试补丁已通过 ready PR [#21](https://github.com/Sumire-no-kai/RedCell/pull/21) 以 merge commit 合入受保护的 `master`；PR head 为 `4ebaffa`，合并提交为 `2b4d9f1`。随后从该主干创建 `fix/phase-0-5-test-readiness`，开始只读审计正式测试路径。
+- **验证证据:** 合并前 PR 为 `MERGEABLE/CLEAN`、无 review thread；使用精确 head 保护执行合并，刷新后确认 PR 为 `MERGED` 且 head 是 `origin/master` 的祖先。合并前四道本地门见 Step 45；远端没有 status checks，未把“无 checks”写成 CI 通过。
+- **剩余状态:** DONE（PR #21 集成）；正式 Phase 0.5 Gate 仍为 `INCOMPLETE`，未调用 Provider 或正式 seed。
+
 ### 2026-08-10 14:05 AEST · Step 45 · 基线指纹补丁复核与整合准备
 
 - **进度:** 作者要求先统一仓库状态并准备测试。当前 `docs/phase-0-baseline-fingerprint-note` 相对 `origin/master` 仅包含 `docs/PHASE0_BASELINE.md`、本日志与 `tests/test_phase_0_5_conditions.py` 三个文件；补丁修正历史指纹的字面承诺，并用两项测试锁定已登记的 schema 形状差异，没有启动 Provider、preflight 或正式 seed。
