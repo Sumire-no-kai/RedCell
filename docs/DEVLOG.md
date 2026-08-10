@@ -7,6 +7,13 @@
 
 ## 2026-08-10 · Phase 0.5 test readiness preparation
 
+### 2026-08-10 14:53 AEST · Step 53 · 测试合同提交、推送与 ready PR
+
+- **进度:** 将七项冻结合同及回归保护提交为 `cb7d74f`（`fix: freeze phase 0.5 test contract`），推送到 `fix/phase-0-5-test-readiness`，并创建 ready PR [#22](https://github.com/Sumire-no-kai/RedCell/pull/22)。PR 描述包含核心设计的类比、必要性、替代方案取舍、RedCell 中的角色、面试追问与限制，没有把实现就绪写成实验结论。
+- **遇到的问题与解决方式:** 工作区沙箱最初拒绝创建 `.git/index.lock`；在精确列出 29 个本次文件后，仅对仓库 Git 写入提升权限完成暂存。`gh auth status` 报告默认令牌失效，但实际 PR 创建与读取成功；因此不依据该提示推断失败，而以 PR API 返回的 URL、head SHA 和状态为准。`gh pr checks` 因仓库没有上报检查而返回非零，PR 本身显示 `MERGEABLE/CLEAN`、ready、head 为 `cb7d74f`。
+- **验证证据:** 暂存范围为 29 个文件、**906 insertions / 92 deletions**；`git diff --cached --check` 通过。PR base=`master`、head=`fix/phase-0-5-test-readiness`、head SHA=`cb7d74fb9d0e200699f4271e1eb82aa5f46ed513`，无远端 status checks；本地四道门证据见 Step 52。
+- **剩余状态:** PR OPEN / MERGEABLE。合并前将推送本日志状态更新，对最终 head 再跑四道本地门并用 `--match-head-commit` 精确合并；正式 Provider 矩阵仍未启动。
+
 ### 2026-08-10 14:50 AEST · Step 52 · 七项冻结合同全量回归与开跑配置审计
 
 - **进度:** 完成未知价格、Validation 封条、独立 Level-1 golden、12+4 seed、500-attempt 熔断器及其 Gate 消费链的逐项 diff 自审；补充“无重放工作时仍保存并排序完整 Validation binding”的回归测试。对本次所有变更文件执行行尾扫描，未发现 CRLF/LF 混合文件；未对仓库中未改动的统一 CRLF 文件做无关的大面积重写。
