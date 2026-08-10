@@ -266,8 +266,24 @@ class ControlsConditions(RedCellModel):
     negative_repeats: int = Field(ge=1)
 
     def fingerprint(self) -> str:
+        """完整 controls 审计身份。
+
+        ⚠️ **`exclude_none` 不是可有可无的细节。** 没有它时,给 schema 加一个可选字段会
+        **静默作废所有历史产物**:旧 JSON 里没有那个键,加载后被物化成 `null` 进哈希,
+        于是重算值与文件里存的对不上,`from_report_json` 直接拒绝加载 ——
+        报错长得像"证据被篡改",真实原因却只是 schema 漂移。
+
+        2026-08-10 实测:补 `cached_input_usd_per_mtok` 之后,08-07 冻结基线报告
+        (`5ab882c2…`)重算得到 `6911efd4…` 并且**无法再被正式接口读取**;
+        加上 `exclude_none` 后精确恢复为 `5ab882c2…`,而当日两份新报告的指纹
+        一个字节未变。`ExperimentConditions.fingerprint()` 一直是这么做的,
+        这里此前不一致。
+        """
         payload = json.dumps(
-            self.model_dump(mode="json"), ensure_ascii=True, sort_keys=True, separators=(",", ":")
+            self.model_dump(mode="json", exclude_none=True),
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
         ).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
 

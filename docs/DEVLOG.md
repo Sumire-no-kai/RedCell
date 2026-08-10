@@ -125,6 +125,55 @@
 - **验证证据:** `.venv\Scripts\python.exe -m pytest -p no:cacheprovider` 为 **565 passed in 31.72s**；`ruff check .` 全部通过；`ruff format --check .` 为 **110 files already formatted**；`black --check src tests` 为 **101 files would be left unchanged**；`git diff --check origin/master...HEAD` 通过。工作树在复核前干净，分支相对主干 ahead 1。
 - **剩余状态:** IN PROGRESS；TODO 为提交本条实时日志、推送当前分支、创建并合并小型 PR。正式 Gate 仍为 `INCOMPLETE`，未消耗正式实验资源。
 
+## 2026-08-10 · 历史产物可加载性修复 + 72-cell 矩阵执行器
+
+### 2026-08-10 20:40 AEST · Step 54 · A4/B1:`exclude_none` 与 `gate_runner`
+
+**A4 —— `ControlsConditions.fingerprint()` 补 `exclude_none`**
+
+- **问题:** 08-07 那份产出 37/50 utility 基线的 controls 报告,**已经无法通过正式接口加载**。
+  `from_report_json` 报「conditions_fingerprint 与 conditions 不一致」——
+  存的是 `5ab882c2…`,重算得 `6911efd4…`。
+- **根因:** 该方法用 `model_dump(mode="json")` 而**没有** `exclude_none`。补上
+  `cached_input_usd_per_mtok` 之后,旧 JSON 里缺失的键被物化成 `null` 进了哈希。
+  `ExperimentConditions.fingerprint()` 一直用 `exclude_none`,此处不一致。
+- **危害不在数字,在误导:** 报错长得像"证据被篡改",真实原因只是 schema 漂移。
+  `gate-report --controls-json` 指向历史产物时就会撞上。文档声称"用 08-07 报告重算过
+  `461ccdef`",而正式接口读不了那份文件 —— 只能绕过校验器做到,这一点先前没有被记录。
+- **修法已实测,严格更优:** 加 `exclude_none` 后 08-07 精确恢复为 `5ab882c2…`
+  且 `strict load: OK`;当日两份新报告(`e9a659b3…` / `7c698447…`)**一个字节未变**。
+- **锁死:** 新增三条测试 —— 历史条件重算出冻结指纹、历史报告能通过正式接口加载、
+  以及"显式给出的价格仍照常参与指纹"(防止 `exclude_none` 走到另一极端把真实差异抹平)。
+  fixture 刻意不带 `cached_input_usd_per_mtok`,那正是要保护的形状。
+
+**B1 —— 72-cell 矩阵执行器**
+
+- **进度:** 新增 `src/redcell/gate_runner.py`(调度决策,纯函数)与
+  `scripts/run_gate_matrix.py`(薄执行壳)。此前只有 declarative plan,没有 runner;
+  `run_ablation.sh` 是 18-run 版本,不适配 block 语义与 reserve 启用规则。
+- **为什么拆两层:** 这类作业真正容易错的不是执行,是**调度语义** ——
+  哪些格子还能跑、失败后停什么、中断从哪续、备用 seed 何时上场。写进 shell 循环就
+  再也没人能验证。做成纯函数后,三条规则各有测试。
+- **被机器强制的三条规则:**
+  1. **失效单位是整个 seed block** —— 一格失败,该 seed 其余条件标为
+     `skipped_block_invalid`(与 `failed` 分开记,以便回答该 block 消耗了多少外部调用)。
+     只重跑失败那格会让 block 内各条件的运行时刻不再可配对,而 Gate 统计量是成对的;
+  2. **备用 seed 不自动上场** —— 必须 `--enable-reserve <seed>` 点名。"是不是允许补位的
+     失效类型"要人看过才算数,⚠️ 尤其不得因 Finding 不好看而换 seed;
+  3. **已完成的格子永不重跑** —— 否则产生重复单元格,而 Gate 拒绝重复;届时报错会
+     指向数据完整性,真实原因却是调度。
+- **续跑与防错:** 每批落盘,崩溃最多丢一批;`--plan` 与 `--state` 的 seed plan digest、
+  数据库、seed×condition 集合任一不符即拒绝,避免把上一版计划的进度当成这一版。
+  派发保持 plan 原始顺序,让同一 block 六个条件挨着跑(时段/负载/模型版本尽量接近)。
+- **验证证据:** 新增 11 条 runner 测试 + 3 条 controls 测试;dry-run 实跑确认
+  72 格待执行、启用一个 reserve 后变 78 格、换库的 plan 被拒且报的是干净错误而非 traceback。
+  全量 **614 passed**;`ruff check .` 通过,`ruff format --check .` 123 files,
+  `black --check src tests` 112 files。**未调用任何 Provider。**
+- **剩余状态:** A4/B1 DONE。下一步 A1(带裁决重跑 controls)需要授权,
+  且有两个问题要先讨论:裁决由谁签字、备用 seed 耗尽的处置。
+
+---
+
 ## 2026-08-10 · 如实记录目标自发违规,并修正一句夸大的文案
 
 ### 2026-08-10 19:20 AEST · Step 52 · 阴性对照落下结构化违规明细;判定口径未动

@@ -134,7 +134,32 @@ reserve block 若被启用，时间与成本按 6 cell 为单位递增。
 
 ## 5. 执行与实时检查
 
-只执行 `gate-plan.json` 中 `enabled_initially=true` 的 72 个 argv。每个 cell 完成后立即检查：
+用矩阵执行器跑，不要手工循环 —— 它把本节的三条调度规则实现在可测模块
+`redcell.gate_runner` 里，脚本只负责调用：
+
+```powershell
+# 先空跑，确认将要执行什么（不产生任何外部调用）
+.venv\Scripts\python.exe scripts\run_gate_matrix.py `
+  --plan runs/gate-plan.json --state runs/gate-matrix-state.json --dry-run
+
+# 正式执行；可随时中断，重跑同一命令即从断点继续
+.venv\Scripts\python.exe scripts\run_gate_matrix.py `
+  --plan runs/gate-plan.json --state runs/gate-matrix-state.json
+```
+
+被机器强制的三条：
+
+1. **失效单位是整个 seed block。** 一个 cell 失败后，该 seed 其余条件不再派发，
+   记为 `skipped_block_invalid`（与 `failed` 分开，以便回答"这个 block 消耗了多少调用"）。
+   **不得只重跑失败那一格** —— 那会让 block 内各条件的运行时刻不再可配对。
+2. **备用 seed 不会自动上场。** 需人工判断失效属于允许补位的类型后，用
+   `--enable-reserve <seed>` 点名启用整块。⚠️ 不得因 Finding 结果不好看而换 seed。
+3. **已完成的格子永不重跑**，否则产生重复单元格而 Gate 拒绝重复。
+
+状态每批落盘，崩溃最多丢一批。`--plan` 与 `--state` 不匹配（seed plan digest、数据库、
+seed×condition 集合任一不同）会被拒绝，避免把上一版计划的进度当成这一版的。
+
+每个 cell 完成后仍需检查：
 
 - Run 为 `COMPLETED`，停止原因为 Token，且达到 320k 前缀；
 - 三角色 usage 已知且账本一致；
