@@ -32,8 +32,23 @@
 - **数据:** 2026-08-06 消融矩阵,18 个 run × (budget 20 或 100),共 **1080 场 attempt**
 - **seed:** 5000 / 5001 / 5002
 - **实验条件指纹:** `a0f8d19098c605b1a373b5e95557252f2cb6a6210f6fc1d59629626c9828b924`
-  —— 18 个 run **全部一致**,已核对。它是 Phase 0 历史完整条件的永久标识:
-  Phase 0 原样 replay 必须精确复现;`resume` 与旧矩阵分析仍拒绝不一致数据。
+  —— 18 个 run **全部一致**,已核对。它是这批数据**已落盘的历史标识**,
+  由 git tag `phase0-baseline` 那一版代码算出。
+
+  ⚠️ **当前代码不再复算得出这个值,这是设计使然,不是缺陷。** 用同一份快照在
+  今天的 schema 上重算得到 `133a1db4…`,因为 Phase 0.5 之后有几个字段**恒定出现**:
+  `scorer_version`、`finding_signature_version`、`attack_path_signature_version`,
+  以及两个 provider 配置里的 `cached_input_usd_per_mtok`。判定语义变了就该换指纹 ——
+  让旧哈希"继续算得出来"等于允许 scorer 改版后还假装是同一套条件,那正是要防的事。
+
+  **因此仍然成立的是:** 这 18 行存储记录携带的 `experiment_fingerprint` 都是
+  `a0f8d19…`,`analyze_ablation.py` 比较的是**已落盘的值**而非重算值,所以旧矩阵
+  分析不受影响;`resume` 只作用于 RUNNING run,与这批 COMPLETED 数据无关。
+
+  **机器锁:** `tests/test_phase_0_5_conditions.py` 断言这份快照在当前 schema 下
+  **只**多出上面登记的那几个字段,且剥掉它们之后仍精确哈希回 `a0f8d19…`。
+  新增任何恒定字段都必须显式登记,否则测试变红 —— 历史条件的形状不会再悄悄漂移。
+
   Phase 0.5 的新 Run 必须显式携带 `search` / `generation_memory` 等处理变量,其完整
   指纹因此不得伪装成该 SHA;跨阶段回归改用版本化 `regression_context_fingerprint`
   比较 Target / Attacker、actor、Arena、Policy、Scorer、可靠性、协议和 Strategy
