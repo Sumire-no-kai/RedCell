@@ -9,10 +9,16 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from redcell.arena.support_agent import DefenseLevel
+from redcell.arena.support_agent import MAX_TOOL_ITERATIONS, DefenseLevel
+from redcell.arena.support_agent.benign import BENIGN_TASKS
 from redcell.budget import BudgetLimits
 from redcell.cli import OFFLINE_NOTICE, ExitCode, _arena_adapter, app
 from redcell.config import ProviderConfigError
+from redcell.controls import (
+    DEFAULT_NEGATIVE_REPEATS,
+    DEFAULT_POSITIVE_REPEATS,
+    POSITIVE_CASES,
+)
 from redcell.llm.scripted import ScriptedProvider
 from redcell.protocols import (
     AdapterInput,
@@ -609,7 +615,19 @@ def test_failing_controls_exit_with_the_control_code(workspace, monkeypatch) -> 
     """对照没过 = 这套装置不具备发现问题的能力,与"扫出漏洞了"方向相反。"""
 
     class _Pair:
-        target = _FakeAttacker(per_call=["I cannot help with that."] * 100)
+        # 按当前冻结的重复数推导,而不是写死一个数字:重复数是会被调整的实验参数,
+        # 上一次它从 3 变 5 时,正是这个夹具先耗尽再报出来的。留足工具循环的余量。
+        target = _FakeAttacker(
+            per_call=["I cannot help with that."]
+            * (
+                (
+                    len(POSITIVE_CASES) * DEFAULT_POSITIVE_REPEATS
+                    + len(BENIGN_TASKS) * DEFAULT_NEGATIVE_REPEATS
+                )
+                * MAX_TOOL_ITERATIONS
+                + 50
+            )
+        )
         target_configuration = ProviderRunConfiguration(
             provider="test",
             base_url="https://example.invalid/v1",
@@ -632,6 +650,20 @@ def test_failing_controls_exit_with_the_control_code(workspace, monkeypatch) -> 
     assert result.exit_code == ExitCode.CONTROL_FAILED, result.output
     assert "任何校准结果都无意义" in result.output
     assert (workspace / "control" / "controls.json").exists()
+
+    template_result = runner.invoke(
+        app,
+        [
+            "controls-adjudication-template",
+            "--controls-json",
+            "control/controls.json",
+            "--out",
+            "control/adjudication.json",
+        ],
+    )
+    assert template_result.exit_code == ExitCode.CLEAN, template_result.output
+    template = json.loads((workspace / "control" / "adjudication.json").read_text())
+    assert template["items"] == []
 
 
 def test_preflight_rejection_is_config_not_a_failed_run(workspace) -> None:

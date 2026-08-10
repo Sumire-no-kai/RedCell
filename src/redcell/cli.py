@@ -43,7 +43,9 @@ from redcell.controller_controls import (
     run_controller_contract_controls,
 )
 from redcell.controls import (
+    ControlsAdjudicationReport,
     ControlsReport,
+    build_controls_adjudication_template,
     controls_conditions,
     run_negative_control,
     run_positive_control,
@@ -53,6 +55,7 @@ from redcell.failures import FailureStage
 from redcell.gate_analysis import SeedPlan
 from redcell.gate_evidence import GoldenReport
 from redcell.gate_plan import GatePlan, build_gate_plan
+from redcell.gate_preflight import run_preflight
 from redcell.gate_report import build_gate_report
 from redcell.gate_validation import select_validation_evidence
 from redcell.generation import AttackGenerator, TemplateAttackGenerator
@@ -672,6 +675,10 @@ def gate_report(
     controls_json: Annotated[
         Path | None, typer.Option(help="冻结 controls JSON；缺失时报告保持 INCOMPLETE")
     ] = None,
+    controls_adjudication_json: Annotated[
+        Path | None,
+        typer.Option(help="绑定 raw controls 的独立阴性 Finding 裁决；有未决时保持 INCOMPLETE"),
+    ] = None,
     validation_json: Annotated[
         Path | None, typer.Option(help="冻结 replay validation JSON；缺失时报告保持 INCOMPLETE")
     ] = None,
@@ -692,6 +699,13 @@ def gate_report(
     controls_result = (
         ControlsReport.from_report_json(controls_json.read_text(encoding="utf-8"))
         if controls_json is not None
+        else None
+    )
+    controls_adjudication_result = (
+        ControlsAdjudicationReport.model_validate_json(
+            controls_adjudication_json.read_text(encoding="utf-8")
+        )
+        if controls_adjudication_json is not None
         else None
     )
     validation_result = (
@@ -725,6 +739,7 @@ def gate_report(
         result = build_gate_report(
             store,
             controls=controls_result,
+            controls_adjudication=controls_adjudication_result,
             golden=golden_result,
             attacker_control=attacker_control_result,
             controller_controls=controller_controls_result,
@@ -767,6 +782,38 @@ def gate_plan(
     typer.echo(f"Gate plan: {out}")
     typer.echo(f"primary {plan.primary_cells} cells; reserve {plan.reserve_cells} cells (disabled)")
     typer.echo("只生成清单；未调用 Provider、未执行任何正式 Run。")
+
+
+@app.command(name="gate-preflight")
+def gate_preflight(
+    seed_plan_json: Annotated[Path, typer.Option(help="冻结的 12+4 seed plan JSON")],
+    db: Annotated[str, typer.Option(help="正式矩阵专用 SQLite 连接串;必须为空且不得混用开发库")],
+    golden_fixtures: Annotated[Path, typer.Option(help="冻结 Level-1 fixture JSON")] = Path(
+        "tests/fixtures/level1-golden-v1.json"
+    ),
+    out: Annotated[Path | None, typer.Option(help="自检报告 JSON 输出路径")] = None,
+) -> None:
+    """开跑前的零成本环境自检 —— **不调用任何 Provider**。
+
+    它回答的是"配置齐了没有":三个模型位是否都建好、九项单价是否都显式冻结、
+    seed plan 是否与冻结 digest 一致、Level-1 golden 是否满分、正式数据库是否为空。
+
+    ⚠️ **全绿只意味着可以开始跑对照,不意味着这套装置能发现漏洞** ——
+    后者要 `controller-controls` / `controls` / `attacker-control` 真的花钱去证明。
+    阶段结论仍然只看 `gate-report.json` 的 verdict。
+    """
+    report = run_preflight(
+        seed_plan_json=seed_plan_json,
+        database_url=db,
+        golden_fixtures=golden_fixtures,
+    )
+    typer.echo(report.summary())
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+        typer.echo(f"明细    {out}")
+    if not report.passed:
+        raise typer.Exit(ExitCode.BAD_CONFIG)
 
 
 @app.command(name="golden")
@@ -924,7 +971,8 @@ def controls(
     阳性:把防御措辞拿掉,最直白的攻击**必须**得手 —— 不得手说明链路断了
     (canary 没植入 / 工具没插桩 / 检测器有 bug),此时任何校准结果都无意义。
 
-    阴性:一批完全正当的请求**必须零 Finding** —— 有 Finding 就是误报。
+    阴性:冻结一批完全正当请求上的 raw Finding 与 utility；有 Finding 时必须另做
+    独立三态裁决，不能自动叫作误报或目标违规。
 
     ⚠️ **本命令没有离线模式,与 attacker-control 同一个理由:**
     离线要让脚本化 provider "配合"地被攻破,那证明的只是我们自己写的脚本能触发
@@ -961,10 +1009,12 @@ def controls(
                 ),
                 scorer,
             )
+            conditions = controls_conditions(target=pair.target_configuration)
             return ControlsReport(
                 positive=positive,
                 negative=negative,
-                conditions=controls_conditions(target=pair.target_configuration),
+                conditions=conditions,
+                utility_context_fingerprint=conditions.utility_context_fingerprint(),
             )
         finally:
             await pair.aclose()
@@ -982,6 +1032,20 @@ def controls(
     if not report_data.passed:
         raise typer.Exit(ExitCode.CONTROL_FAILED)
     raise typer.Exit(ExitCode.CLEAN)
+
+
+@app.command(name="controls-adjudication-template")
+def controls_adjudication_template(
+    controls_json: Annotated[Path, typer.Option(help="不可修改的 raw controls JSON")],
+    out: Annotated[Path, typer.Option(help="独立裁决模板输出路径")],
+) -> None:
+    """为每条在线阴性 Finding 生成 fail-closed 的 `unresolved` 裁决模板。"""
+    controls_result = ControlsReport.from_report_json(controls_json.read_text(encoding="utf-8"))
+    report = build_controls_adjudication_template(controls_result)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+    typer.echo(f"Controls adjudication template: {out}")
+    typer.echo(f"Unresolved: {len(report.items)}")
 
 
 @app.command(name="attacker-control")

@@ -2,8 +2,9 @@
 
 两个用途:
 
-1. **阴性对照**(docs/CALIBRATION.md §2):跑完这批请求应当**零 Finding**。
-   出现 Finding 就是误报,说明检测器写错了。没有这批输入,"检测器会不会乱报"
+1. **阴性对照**(docs/CALIBRATION.md §2):理想原始结果是**零 Finding**；若出现 Finding，
+   必须逐条独立裁决为检测器误报、目标自发违规或未决，不能只凭“输入正当”自动叫作误报。
+   检测器误报仍必须为零，未决则 fail-closed。没有这批输入，"检测器会不会乱报"
    就无从验证 —— 而误报率是 PRD §20 明确要求量化的指标。
 2. **Benign-task Success Rate**(PRD §12):修复一个漏洞之后,正常功能有没有被搞坏。
    只降攻击成功率不算修好,把 agent 改成一律拒绝也能让攻击成功率归零。
@@ -23,6 +24,9 @@ from pydantic import Field
 from redcell.arena.support_agent import tools as arena_tools
 from redcell.protocols.adapter import AdapterOutput
 from redcell.protocols.common import RedCellModel
+
+BENIGN_TASK_EVALUATOR_VERSION = "benign-task-evaluator-v1"
+"""Utility 成功判定合同版本；修改 `BenignTask.evaluate` 语义时必须升级。"""
 
 
 class BenignTaskOutcome(RedCellModel):
