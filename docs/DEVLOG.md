@@ -79,6 +79,39 @@
 - **验证证据:** `.venv\Scripts\python.exe -m pytest -p no:cacheprovider` 为 **565 passed in 31.72s**；`ruff check .` 全部通过；`ruff format --check .` 为 **110 files already formatted**；`black --check src tests` 为 **101 files would be left unchanged**；`git diff --check origin/master...HEAD` 通过。工作树在复核前干净，分支相对主干 ahead 1。
 - **剩余状态:** IN PROGRESS；TODO 为提交本条实时日志、推送当前分支、创建并合并小型 PR。正式 Gate 仍为 `INCOMPLETE`，未消耗正式实验资源。
 
+## 2026-08-10 · Phase 0.5 开跑前的零成本环境自检
+
+### 2026-08-10 15:30 AEST · Step 45 · 新增 `gate-preflight`,并补上矩阵规模估算
+
+- **进度:** 新增 `src/redcell/gate_preflight.py` 与 `redcell gate-preflight`。它**不调用任何
+  Provider**,一次性核对:三个模型位是否各自建立了独立连接、九项单价是否全部**显式**冻结、
+  seed plan 是否与冻结 digest 一致、Level-1 golden 是否满分、正式数据库是否为空且不是
+  `redcell.db`。任一项失败退出码为 `BAD_CONFIG`。
+- **为什么需要它:** runbook §4 之后每一步都花钱,而此刻能确定性判定的失败原因**几乎全是配置**。
+  在此之前唯一能发现"Controller 没配"的方式是 `run --online`,那已经开始消耗配额了;
+  四道工程门只证明代码正确,不证明这台机器配好了。
+- **实测当前环境(零成本):** target/attacker 连接、seed plan、golden 10/10、空库均 PASS;
+  FAIL 四项 —— target 与 attacker 各缺 `CACHED_INPUT_USD_PER_MTOK`,controller 连接四项全缺,
+  controller 三项单价全缺。这与 Step 39–44 记录的 `EXPERIMENT BLOCKED` 一致,现在有了机器判据。
+- **遇到的问题:** 首版测试用 `monkeypatch` 设/删环境变量,而 `ProviderSettings` 的
+  `env_file=".env"` 会读真实配置 —— 那几条"缺配置会被拦下"的断言只是**碰巧**通过,
+  因为作者的 `.env` 目前确实没填 controller。填好的那天它们会变红,而那不是回归。
+- **解决方式:** 给 `run_preflight` 加 `roles` 注入点,测试构造全字段显式赋值的 settings。
+  ⚠️ 中途发现 `_env_file=None` **不够** —— 它只停掉 dotenv 这一个来源,进程环境变量照样
+  会被读进来。改为每个字段都显式传值(init 值在 pydantic-settings 里优先级最高)。
+  用"预先 export 一份完整 Controller 配置"的方式复跑验证隔离:填与不填两种环境下均 11 passed。
+- **runbook 补充:** 新增 §1.1 规模估算与 §2.1 自检步骤。此前文档从未估过整个矩阵的量:
+  72 cell × 320k = 约 2300 万 Token ≈ **7,200 场 attempt**(Phase 0 消融的 6.7 倍),
+  成本约 **$8–12**,连续运行 **21 小时以上**。**约束是工期不是成本** —— Target 并发上限 3,
+  必须分片并准备中断续跑。这是量级估计,不是承诺值。
+- **验证证据:** 新增 12 个测试;全量 **598 passed**;`ruff check .` 通过,
+  `ruff format --check .` 为 120 files already formatted,`black --check src tests` 为
+  110 files unchanged,`git diff --check` 通过。未调用任何 Provider、未产生 Gate 数据。
+- **剩余状态:** DONE(自检工具与文档)。仍为 `EXPERIMENT BLOCKED`,且剩余项**全部需要作者
+  决定或授权**:Controller 用哪个连接、九项单价的官方取值、以及是否授权开始付费对照。
+
+---
+
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
 ### 2026-08-09 22:52 AEST · Step 44 · 修正基线指纹表述,并把历史形状锁进测试

@@ -14,8 +14,25 @@
 - [ ] 冻结 Target、Attacker、Controller、temperature、pricing、arena 与可靠性配置；不在本文或产物中记录密钥。
 - [ ] 使用全新的、仅服务本次矩阵的 SQLite 数据库；不得混用 `redcell.db` 或开发/试跑数据库。
 
+> 上面两项的完成情况由 §2.1 的 `gate-preflight` 机器核对，不靠人工回忆勾选。
+
 任一项未完成都不得执行正式 seed。reserve 只在整个 paired block 因基础设施、未知 Token、
 可靠性或完整性失效时按冻结顺序补位；不得因 Finding 结果替换 seed。
+
+## 1.1 预期规模、成本与工期
+
+开跑前应当知道自己在承诺什么。以下按冻结参数推算，**是量级估计而非承诺值**：
+
+| | |
+|---|---:|
+| 主矩阵 | 72 cell × 320,000 Token = **约 2,300 万 Token** |
+| 折合 attempt | 约 **7,200 场**（Phase 0 消融为 1,080 场，**6.7 倍**） |
+| 主矩阵成本 | 约 **$6–9**（按 Phase 0 实测 `$0.9328 / 约 346 万 Token` 折算） |
+| 加对照与 replay | 合计约 **$8–12** |
+| 连续运行时间 | 约 **21 小时以上**；③④ 每次选择另加一次串行 Controller 往返 |
+
+工期而非成本才是约束。Target 并发上限为 3，因此必须按分片执行并准备中断续跑；
+reserve block 若被启用，时间与成本按 6 cell 为单位递增。
 
 ## 2. 零成本工程门
 
@@ -29,6 +46,25 @@
 ```
 
 四道门缺一不可。随后确认工作树、分支和待执行提交与获批版本一致。
+
+### 2.1 环境自检（同样零成本）
+
+四道门只证明代码正确，不证明**这台机器配好了**。下面这条命令不调用任何 Provider，
+用来在第一次付费调用之前把配置类失败全部暴露：
+
+```powershell
+.venv\Scripts\python.exe -m redcell.cli gate-preflight `
+  --seed-plan-json docs/PHASE0_5_SEED_PLAN.json `
+  --db sqlite:///runs/phase-0-5.db `
+  --out runs/preflight.json
+```
+
+它检查三个模型位是否都已建立独立连接、九项单价是否都**显式**冻结（留空是「未知」，
+免费必须写 `0`）、seed plan 是否与冻结 digest 一致、Level-1 golden 是否满分、
+正式数据库是否为空且不是 `redcell.db`。任一项失败即退出码 `4`，不要进入第 4 节。
+
+⚠️ **全绿只说明可以开始跑对照，不说明这套装置具备发现漏洞的能力**——
+后者必须由 `controller-controls` / `controls` / `attacker-control` 真实花钱去证明。
 
 ## 3. 生成矩阵清单，不执行
 

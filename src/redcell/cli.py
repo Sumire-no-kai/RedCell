@@ -53,6 +53,7 @@ from redcell.failures import FailureStage
 from redcell.gate_analysis import SeedPlan
 from redcell.gate_evidence import GoldenReport
 from redcell.gate_plan import GatePlan, build_gate_plan
+from redcell.gate_preflight import run_preflight
 from redcell.gate_report import build_gate_report
 from redcell.gate_validation import select_validation_evidence
 from redcell.generation import AttackGenerator, TemplateAttackGenerator
@@ -767,6 +768,38 @@ def gate_plan(
     typer.echo(f"Gate plan: {out}")
     typer.echo(f"primary {plan.primary_cells} cells; reserve {plan.reserve_cells} cells (disabled)")
     typer.echo("只生成清单；未调用 Provider、未执行任何正式 Run。")
+
+
+@app.command(name="gate-preflight")
+def gate_preflight(
+    seed_plan_json: Annotated[Path, typer.Option(help="冻结的 12+4 seed plan JSON")],
+    db: Annotated[str, typer.Option(help="正式矩阵专用 SQLite 连接串;必须为空且不得混用开发库")],
+    golden_fixtures: Annotated[Path, typer.Option(help="冻结 Level-1 fixture JSON")] = Path(
+        "tests/fixtures/level1-golden-v1.json"
+    ),
+    out: Annotated[Path | None, typer.Option(help="自检报告 JSON 输出路径")] = None,
+) -> None:
+    """开跑前的零成本环境自检 —— **不调用任何 Provider**。
+
+    它回答的是"配置齐了没有":三个模型位是否都建好、九项单价是否都显式冻结、
+    seed plan 是否与冻结 digest 一致、Level-1 golden 是否满分、正式数据库是否为空。
+
+    ⚠️ **全绿只意味着可以开始跑对照,不意味着这套装置能发现漏洞** ——
+    后者要 `controller-controls` / `controls` / `attacker-control` 真的花钱去证明。
+    阶段结论仍然只看 `gate-report.json` 的 verdict。
+    """
+    report = run_preflight(
+        seed_plan_json=seed_plan_json,
+        database_url=db,
+        golden_fixtures=golden_fixtures,
+    )
+    typer.echo(report.summary())
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+        typer.echo(f"明细    {out}")
+    if not report.passed:
+        raise typer.Exit(ExitCode.BAD_CONFIG)
 
 
 @app.command(name="golden")
