@@ -7,6 +7,12 @@
 
 ## 2026-08-10 · Phase 0.5 test readiness preparation
 
+### 2026-08-10 14:55 AEST · Step 54 · PR #22 精确 head 合并验证
+
+- **进度:** 在最终 head `b2ae8e3` 上重新执行四道本地质量门后，使用 `--match-head-commit b2ae8e3cfc4024bb340be58f24342e78f4746885` 合并 ready PR [#22](https://github.com/Sumire-no-kai/RedCell/pull/22)。GitHub 返回状态 `MERGED`，merge commit 为 `8138347b174c37deb61bebfa3b1a38c61abce1e2`。
+- **验证证据:** 最终 head 的 pytest 为 **586 passed in 35.88s**；Ruff lint 通过；Ruff format 为 **118 files already formatted**；Black 为 **108 files would be left unchanged**；`git diff --check` 通过。刷新 `origin/master` 后，`git merge-base --is-ancestor b2ae8e3... origin/master` 退出 0，主干顶端为 `8138347 Merge pull request #22 ...`。
+- **剩余状态:** MERGED / IMPLEMENTATION READY / EXPERIMENT BLOCKED。测试准备代码已经统一进入主干；正式 Phase 0.5 Provider 矩阵仍未启动。开跑外部前置不变：Controller 配置缺失，三类 Provider 的三项价格均未完整显式冻结；补齐后先跑 controls/preflight，再开始 72 个 primary cells。
+
 ### 2026-08-10 14:53 AEST · Step 53 · 测试合同提交、推送与 ready PR
 
 - **进度:** 将七项冻结合同及回归保护提交为 `cb7d74f`（`fix: freeze phase 0.5 test contract`），推送到 `fix/phase-0-5-test-readiness`，并创建 ready PR [#22](https://github.com/Sumire-no-kai/RedCell/pull/22)。PR 描述包含核心设计的类比、必要性、替代方案取舍、RedCell 中的角色、面试追问与限制，没有把实现就绪写成实验结论。
