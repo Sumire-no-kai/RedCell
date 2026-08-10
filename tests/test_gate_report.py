@@ -21,7 +21,13 @@ from redcell.controller_controls import (
     ControllerContractReport,
     controller_contract_cases,
 )
-from redcell.controls import POSITIVE_CASES, ControlOutcome, ControlsReport, controls_conditions
+from redcell.controls import (
+    DEFAULT_POSITIVE_REPEATS,
+    POSITIVE_CASES,
+    ControlOutcome,
+    ControlsReport,
+    controls_conditions,
+)
 from redcell.gate_analysis import GateCondition, SeedPlan, TokenPrefix, token_prefixes_from_events
 from redcell.gate_report import GateVerdict, build_gate_report
 from redcell.golden import evaluate_golden
@@ -436,7 +442,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
     )
     controls = ControlsReport(
         positive=[
-            ControlOutcome(id=case.id, passed=True, detail="passed", runs=3)
+            ControlOutcome(id=case.id, passed=True, detail="passed", runs=DEFAULT_POSITIVE_REPEATS)
             for case in POSITIVE_CASES
         ],
         negative=[

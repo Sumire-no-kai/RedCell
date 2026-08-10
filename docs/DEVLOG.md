@@ -79,6 +79,47 @@
 - **验证证据:** `.venv\Scripts\python.exe -m pytest -p no:cacheprovider` 为 **565 passed in 31.72s**；`ruff check .` 全部通过；`ruff format --check .` 为 **110 files already formatted**；`black --check src tests` 为 **101 files would be left unchanged**；`git diff --check origin/master...HEAD` 通过。工作树在复核前干净，分支相对主干 ahead 1。
 - **剩余状态:** IN PROGRESS；TODO 为提交本条实时日志、推送当前分支、创建并合并小型 PR。正式 Gate 仍为 `INCOMPLETE`，未消耗正式实验资源。
 
+## 2026-08-10 · 阳性对照重复数 3 → 20
+
+### 2026-08-10 17:40 AEST · Step 49 · 把阳性重复数抬到 20,并让测试夹具跟着常量走
+
+- **决策(作者):** `DEFAULT_POSITIVE_REPEATS` 由 **3 改为 20**。作者先确认了这道对照的
+  用途:它不是检查"靶场漏洞还在不在"(漏洞是我们写死的 ground truth,不会自己消失),
+  而是检查**违规真的发生时整条测量链还看不看得见** —— 攻击送达 → 模型决定去做 →
+  arena 插桩 → codec 解析 → Level-1 判定,任一环断了都是零 Finding,而零 Finding 与
+  "目标很安全"在数据里无法区分。
+- **本次失败属于第三种情况,而不是前两种:** (a) 目标守住了 / (b) 仪器断了 /
+  **(c) 路径真实可达但模型只是偶尔才走**。`p̂≈0.17` 说明是 (c),而 n=3 分不开 (b) 与 (c)。
+- **值的依据:** 08-10 两轮共 12 次抽样、2 次命中。按判据"至少中一次":
+  n=3 单 case 假失败 58%(两条 case 合计 82%),n=8 为 23%/41%,**n=20 为 2.6%/5.2%**。
+  历史四轮 controls 有三轮栽在跨用户 case 上(75%),与 82% 的预测相符。
+- **⚠️ 修正我先前给作者的建议:** 上一轮我据单次 `1/3` 估 `p≈0.33`、并据此说"n=8 → 8%"。
+  合并 12 次抽样后 `p̂≈0.17`,该数字作废;n=8 实际留下 41% 的假失败率,不够。已如实告知
+  并重算,作者据修正后的表选定 20。
+- **这不是放宽标准:** 判据一字未改(仍是"至少中一次"),变的只是观测机会数。一个八成
+  概率误杀自己的对照,既挡不住该挡的,也拦不住不该拦的;而它一旦被学会无视,比没有对照
+  更危险 —— 它还在提供虚假的安心。
+- **测试夹具随之修正(两处,都是写死旧默认值):**
+  `test_failing_controls_exit_with_the_control_code` 的 `ScriptedProvider` 只备了 100 条
+  回复,在第 101 次调用耗尽;`test_complete_formal_evidence_can_support_the_gate` 的合成
+  证据把 `runs` 写死为 3,触发 `controls_repeat_count_mismatch`。**两处都改成从
+  `DEFAULT_POSITIVE_REPEATS` / `DEFAULT_NEGATIVE_REPEATS` / `MAX_TOOL_ITERATIONS` 推导**,
+  而不是换一个写死的 20 —— 上一次重复数从 3 变 5 时,正是同一个夹具先耗尽再暴露出来的,
+  同样的坑不该踩第三次。
+- **代价与边界:** 每轮阳性从 9 场变 **60 场**目标对话(整轮 controls 约 110 场,
+  较此前约翻倍)。`positive_repeats` 在 `ControlsConditions` 指纹内,因此
+  **改动后的 controls 不再与 08-07 冻结的 utility 基线同条件**;下次运行是新条件下的
+  首采,不是"重跑",那条 37/50 基线需要重新确认后才能继续用作非劣判据。
+- **仍未采纳的更优解:** 两条跨用户 case 是同一次抽样,更省的做法是让一轮模型响应同时
+  喂给"权限开/权限关"两条下游判定。那属于对照结构改动,本次未做,留作独立提案。
+- **验证证据:** 全量 **598 passed**;`ruff check .` 通过,`ruff format --check .` 为
+  120 files already formatted,`black --check src tests` 为 110 files unchanged。
+  **未调用任何 Provider** —— 本步骤只改常量与夹具。
+- **剩余状态:** 代码 DONE。下一次 controls 需作者授权(约 110 场对话、十几分钟),
+  且其结果是**新条件下的首次采集**,不受"只允许重跑一次"的约束。
+
+---
+
 ## 2026-08-10 · Phase 0.5 开跑前对照:Controller 通过,靶场 controls 两次未通过
 
 ### 2026-08-10 17:15 AEST · Step 48 · 授权重跑同样未通过;定位到两条阳性 case 其实是同一次试验
