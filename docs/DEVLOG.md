@@ -81,6 +81,41 @@
 
 ## 2026-08-10 · Phase 0.5 开跑前的零成本环境自检
 
+### 2026-08-10 16:10 AEST · Step 46 · Controller 定为 Gemini,九项单价按官网冻结
+
+- **决策(作者):** Controller 候选**收敛为 Gemini 单一提名**,不再同时提名 GLM。理由是
+  Gemini 已承担 Generator 角色、连接现成。这仍在预注册规则内 —— controls 原文写着
+  「若仅一个 Provider 通过,冻结通过者」,而**提名范围是在看到任何攻击结果之前收敛的**,
+  不构成选择偏差。⚠️ **提名不等于冻结:** 12 例 `controller-contract-controls-v1` 仍须全部
+  通过才可冻结;未通过时不得降低 controls、不得静默改用 GLM、不得回退本地搜索器。
+- **讨论中澄清的一处混淆:** 作者最初提出「Controller 就是 Gemini,让它自己管自己」。
+  **同一个 Provider 可以,同一次调用不行**,三条具体理由:① Controller 要 `temperature=0`
+  而 Generator 要 `1.0`,一次调用给不出两个温度;② 合并后单元 ④(LLM 选择 × 写手无记忆)
+  构造不出来,四格设计的单因子归因随之失效;③ 挑策略与写话术的 Token 混进一栏,
+  等 Token 比较就失去意义。PRD 允许共用 connection、复用底层 HTTP client,但逻辑角色
+  必须分开记账 —— 最终配置正是如此。
+- **正式配置:** `gemini-3.1-flash-lite`、`temperature=0`、`max_output_tokens=512`。
+  选 flash-lite 而非 flash 档,是因为 2026-08-03 实测该档没有「思考 Token 计费却不进
+  `usage`」的问题(0/7 截断),而 Token Gate 硬性要求远程角色如实报告 usage。
+- **价格(官网核对于 2026-08-10,Paid 档,USD / 1M tokens):**
+  `glm-4.7-flashx` = 0.07 / 0.01 / 0.40(docs.z.ai);
+  `gemini-3.1-flash-lite` = 0.25 / 0.025 / 1.50(ai.google.dev)。此前只有 input/output 四项,
+  三个 cached-input 与 Controller 三项均缺;现已九项齐全。**留空是「未知」不是免费** ——
+  这条区分本身是上一轮审查提出、作者采纳后改成 `float | None` 的。
+- **两条写进 Limitations 的局限:** ① Gemini 显式 context caching 另有
+  `$1.00 / 1M tokens / 小时` 的**存储费**,而估算式只有 `token × 单价` 三项、没有时间维;
+  RedCell 不创建显式缓存(命中的是隐式缓存,无存储费),故当前不适用 —— 但启用显式缓存后
+  美元会系统性偏低。② z.ai 的 cached-input 存储标注为「限时免费」,是会到期的条款,
+  不是稳定价格。美元始终只是辅助估算,Gate 判定用 Provider 返回的实际 Token。
+- **密钥边界:** `.env` 的 Controller 段用 `${REDCELL_ATTACKER_API_KEY}` 变量引用,
+  同一个密钥在文件里只出现一份,本次改动全程没有读取或写入密钥明文。已复核 `.env`
+  仍被 `.gitignore` 排除。变量插值经实测确认生效(解析后与 attacker 密钥一致)。
+- **验证证据:** `gate-preflight` 对真实环境从 4 FAIL 变为 **9/9 PASS**;
+  全量 **598 passed**;四道格式门全部通过。**未调用任何 Provider** ——
+  配置正确不等于 key 有效或结构化输出可用,那要 `controller-controls` 真的花钱去证。
+- **剩余状态:** 配置 DONE。下一步是本阶段**第一笔付费调用**:`controller-controls`
+  (12 例、约几分钱),需作者单独授权。正式 SQLite 尚未创建。
+
 ### 2026-08-10 15:30 AEST · Step 45 · 新增 `gate-preflight`,并补上矩阵规模估算
 
 - **进度:** 新增 `src/redcell/gate_preflight.py` 与 `redcell gate-preflight`。它**不调用任何

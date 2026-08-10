@@ -11,10 +11,14 @@
 - [x] 正式 `max_attempts=500`；默认 20 不得用于正式 Run。
 - [x] `level1-golden-v1` 已冻结为 10 正/10 负 fixture 与 canonical digest。
 - [x] `docs/PHASE0_5_SEED_PLAN.json` 已冻结 12 primary + 4 reserve；canonical digest 为 `af55c0f179a566ae0b8437b85dbfd9043eb2e24e157eeffacf21adb68731d1bc`。
-- [ ] 冻结 Target、Attacker、Controller、temperature、pricing、arena 与可靠性配置；不在本文或产物中记录密钥。
+- [x] 冻结 Target、Attacker、Controller、temperature、pricing、arena 与可靠性配置；不在本文或产物中记录密钥。
+      **[2026-08-10]** Target=`glm-4.7-flashx`；Generator=`gemini-3.1-flash-lite` @1.0；
+      Controller=`gemini-3.1-flash-lite` @0（作者定案的唯一提名候选，仍须 controls 通过才冻结）。
+      九项单价已按官网核对填入，来源与日期见 PRD 的 Controller Provider 一节。
 - [ ] 使用全新的、仅服务本次矩阵的 SQLite 数据库；不得混用 `redcell.db` 或开发/试跑数据库。
 
 > 上面两项的完成情况由 §2.1 的 `gate-preflight` 机器核对，不靠人工回忆勾选。
+> 2026-08-10 实跑该自检为 **9/9 PASS**（数据库项使用一次性临时库验证，正式库仍待创建）。
 
 任一项未完成都不得执行正式 seed。reserve 只在整个 paired block 因基础设施、未知 Token、
 可靠性或完整性失效时按冻结顺序补位；不得因 Finding 结果替换 seed。
