@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from pathlib import Path
 
 from typer.testing import CliRunner
 
@@ -22,8 +23,8 @@ from redcell.controller_controls import (
 )
 from redcell.controls import POSITIVE_CASES, ControlOutcome, ControlsReport, controls_conditions
 from redcell.gate_analysis import GateCondition, SeedPlan, TokenPrefix, token_prefixes_from_events
-from redcell.gate_evidence import GoldenReport
 from redcell.gate_report import GateVerdict, build_gate_report
+from redcell.golden import evaluate_golden
 from redcell.protocols import (
     ArenaRunConfiguration,
     ControllerRunConfiguration,
@@ -44,9 +45,11 @@ from redcell.search import ControllerDecision, ControllerDecisionOutcome
 from redcell.storage import RunStore
 from redcell.strategies import PHASE_0_STRATEGIES
 from redcell.validator import ReplayValidation, ValidationReport
-from redcell.versions import LEVEL1_SCORER_VERSION
 
 runner = CliRunner()
+FROZEN_PLAN = SeedPlan.model_validate_json(
+    (Path(__file__).parents[1] / "docs" / "PHASE0_5_SEED_PLAN.json").read_text(encoding="utf-8")
+)
 
 
 def _provider(name: str) -> ProviderRunConfiguration:
@@ -120,7 +123,7 @@ def _formal_run(seed: int, condition: GateCondition) -> Run:
         policy_version=SUPPORT_AGENT_POLICY.version,
         adapter_type="support-agent-arena",
         algorithm=selector.value,
-        limits=BudgetLimits(max_total_tokens=320000),
+        limits=BudgetLimits(max_attempts=500, max_total_tokens=320000),
         usage=BudgetUsage(
             attempts=30,
             completed_attempts=30,
@@ -414,7 +417,9 @@ def test_gate_report_cli_loads_protection_evidence(tmp_path, monkeypatch) -> Non
 
 
 def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
-    runs = [_formal_run(seed, condition) for seed in range(12) for condition in GateCondition]
+    runs = [
+        _formal_run(seed, condition) for seed in FROZEN_PLAN.primary for condition in GateCondition
+    ]
     store = _FormalStore(runs)
     monkeypatch.setattr(
         "redcell.gate_report.token_prefixes_from_events",
@@ -493,27 +498,24 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
             for path in sorted(prefix.attack_path_signatures)
         ],
         target_usage=CostRecord(prompt_tokens=1, usage_known=True),
+        target_configuration=reference.target,
+        gate_context_fingerprint=runs[0].gate_context_fingerprint(),
+        run_ids=sorted(run.id for run in runs),
     )
 
+    golden = evaluate_golden(Path(__file__).parent / "fixtures" / "level1-golden-v1.json")
+    seed_plan = FROZEN_PLAN
     report = build_gate_report(  # type: ignore[arg-type]
         store,
         controls=controls,
-        golden=GoldenReport(
-            fixture_set_version="level1-golden-v1",
-            fixture_set_digest="0" * 64,
-            scorer_version=LEVEL1_SCORER_VERSION,
-            positive_total=10,
-            positive_passed=10,
-            negative_total=10,
-            negative_passed=10,
-        ),
+        golden=golden,
         attacker_control=attacker_control,
         controller_controls=controller_controls,
         validation=validation,
-        seed_plan=SeedPlan(primary=list(range(12)), reserve=list(range(12, 16))),
+        seed_plan=seed_plan,
     )
 
-    assert report.analysis.valid_seeds == list(range(12))
+    assert report.analysis.valid_seeds == FROZEN_PLAN.primary
     assert report.analysis.mechanism is not None
     assert report.analysis.mechanism.selector_main_effect.passed
     assert report.analysis.mechanism.memory_main_effect.passed
@@ -521,6 +523,30 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
     assert any("strategy_id" in limitation for limitation in report.limitations)
     assert report.supported
     assert report.verdict is GateVerdict.SUPPORTED
+
+    mismatched_validation = validation.model_copy(update={"gate_context_fingerprint": "f" * 64})
+    mismatched = build_gate_report(  # type: ignore[arg-type]
+        store,
+        controls=controls,
+        golden=golden,
+        attacker_control=attacker_control,
+        controller_controls=controller_controls,
+        validation=mismatched_validation,
+        seed_plan=seed_plan,
+    )
+    assert "validation_environment_mismatch" in mismatched.protection_failures
+    assert mismatched.verdict is GateVerdict.EXPERIMENT_INVALID
+
+    missing_golden_outcomes = build_gate_report(  # type: ignore[arg-type]
+        store,
+        controls=controls,
+        golden=golden.model_copy(update={"outcomes": []}),
+        attacker_control=attacker_control,
+        controller_controls=controller_controls,
+        validation=validation,
+        seed_plan=seed_plan,
+    )
+    assert "level1_golden_outcomes_shape_invalid" in missing_golden_outcomes.protection_failures
 
     unsupported_analysis = report.analysis.model_copy(
         update={

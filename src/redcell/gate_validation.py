@@ -6,9 +6,11 @@ from dataclasses import dataclass
 
 from redcell.finding_identity import attack_path_signature
 from redcell.gate_analysis import (
+    FORMAL_RUN_TOKENS,
     SeedPlan,
     TokenPrefix,
     analyse_phase_0_5,
+    require_frozen_seed_plan,
     token_prefixes_from_events,
 )
 from redcell.protocols.finding import Finding
@@ -16,7 +18,6 @@ from redcell.protocols.run import Run
 from redcell.protocols.trace import Attempt
 from redcell.storage import RunStore
 
-FORMAL_RUN_TOKENS = 320000
 PRIMARY_CHECKPOINT = 160000
 
 
@@ -29,6 +30,7 @@ class ValidationEvidence:
 
 def select_validation_evidence(store: RunStore, seed_plan: SeedPlan) -> ValidationEvidence:
     """Select the 320k paths from the same twelve valid paired blocks as the Gate."""
+    require_frozen_seed_plan(seed_plan)
     runs = [run for run in store.list_runs() if _is_phase_0_5_run(run)]
     prefixes: list[TokenPrefix] = []
     runs_by_id = {run.id: run for run in runs}

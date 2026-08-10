@@ -5,12 +5,12 @@
 
 ## 1. 开跑前冻结清单
 
-- [ ] 作者确认 `attack_path_signature` 的策略铺开偏差如何解释，并保留结构签名与策略分配的联读证据。
-- [ ] 作者确认 factorial 主效应的对照均值定义。
-- [ ] 作者确认缺失 cached-input 单价使用 `N/A`，而不是静默当作免费。
-- [ ] 作者冻结正式 `max_attempts`。默认值 20 约在 64k Token 附近先触发，不能用于 320k 正式 Run。
-- [ ] 作者冻结 Level-1 golden fixture 集、版本与 digest；当前只有消费契约，没有正式 fixture 生成入口。
-- [ ] 创建一份从未观察过的 `SeedPlan` JSON：12 个 primary + 4 个有序 reserve；不得使用 5000–5002。
+- [x] `attack_path_signature` 保持主指标，并强制联读结构签名与策略分配。
+- [x] factorial 主效应使用对称对照均值。
+- [x] 三类价格缺失均为 `N/A`；显式 0 才表示确认免费。
+- [x] 正式 `max_attempts=500`；默认 20 不得用于正式 Run。
+- [x] `level1-golden-v1` 已冻结为 10 正/10 负 fixture 与 canonical digest。
+- [x] `docs/PHASE0_5_SEED_PLAN.json` 已冻结 12 primary + 4 reserve；canonical digest 为 `af55c0f179a566ae0b8437b85dbfd9043eb2e24e157eeffacf21adb68731d1bc`。
 - [ ] 冻结 Target、Attacker、Controller、temperature、pricing、arena 与可靠性配置；不在本文或产物中记录密钥。
 - [ ] 使用全新的、仅服务本次矩阵的 SQLite 数据库；不得混用 `redcell.db` 或开发/试跑数据库。
 
@@ -32,12 +32,12 @@
 
 ## 3. 生成矩阵清单，不执行
 
-先人工写入已经冻结的 `seed-plan.json`，再生成 declarative plan：
+使用版本控制中已经冻结的 seed plan 生成 declarative plan：
 
 ```powershell
 .venv\Scripts\python.exe -m redcell.cli gate-plan `
-  --seed-plan-json seed-plan.json `
-  --max-attempts <AUTHOR_FROZEN_VALUE> `
+  --seed-plan-json docs/PHASE0_5_SEED_PLAN.json `
+  --max-attempts 500 `
   --db sqlite:///runs/phase-0-5.db `
   --run-out runs/phase-0-5 `
   --out runs/gate-plan.json
@@ -64,7 +64,14 @@
 .venv\Scripts\python.exe -m redcell.cli attacker-control --samples 5 --seed <NON_GATE_SEED> --out runs
 ```
 
-三份报告必须通过且配置快照与正式 plan 一致。Level-1 golden 必须在 fixture 集由作者冻结后补上；
+三份报告必须通过且配置快照与正式 plan 一致。Level-1 golden 是零 Provider 的独立固定考卷：
+
+```powershell
+.venv\Scripts\python.exe -m redcell.cli golden `
+  --fixtures tests/fixtures/level1-golden-v1.json `
+  --out runs/golden.json
+```
+
 不能把普通单元测试数量或在线 controls 伪装成 golden 证据。
 
 ## 5. 执行与实时检查
@@ -87,7 +94,7 @@
 
 ```powershell
 .venv\Scripts\python.exe -m redcell.cli validate-paths `
-  --seed-plan-json seed-plan.json `
+  --seed-plan-json docs/PHASE0_5_SEED_PLAN.json `
   --db sqlite:///runs/phase-0-5.db `
   --repeats 5 `
   --out runs/validation.json
@@ -98,7 +105,7 @@
 ```powershell
 .venv\Scripts\python.exe -m redcell.cli gate-report `
   --db sqlite:///runs/phase-0-5.db `
-  --seed-plan-json seed-plan.json `
+  --seed-plan-json docs/PHASE0_5_SEED_PLAN.json `
   --golden-json runs/golden.json `
   --controls-json runs/controls/controls.json `
   --attacker-control-json runs/attacker-control-seed<NON_GATE_SEED>.json `

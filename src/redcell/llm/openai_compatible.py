@@ -34,13 +34,13 @@ class TokenPricing(RedCellModel):
     从不回金额 —— 所以"知道花了多少钱"完全依赖这张表是不是填对了。
     给一个默认值就等于替使用者猜价格,而猜错不会报错,只会让预算上限失真。
 
-    免费模型请显式写 `TokenPricing(input_usd_per_mtok=0, output_usd_per_mtok=0)`:
+    免费模型请显式把三类单价都写成 0:
     那是一句"我确认它免费"的声明,和"忘了填"在语义上必须分得开。
     """
 
     input_usd_per_mtok: float = Field(ge=0.0)
     output_usd_per_mtok: float = Field(ge=0.0)
-    cached_input_usd_per_mtok: float = Field(default=0.0, ge=0.0)
+    cached_input_usd_per_mtok: float = Field(ge=0.0)
 
     def cost_for(
         self, prompt_tokens: int, completion_tokens: int, cached_input_tokens: int = 0

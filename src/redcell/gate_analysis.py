@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import itertools
+import json
 import random
 from collections import Counter
 from enum import StrEnum
@@ -13,6 +15,10 @@ from redcell.finding_identity import attack_path_signature
 from redcell.protocols.common import RedCellModel
 from redcell.protocols.finding import Finding
 from redcell.protocols.run import Run, RunEvent, RunEventType
+
+FORMAL_MAX_ATTEMPTS = 500
+FORMAL_RUN_TOKENS = 320000
+PHASE_0_5_SEED_PLAN_DIGEST = "af55c0f179a566ae0b8437b85dbfd9043eb2e24e157eeffacf21adb68731d1bc"
 
 
 class GateCondition(StrEnum):
@@ -48,6 +54,18 @@ class SeedPlan(RedCellModel):
     @property
     def ordered(self) -> list[int]:
         return [*self.primary, *self.reserve]
+
+
+def seed_plan_digest(seed_plan: SeedPlan) -> str:
+    payload = json.dumps(
+        seed_plan.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def require_frozen_seed_plan(seed_plan: SeedPlan) -> None:
+    if seed_plan_digest(seed_plan) != PHASE_0_5_SEED_PLAN_DIGEST:
+        raise ValueError("seed plan does not match the frozen Phase 0.5 canonical digest")
 
 
 class TokenPrefix(RedCellModel):
@@ -291,7 +309,10 @@ def token_prefixes_from_events(
                 successes_by_strategy[str(strategy_id)] += 1
         checkpoint_reached = run.usage.total_tokens >= checkpoint
         role_usage_consistent = run.usage.total_tokens == run.usage.role_total_tokens
-        formal_budget = run.limits.max_total_tokens == 320000
+        formal_budget = (
+            run.limits.max_total_tokens == FORMAL_RUN_TOKENS
+            and run.limits.max_attempts == FORMAL_MAX_ATTEMPTS
+        )
         output.append(
             TokenPrefix(
                 run_id=run.id,

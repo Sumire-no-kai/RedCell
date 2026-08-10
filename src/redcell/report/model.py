@@ -110,6 +110,23 @@ class ReportData(RedCellModel):
     def unverifiable_impact_count(self) -> int:
         return self.impact.unknown
 
+    @computed_field
+    @property
+    def estimated_cost_known(self) -> bool:
+        """Unknown price is never rendered as a confirmed zero-dollar bill."""
+        conditions = self.run.experiment_conditions
+        if conditions is None:
+            return False
+        configurations = [conditions.target, conditions.attacker]
+        if conditions.controller is not None:
+            configurations.append(conditions.controller.provider)
+        return all(
+            configuration.input_usd_per_mtok is not None
+            and configuration.output_usd_per_mtok is not None
+            and configuration.cached_input_usd_per_mtok is not None
+            for configuration in configurations
+        )
+
     @classmethod
     def build(cls, run: Run, attempts: list[Attempt], findings: list[Finding]) -> ReportData:
         per_strategy: Counter[str] = Counter()

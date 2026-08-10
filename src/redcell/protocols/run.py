@@ -77,9 +77,10 @@ class ProviderRunConfiguration(RedCellModel):
     max_tokens: int = Field(ge=1)
     rpm: float = Field(ge=0.0)
     max_concurrency: int = Field(ge=0)
-    input_usd_per_mtok: float = Field(ge=0.0)
-    output_usd_per_mtok: float = Field(ge=0.0)
-    cached_input_usd_per_mtok: float = Field(default=0.0, ge=0.0)
+    input_usd_per_mtok: float | None = Field(default=None, ge=0.0)
+    output_usd_per_mtok: float | None = Field(default=None, ge=0.0)
+    cached_input_usd_per_mtok: float | None = Field(default=None, ge=0.0)
+    """`None` 表示价格未知；只有显式 0 才表示确认免费。"""
     extra_body: dict[str, Any] = Field(default_factory=dict)
 
 

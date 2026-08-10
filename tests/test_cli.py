@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -92,6 +93,7 @@ def test_run_completes_end_to_end_and_writes_both_reports(workspace) -> None:
     assert len(run_dirs) == 1
     assert (run_dirs[0] / "report.json").exists()
     assert (run_dirs[0] / "report.html").exists()
+    assert "0.0000 USD" in (run_dirs[0] / "report.html").read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio
@@ -153,11 +155,7 @@ def test_module_help_survives_a_legacy_windows_output_encoding(workspace) -> Non
 def test_gate_plan_generates_primary_and_disabled_reserve_cells_without_running(
     workspace,
 ) -> None:
-    seed_path = workspace / "seed-plan.json"
-    seed_path.write_text(
-        '{"primary":[100,101,102,103,104,105,106,107,108,109,110,111],"reserve":[112,113,114,115]}',
-        encoding="utf-8",
-    )
+    seed_path = Path(__file__).parents[1] / "docs" / "PHASE0_5_SEED_PLAN.json"
 
     result = runner.invoke(
         app,
@@ -166,7 +164,7 @@ def test_gate_plan_generates_primary_and_disabled_reserve_cells_without_running(
             "--seed-plan-json",
             str(seed_path),
             "--max-attempts",
-            "1000",
+            "500",
             "--db",
             "sqlite:///runs/phase-0-5.db",
             "--out",
@@ -181,19 +179,30 @@ def test_gate_plan_generates_primary_and_disabled_reserve_cells_without_running(
     assert len(payload["cells"]) == 96
     assert all(cell["enabled_initially"] for cell in payload["cells"][:72])
     assert not any(cell["enabled_initially"] for cell in payload["cells"][72:])
+    assert all(cell["max_attempts"] == 500 for cell in payload["cells"])
     assert all(cell["max_total_tokens"] == 320000 for cell in payload["cells"])
     assert all("sqlite:///runs/phase-0-5.db" in cell["argv"] for cell in payload["cells"])
     assert "未调用 Provider" in result.output
 
 
+def test_golden_cli_writes_the_frozen_deterministic_report(workspace) -> None:
+    fixtures = Path(__file__).parent / "fixtures" / "level1-golden-v1.json"
+
+    result = runner.invoke(
+        app,
+        ["golden", "--fixtures", str(fixtures), "--out", "golden.json"],
+    )
+
+    assert result.exit_code == ExitCode.CLEAN, result.output
+    payload = json.loads((workspace / "golden.json").read_text(encoding="utf-8"))
+    assert payload["positive_passed"] == payload["positive_total"] == 10
+    assert payload["negative_passed"] == payload["negative_total"] == 10
+
+
 def test_validation_rejects_an_incomplete_matrix_before_loading_target(
     workspace, monkeypatch
 ) -> None:
-    seed_path = workspace / "seed-plan.json"
-    seed_path.write_text(
-        '{"primary":[100,101,102,103,104,105,106,107,108,109,110,111],"reserve":[112,113,114,115]}',
-        encoding="utf-8",
-    )
+    seed_path = Path(__file__).parents[1] / "docs" / "PHASE0_5_SEED_PLAN.json"
     target_loaded = False
 
     def _unexpected_load():

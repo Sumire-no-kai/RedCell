@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from redcell.arena.support_agent import SUPPORT_AGENT_POLICY
@@ -21,6 +23,10 @@ from redcell.protocols import (
     StrategyCatalogue,
 )
 from redcell.strategies import PHASE_0_STRATEGIES
+
+FROZEN_PLAN = SeedPlan.model_validate_json(
+    (Path(__file__).parents[1] / "docs" / "PHASE0_5_SEED_PLAN.json").read_text(encoding="utf-8")
+)
 
 
 def _provider(name: str) -> ProviderRunConfiguration:
@@ -96,7 +102,7 @@ def _run(seed: int, condition: GateCondition) -> Run:
         policy_version=SUPPORT_AGENT_POLICY.version,
         adapter_type="arena/support-agent",
         algorithm=selector.value,
-        limits=BudgetLimits(max_attempts=1000, max_total_tokens=320000),
+        limits=BudgetLimits(max_attempts=500, max_total_tokens=320000),
         seed=seed,
         status=RunStatus.COMPLETED,
         experiment_conditions=conditions,
@@ -144,12 +150,12 @@ def _prefixes(*, run: Run, events: list, findings: list, checkpoints: tuple[int,
 
 
 def test_validation_selects_exactly_the_twelve_valid_paired_blocks(monkeypatch) -> None:
-    runs = [_run(seed, condition) for seed in range(12) for condition in GateCondition]
+    runs = [_run(seed, condition) for seed in FROZEN_PLAN.primary for condition in GateCondition]
     monkeypatch.setattr("redcell.gate_validation.token_prefixes_from_events", _prefixes)
 
     evidence = select_validation_evidence(
         _Store(runs),  # type: ignore[arg-type]
-        SeedPlan(primary=list(range(12)), reserve=list(range(12, 16))),
+        FROZEN_PLAN,
     )
 
     assert len(evidence.runs) == 72
@@ -158,12 +164,12 @@ def test_validation_selects_exactly_the_twelve_valid_paired_blocks(monkeypatch) 
 
 
 def test_validation_refuses_an_unregistered_seed(monkeypatch) -> None:
-    runs = [_run(seed, condition) for seed in range(12) for condition in GateCondition]
+    runs = [_run(seed, condition) for seed in FROZEN_PLAN.primary for condition in GateCondition]
     runs.extend(_run(99, condition) for condition in GateCondition)
     monkeypatch.setattr("redcell.gate_validation.token_prefixes_from_events", _prefixes)
 
     with pytest.raises(ValueError, match="outside the frozen seed plan"):
         select_validation_evidence(
             _Store(runs),  # type: ignore[arg-type]
-            SeedPlan(primary=list(range(12)), reserve=list(range(12, 16))),
+            FROZEN_PLAN,
         )

@@ -7,6 +7,37 @@
 
 ## 2026-08-10 · Phase 0.5 test readiness preparation
 
+### 2026-08-10 14:50 AEST · Step 52 · 七项冻结合同全量回归与开跑配置审计
+
+- **进度:** 完成未知价格、Validation 封条、独立 Level-1 golden、12+4 seed、500-attempt 熔断器及其 Gate 消费链的逐项 diff 自审；补充“无重放工作时仍保存并排序完整 Validation binding”的回归测试。对本次所有变更文件执行行尾扫描，未发现 CRLF/LF 混合文件；未对仓库中未改动的统一 CRLF 文件做无关的大面积重写。
+- **遇到的问题与解决方式:** 首次只读配置探针误用了不存在的 `*_price_per_million` 属性并抛出 `AttributeError`；该探针没有修改状态，也没有发起 Provider 调用。按真实 `*_usd_per_mtok` 字段更正后重跑。审计结果为 Target/Attacker 凭据四项已配置但三项价格不完整，Controller 尚未完整配置且价格不完整；探针只输出布尔状态，没有输出密钥、模型名或 URL。
+- **验证证据:** `.venv\Scripts\python.exe -m pytest -p no:cacheprovider` 为 **586 passed in 42.07s**；`python -m ruff check .` 全部通过；`python -m ruff format --check .` 为 **118 files already formatted**；`python -m black --check src tests` 为 **108 files would be left unchanged**；`git diff --check` 通过。Golden 独立执行仍为 positive 10/10、negative 10/10，正式 seed/预算合同由机器测试锁定。
+- **剩余状态:** IMPLEMENTATION READY / EXPERIMENT BLOCKED。代码与可复现计划已具备合并条件；正式矩阵仍未启动，也没有任何 Provider 调用。开跑前必须补齐 Controller 配置，并为 Target/Attacker/Controller 分别显式填写 input/cached-input/output 三项价格（包括明确免费时的三个 0），再执行 controls 与正式 72-cell preflight。
+
+### 2026-08-10 14:44 AEST · Step 51 · 冻结正式 12+4 seed 与 500-attempt 机器合同
+
+- **进度:** 在没有执行任何 Phase 0.5 正式 Run 的前提下，用系统随机源一次生成 12 个 primary + 4 个有序 reserve，写入版本控制文件 `docs/PHASE0_5_SEED_PLAN.json`；canonical digest 冻结为 `af55c0f179a566ae0b8437b85dbfd9043eb2e24e157eeffacf21adb68731d1bc`。生成一次 declarative `runs/gate-plan.json` 仅核验计划形状，得到 72 primary + 24 disabled reserve、全部 `max_attempts=500/max_total_tokens=320000`；该 runs 产物继续被 Git 忽略。
+- **决策与理由:** Seed 值公开进入版本控制，使“在结果出现前已冻结”可以由 commit 审计；不把 seed 当秘密，也不在运行后重抽。Gate plan、Validation selector 与最终 Gate 都校验 canonical seed digest；计划器还拒绝任何非 500 的 attempt cap。Token 是公平比较预算，500 只是约历史正常尺度 5 倍的独立安全熔断器。
+- **验证证据:** 计划器打印 `primary 72 cells; reserve 24 cells (disabled)`，其内嵌 digest 与独立 canonical 计算完全一致；新增机器测试锁定 seed 文件 digest、排除 5000–5002、96-cell 形状、reserve 默认禁用，以及错误 cap/seed plan 的早拒绝。未读取 `.env`、未打开正式 SQLite、未调用 Provider。
+- **剩余状态:** DONE（seed/cap 冻结）；正式矩阵未启动。下一步为全量回归、自审与 Git 收尾。
+
+### 2026-08-10 14:41 AEST · Step 50 · 未知价格、Validation 封条与 Level-1 golden 落地
+
+- **进度:** 三类 Provider 单价改为 `float | None`，默认未知；只有 input/output/cached-input 三项全部显式配置时才构造 `TokenPricing` 并声明 `reports_cost=True`。HTML 报告在价格不全时显示 `N/A`，离线脚本 Provider 则显式三项为 0。`ValidationReport` 新增 Target 非凭据快照、唯一 Gate-context fingerprint 与 72 个 Run ID 的 all-or-nothing 绑定，最终 Gate 对路径集合、Run 集、Target 和 context 全部强校验。新增独立 `level1-golden-v1`：10 个正样本覆盖 canary、权限、禁止/未知工具、参数、确认绕过、可观测性与双信号；10 个负样本覆盖 attacker 回显、shaping 档位、合法工具与跨回合确认。
+- **决策与理由:** 价格像价签：没贴不能读成 0 元；Token 仍可计量，只有美元估算为 N/A。Validation 的路径列表像答卷内容，Target/Run/context 是考场封条，缺任何一项都不能证明答卷来自本次矩阵。Golden 使用符号占位符而非 canary 明文，并按解析后结构比较 reward、两条 signal tier 与 Finding triad；canonical JSON digest 不受 CRLF/LF 或空白变化影响。
+- **遇到的问题与解决方式:** 首轮定向回归按预期抓到旧测试仍省略 cached-input 明确价格，以及合成 Gate evidence 缺少新 Validation binding/正确 golden digest；更新 fixture 为显式语义后恢复。Phase 0 历史快照现在会省略未知 cached-input 单价，当前重算值从 Step 44 的 `133a1db4…` 变为 `c71530c1…`；同步更正 `docs/PHASE0_BASELINE.md`，并加强机器锁以拒绝“声明了但实际没出现”的伪新增字段。
+- **验证证据:** Golden 首次执行为 positive **10/10**、negative **10/10**，canonical digest `a689f2a446b09a5a2830971070c0777c11151ca995f77fa65f22df843bef961c` 已写入 Gate 常量；价格/Golden/Gate/Validation/CLI/报告等定向回归最终 **118 passed**。Ruff 首轮发现 2 个 import-order 问题并自动修正，复查 `ruff check src tests` 通过。
+- **剩余状态:** DONE（协议与 golden 实现）；TODO 为全量四门、逐项 diff/敏感信息审计和提交。
+
+### 2026-08-10 14:29 AEST · Step 49 · 作者一次性冻结正式测试剩余口径
+
+- **进度:** 作者明确回复“同意全部推荐”，七项准备决定正式冻结：保留 `attack_path_signature` 主指标并强制联读结构 breadth/策略分配；factorial 主效应使用对称对照均值；三类价格缺失均为 `None/N/A`、显式 0 才是免费；正式 `max_attempts=500`；Validation 绑定 Target 快照、12×6 Run ID 与 Gate context；建立 10 正/10 负的独立 `level1-golden-v1`；由系统随机源生成一次性 12+4 未观察 seed 并冻结 digest。
+- **这是什么:** 主指标像“按道路记录到达同一故障点”，结构签名是故障点、Strategy 是道路；两者联读避免把道路更多误说成故障更多。factorial 主效应像比较两种开关时先把另一个开关的两种状态平均掉，估计的是跨另一因子的平均作用。Golden 是封好的固定考卷；Validation 绑定是答卷上的考场、考生和试卷封条；未知价格用 `N/A` 是把“没贴价签”与“明确免费”分开。
+- **为什么与替代方案的取舍:** 不删除 `strategy_id`，因为会丢失机制级修复信息；不以最强单格替代析因基线，因为会改变 estimand；不把未知单价写 0，因为会静默少算；500 是约 100-attempt 历史尺度的 5 倍安全上限，既避免默认 20 先于 Token 触发，也比 1000 保留更强刹车；Validation 保存完整非凭据快照而非只存 digest，便于人工复核；Golden 使用独立 JSON 而非复用在线 controls/pytest 计数，避免循环自证。
+- **在 RedCell 中的角色与边界:** 这些决定只冻结如何测量、如何证明证据来源和何时停止，不是实验结果。实现、测试、commit/PR 可以继续；正式 72-cell Provider 矩阵仍须在所有 preflight 通过后另行启动，本步骤不会自动执行。
+- **面试答法:** 若问“为什么主指标含 Strategy 还可信”，应答：它测攻击路径而非纯漏洞 breadth，所以同时强制报告结构 breadth 与策略分配并在 Limitations 中限定解释。若问“为什么 max_attempts 仍存在”，应答：Token 是公平比较的主预算，attempt cap 是异常短输出/循环时的独立安全熔断器，冻结为正常尺度约 5 倍以尽量不成为治疗条件。
+- **剩余状态:** IN PROGRESS；下一步按冻结合同修改协议/配置、实现 golden 与机器锁、生成 seed 计划并执行全量门禁。未调用 Provider、未使用正式 seed。
+
 ### 2026-08-10 14:23 AEST · Step 48 · 测试准备全量门与剩余协议边界复核
 
 - **进度:** 完成 test-readiness 全量回归与逐项 diff 复核；新增入口仍只准备证据链，没有生成 seed plan、没有打开正式数据库、没有调用真实 Provider。进一步确认 `ValidationReport` 当前只保存 `(run_id, attack_path)`、次数与用量，虽然新 CLI 在执行前会要求当前 Target 快照等于正式 Run，但冻结 JSON 本身尚未携带 Target/Gate context 绑定，单独搬运后无法由 `gate-report` 自证来源。

@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from enum import StrEnum
 
 from pydantic import Field
 
-from redcell.gate_analysis import GateCondition, SeedPlan
+from redcell.gate_analysis import (
+    FORMAL_MAX_ATTEMPTS,
+    FORMAL_RUN_TOKENS,
+    GateCondition,
+    SeedPlan,
+    require_frozen_seed_plan,
+    seed_plan_digest,
+)
 from redcell.protocols.common import RedCellModel
 from redcell.protocols.run import GenerationMemoryMode, SearchSelector
 
-FORMAL_RUN_TOKENS = 320000
 GATE_PLAN_VERSION = "phase-0.5-gate-plan-v1"
 
 
@@ -70,15 +74,13 @@ def build_gate_plan(
     report_directory: str,
 ) -> GatePlan:
     """Build commands without executing a Provider or touching the run database."""
-    if max_attempts < 1:
-        raise ValueError("max_attempts must be >= 1")
+    if max_attempts != FORMAL_MAX_ATTEMPTS:
+        raise ValueError(f"Phase 0.5 Gate max_attempts must be {FORMAL_MAX_ATTEMPTS}")
+    require_frozen_seed_plan(seed_plan)
     if not database_url.startswith("sqlite:///"):
         raise ValueError("Phase 0.5 Gate plan requires an explicit SQLite database URL")
     if not report_directory.strip():
         raise ValueError("report_directory must not be empty")
-    seed_payload = json.dumps(
-        seed_plan.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
     cells: list[GatePlanCell] = []
     for role, seeds in (
         (SeedRole.PRIMARY, seed_plan.primary),
@@ -118,7 +120,7 @@ def build_gate_plan(
                     )
                 )
     return GatePlan(
-        seed_plan_digest=hashlib.sha256(seed_payload).hexdigest(),
+        seed_plan_digest=seed_plan_digest(seed_plan),
         database_url=database_url,
         report_directory=report_directory,
         max_attempts=max_attempts,

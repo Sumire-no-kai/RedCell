@@ -10,6 +10,7 @@ from redcell.finding_identity import attack_path_signature
 from redcell.protocols.adapter import AdapterInput, Message, TargetAdapter
 from redcell.protocols.common import RedCellModel, Role
 from redcell.protocols.finding import Finding
+from redcell.protocols.run import ProviderRunConfiguration
 from redcell.protocols.trace import Attempt, CostRecord, Turn
 from redcell.scoring.level1 import Level1Scorer
 
@@ -35,6 +36,22 @@ class ValidationReport(RedCellModel):
     repeats: int = Field(ge=1)
     results: list[ReplayValidation] = Field(default_factory=list)
     target_usage: CostRecord = Field(default_factory=CostRecord)
+    target_configuration: ProviderRunConfiguration | None = None
+    gate_context_fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    run_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _binding_is_complete_and_unique(self) -> ValidationReport:
+        bound = (
+            self.target_configuration is not None,
+            self.gate_context_fingerprint is not None,
+            bool(self.run_ids),
+        )
+        if any(bound) and not all(bound):
+            raise ValueError("validation binding requires target, Gate context, and run_ids")
+        if len(set(self.run_ids)) != len(self.run_ids):
+            raise ValueError("validation run_ids must be unique")
+        return self
 
 
 async def validate_attack_paths(
@@ -44,6 +61,9 @@ async def validate_attack_paths(
     attempts: list[Attempt],
     findings: list[Finding],
     repeats: int = 5,
+    target_configuration: ProviderRunConfiguration | None = None,
+    gate_context_fingerprint: str | None = None,
+    run_ids: list[str] | None = None,
 ) -> ValidationReport:
     if repeats < 1:
         raise ValueError("repeats must be >= 1")
@@ -72,7 +92,14 @@ async def validate_attack_paths(
                 reproduced=reproduced,
             )
         )
-    return ValidationReport(repeats=repeats, results=results, target_usage=target_usage)
+    return ValidationReport(
+        repeats=repeats,
+        results=results,
+        target_usage=target_usage,
+        target_configuration=target_configuration,
+        gate_context_fingerprint=gate_context_fingerprint,
+        run_ids=sorted(run_ids or []),
+    )
 
 
 async def _replay(

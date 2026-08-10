@@ -150,7 +150,7 @@ def test_gate_context_fingerprint_binds_budget_contract() -> None:
         policy_version="policy-v1",
         adapter_type="arena",
         algorithm="static",
-        limits=BudgetLimits(max_total_tokens=320000),
+        limits=BudgetLimits(max_attempts=500, max_total_tokens=320000),
         experiment_conditions=_conditions(),
     )
 
@@ -202,15 +202,26 @@ PHASE_0_DECLARED_ADDITIONS = {
     ("scorer_version",),
     ("finding_signature_version",),
     ("attack_path_signature_version",),
-    ("target", "cached_input_usd_per_mtok"),
-    ("attacker", "cached_input_usd_per_mtok"),
 }
 """Phase 0.5 之后**恒定出现**、因而让历史哈希无法由当前代码复算的字段。
 
-刻意用完整路径而不是顶层字段名:`cached_input_usd_per_mtok` 就嵌在两个 provider
-配置里,只比顶层 key 的话它会溜过去。新增任何一个恒定字段都必须显式登记到这里,
-登记本身就是"我知道我改变了历史条件的形状"这句话。
+刻意用完整路径而不是顶层字段名；未来新增嵌套字段时，只比顶层 key 会让它溜过去。
+新增任何一个恒定字段都必须显式登记到这里，登记本身就是“我知道我改变了历史条件
+形状”这句话。价格未知现在保持 `None` 并被 `exclude_none` 省略，不再属于恒定新增字段。
 """
+
+
+def _added_paths(
+    current: dict, historical: dict, prefix: tuple[str, ...] = ()
+) -> set[tuple[str, ...]]:
+    additions: set[tuple[str, ...]] = set()
+    for key, value in current.items():
+        path = (*prefix, key)
+        if key not in historical:
+            additions.add(path)
+        elif isinstance(value, dict) and isinstance(historical[key], dict):
+            additions.update(_added_paths(value, historical[key], path))
+    return additions
 
 
 def _strip_declared(payload: dict, prefix: tuple[str, ...] = ()) -> dict:
@@ -240,6 +251,7 @@ def test_phase_zero_snapshot_gains_only_declared_fields() -> None:
     conditions = ExperimentConditions.model_validate(PHASE_0_BASELINE_CONDITIONS)
     dumped = conditions.model_dump(mode="json", exclude_none=True)
 
+    assert _added_paths(dumped, PHASE_0_BASELINE_CONDITIONS) == PHASE_0_DECLARED_ADDITIONS
     assert _strip_declared(dumped) == PHASE_0_BASELINE_CONDITIONS
 
 

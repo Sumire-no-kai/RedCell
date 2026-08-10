@@ -56,6 +56,7 @@ from redcell.gate_plan import GatePlan, build_gate_plan
 from redcell.gate_report import build_gate_report
 from redcell.gate_validation import select_validation_evidence
 from redcell.generation import AttackGenerator, TemplateAttackGenerator
+from redcell.golden import evaluate_golden
 from redcell.llm.base import LLMProvider
 from redcell.llm.scripted import ScriptedProvider
 from redcell.mutation import LLMMutationGenerator
@@ -222,6 +223,7 @@ def _experiment_conditions(
             max_concurrency=0,
             input_usd_per_mtok=0.0,
             output_usd_per_mtok=0.0,
+            cached_input_usd_per_mtok=0.0,
         )
         attacker = ProviderRunConfiguration(
             provider="template",
@@ -233,6 +235,7 @@ def _experiment_conditions(
             max_concurrency=0,
             input_usd_per_mtok=0.0,
             output_usd_per_mtok=0.0,
+            cached_input_usd_per_mtok=0.0,
         )
     else:
         target = providers.target_configuration
@@ -766,6 +769,32 @@ def gate_plan(
     typer.echo("只生成清单；未调用 Provider、未执行任何正式 Run。")
 
 
+@app.command(name="golden")
+def golden(
+    fixtures: Annotated[Path, typer.Option(help="冻结 Level-1 fixture JSON")] = Path(
+        "tests/fixtures/level1-golden-v1.json"
+    ),
+    out: Annotated[Path, typer.Option(help="Golden report JSON 输出路径")] = Path(
+        "runs/golden.json"
+    ),
+) -> None:
+    """执行版本化的 10 正/10 负确定性 Scorer golden；不调用 Provider。"""
+    try:
+        report = evaluate_golden(fixtures)
+    except (OSError, ValueError) as exc:
+        typer.secho(f"Golden 配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG) from exc
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+    typer.echo(f"Golden: {out}")
+    typer.echo(
+        f"positive {report.positive_passed}/{report.positive_total}; "
+        f"negative {report.negative_passed}/{report.negative_total}"
+    )
+    if not report.passed:
+        raise typer.Exit(ExitCode.CONTROL_FAILED)
+
+
 @app.command(name="validate-paths")
 def validate_paths(
     seed_plan_json: Annotated[Path, typer.Option(help="冻结的 12+4 seed plan JSON")],
@@ -823,6 +852,9 @@ def validate_paths(
                 attempts=evidence.attempts,
                 findings=evidence.findings,
                 repeats=repeats,
+                target_configuration=target_configuration,
+                gate_context_fingerprint=evidence.runs[0].gate_context_fingerprint(),
+                run_ids=[run.id for run in evidence.runs],
             )
         finally:
             await target.aclose()
@@ -1006,6 +1038,7 @@ def attacker_control(
             max_concurrency=0,
             input_usd_per_mtok=0,
             output_usd_per_mtok=0,
+            cached_input_usd_per_mtok=0,
         ),
     )
     generator = LLMMutationGenerator(

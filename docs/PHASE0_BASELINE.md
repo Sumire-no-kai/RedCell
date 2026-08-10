@@ -36,9 +36,10 @@
   由 git tag `phase0-baseline` 那一版代码算出。
 
   ⚠️ **当前代码不再复算得出这个值,这是设计使然,不是缺陷。** 用同一份快照在
-  今天的 schema 上重算得到 `133a1db4…`,因为 Phase 0.5 之后有几个字段**恒定出现**:
-  `scorer_version`、`finding_signature_version`、`attack_path_signature_version`,
-  以及两个 provider 配置里的 `cached_input_usd_per_mtok`。判定语义变了就该换指纹 ——
+  今天的 schema 上重算得到 `c71530c1…`,因为 Phase 0.5 之后有三个判定语义字段
+  **恒定出现**:`scorer_version`、`finding_signature_version`、
+  `attack_path_signature_version`。价格字段则遵守 2026-08-10 冻结的“未知 ≠ 免费”语义:
+  历史快照没有 cached-input 单价时保持 `None` 并从序列化载荷省略。判定语义变了就该换指纹 ——
   让旧哈希"继续算得出来"等于允许 scorer 改版后还假装是同一套条件,那正是要防的事。
 
   **因此仍然成立的是:** 这 18 行存储记录携带的 `experiment_fingerprint` 都是

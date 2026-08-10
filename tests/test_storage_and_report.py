@@ -402,6 +402,14 @@ def test_report_always_carries_the_disclaimer(run: Run) -> None:
     assert "不能证明系统是安全的" in to_json(data)
 
 
+def test_report_renders_unknown_pricing_as_na_instead_of_zero(run: Run) -> None:
+    data = _report(run)
+
+    assert not data.estimated_cost_known
+    assert "N/A" in to_html(data)
+    assert "0.0000 USD" not in to_html(data)
+
+
 def test_html_surfaces_the_unverifiable_impact_warning(run: Run) -> None:
     html = to_html(_report(run))
     assert "unverifiable impact" in html

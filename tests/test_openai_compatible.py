@@ -162,7 +162,13 @@ async def test_without_pricing_cost_is_not_reported() -> None:
 
 
 async def test_with_pricing_cost_is_computed_from_tokens() -> None:
-    provider = _provider(pricing=TokenPricing(input_usd_per_mtok=0.14, output_usd_per_mtok=0.28))
+    provider = _provider(
+        pricing=TokenPricing(
+            input_usd_per_mtok=0.14,
+            output_usd_per_mtok=0.28,
+            cached_input_usd_per_mtok=0.0,
+        )
+    )
     response = await provider.complete(_user("你好"))
 
     assert provider.reports_cost is True
@@ -176,7 +182,13 @@ async def test_free_model_declares_zero_price_explicitly() -> None:
     前者 reports_cost=True(我确认它免费,预算上限因此是可信的),
     后者 reports_cost=False(我不知道,别拿这个数当安全网)。
     """
-    provider = _provider(pricing=TokenPricing(input_usd_per_mtok=0, output_usd_per_mtok=0))
+    provider = _provider(
+        pricing=TokenPricing(
+            input_usd_per_mtok=0,
+            output_usd_per_mtok=0,
+            cached_input_usd_per_mtok=0,
+        )
+    )
     response = await provider.complete(_user("你好"))
 
     assert provider.reports_cost is True
@@ -185,7 +197,13 @@ async def test_free_model_declares_zero_price_explicitly() -> None:
 
 async def test_pricing_is_recorded_for_audit() -> None:
     """厂商调价后,只有这条留档能说明当时算的是哪一档价。"""
-    provider = _provider(pricing=TokenPricing(input_usd_per_mtok=0.14, output_usd_per_mtok=0.28))
+    provider = _provider(
+        pricing=TokenPricing(
+            input_usd_per_mtok=0.14,
+            output_usd_per_mtok=0.28,
+            cached_input_usd_per_mtok=0.0,
+        )
+    )
     raw = (await provider.complete(_user("你好"))).raw
 
     assert raw["pricing"] == {
