@@ -10,7 +10,11 @@
 - [x] 三类价格缺失均为 `N/A`；显式 0 才表示确认免费。
 - [x] 正式 `max_attempts=500`；默认 20 不得用于正式 Run。
 - [x] `level1-golden-v1` 已冻结为 10 正/10 负 fixture 与 canonical digest。
-- [x] `docs/PHASE0_5_SEED_PLAN.json` 已冻结 12 primary + 4 reserve；canonical digest 为 `af55c0f179a566ae0b8437b85dbfd9043eb2e24e157eeffacf21adb68731d1bc`。
+- [x] `docs/PHASE0_5_SEED_PLAN.json` 已冻结 12 primary + **8** reserve；canonical digest 为
+      `c421f3137d75f5ba956da12bcfdf824fc89222da23ccfd7bad9f1c42c792e3bc`。
+      **[2026-08-10] 备用由 4 追加为 8**：失效单位是整块，一次 `INDETERMINATE` 即消耗六格；
+      四个补位撑不住一个糟糕的夜晚，而中途用尽会迫使在「停下」和「看到结果之后追加 seed」
+      之间二选一。追加在任何 Gate 结果出现之前完成，原 12+4 逐字未动，只在 reserve 末尾续写。
 - [x] 冻结 Target、Attacker、Controller、temperature、pricing、arena 与可靠性配置；不在本文或产物中记录密钥。
       **[2026-08-10]** Target=`glm-4.7-flashx`；Generator=`gemini-3.1-flash-lite` @1.0；
       Controller=`gemini-3.1-flash-lite` @0（作者定案的唯一提名候选，仍须 controls 通过才冻结）。

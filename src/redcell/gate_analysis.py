@@ -18,7 +18,13 @@ from redcell.protocols.run import Run, RunEvent, RunEventType
 
 FORMAL_MAX_ATTEMPTS = 500
 FORMAL_RUN_TOKENS = 320000
-PHASE_0_5_SEED_PLAN_DIGEST = "af55c0f179a566ae0b8437b85dbfd9043eb2e24e157eeffacf21adb68731d1bc"
+PHASE_0_5_SEED_PLAN_DIGEST = "c421f3137d75f5ba956da12bcfdf824fc89222da23ccfd7bad9f1c42c792e3bc"
+"""冻结的 seed plan canonical digest。
+
+2026-08-10 由 `af55c0f1…` 更新为本值 —— 唯一改动是**追加**四个备用 seed
+(4 → 8),原 12 primary + 4 reserve 逐字未动。追加发生在任何 Gate 结果产生**之前**,
+因此不是结果依赖的改动;详见 `SeedPlan.reserve` 的说明与 DEVLOG。
+"""
 
 
 class GateCondition(StrEnum):
@@ -39,11 +45,21 @@ class SeedPlan(RedCellModel):
 
     primary: list[int]
     reserve: list[int]
+    """Ordered replacements.  Extended from four to eight on 2026-08-10.
+
+    A block is invalidated as a whole, so one INDETERMINATE controller call
+    anywhere in a 21-hour run costs six cells.  Four replacements left no room
+    for a bad night, and running out mid-matrix would force a choice between
+    stopping and appending seeds *after* seeing results - which is exactly the
+    thing pre-registration exists to prevent.  The four new values were drawn
+    from the system RNG while no Gate result existed, and appended rather than
+    regenerated so the original sixteen keep their provenance.
+    """
 
     @model_validator(mode="after")
     def validate_frozen_allocation(self) -> SeedPlan:
-        if len(self.primary) != 12 or len(self.reserve) != 4:
-            raise ValueError("Phase 0.5 seed plan requires exactly 12 primary and 4 reserve seeds")
+        if len(self.primary) != 12 or len(self.reserve) != 8:
+            raise ValueError("Phase 0.5 seed plan requires exactly 12 primary and 8 reserve seeds")
         all_seeds = [*self.primary, *self.reserve]
         if len(set(all_seeds)) != len(all_seeds):
             raise ValueError("Phase 0.5 seed plan must not repeat a seed")

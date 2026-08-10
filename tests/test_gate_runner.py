@@ -42,7 +42,7 @@ def test_initial_state_covers_every_planned_cell() -> None:
     plan = _plan()
     state = initial_state(plan)
 
-    assert len(state.cells) == len(plan.cells) == 96
+    assert len(state.cells) == len(plan.cells) == 120
     assert all(cell.status is CellStatus.PENDING for cell in state.cells)
 
 

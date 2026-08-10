@@ -402,7 +402,7 @@ def test_gate_report_cli_loads_protection_evidence(tmp_path, monkeypatch) -> Non
     validation_path.write_text(ValidationReport(repeats=5).model_dump_json(), encoding="utf-8")
     seed_path = tmp_path / "seed-plan.json"
     seed_path.write_text(
-        '{"primary":[100,101,102,103,104,105,106,107,108,109,110,111],"reserve":[112,113,114,115]}',
+        '{"primary":[100,101,102,103,104,105,106,107,108,109,110,111],"reserve":[112,113,114,115,116,117,118,119]}',
         encoding="utf-8",
     )
 

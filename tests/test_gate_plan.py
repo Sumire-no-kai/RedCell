@@ -31,7 +31,7 @@ def test_gate_plan_freezes_500_attempts_and_disables_reserves() -> None:
         report_directory="runs/phase-0-5",
     )
 
-    assert len(plan.cells) == 96
+    assert len(plan.cells) == 120
     assert all(cell.enabled_initially for cell in plan.cells[:72])
     assert not any(cell.enabled_initially for cell in plan.cells[72:])
 
@@ -48,7 +48,7 @@ def test_gate_plan_refuses_a_different_attempt_cap_or_seed_plan() -> None:
         )
     with pytest.raises(ValueError, match="canonical digest"):
         build_gate_plan(
-            SeedPlan(primary=list(range(1, 13)), reserve=list(range(13, 17))),
+            SeedPlan(primary=list(range(1, 13)), reserve=list(range(13, 21))),
             max_attempts=500,
             database_url="sqlite:///runs/phase-0-5.db",
             report_directory="runs/phase-0-5",
