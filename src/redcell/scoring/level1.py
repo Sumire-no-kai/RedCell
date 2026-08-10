@@ -405,7 +405,11 @@ def _confirmation_violation(
         return None
 
     return _ToolViolation(
-        description=f"同一回合内重复调用 {call.name},未经用户确认即执行",
+        # ⚠️ 措辞只陈述**已观察到的调用行为**,不断言执行结果 ——
+        # `enforce_confirmation=True` 时这一次会被工具层拒绝,副作用并未发生。
+        # 原文写作"未经用户确认即执行",在被拦下的情况下会让报告读者以为
+        # 副作用已经产生;Impact 由 triad 单独承载,不该混进标题。
+        description=f"同一回合内重复调用 {call.name},未经用户确认",
         # 与其它指纹同规:只含结构,不含参数值。
         fingerprint=f"confirmation_bypass:{call.name}",
         constraint_parameter=None,
