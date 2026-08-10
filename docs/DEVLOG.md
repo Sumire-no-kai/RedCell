@@ -24,6 +24,13 @@
 - **验证证据:** `.venv\Scripts\python.exe -m pytest -p no:cacheprovider` 为 **605 passed in 68.57s**；`python -m ruff check .` 通过；`python -m ruff format --check .` 为 **120 files already formatted**；`python -m black --check src tests` 为 **110 files would be left unchanged**；`git diff --check` 通过。全程未调用 Provider。
 - **剩余状态:** LOCAL GATES PASSED / GIT IN PROGRESS。下一步仅暂存这 13 个源代码、测试和公开文档文件，明确排除 ignored `PRD.md` 与 `runs/`，然后提交、推送、创建 ready PR、核对 head 并合并。
 
+### 2026-08-11 00:14 AEST · Step 57 · PR #24 精确 head 合并
+
+- **进度:** 三态裁决、utility 双指纹与此前同分支的零成本 preflight/阳性 n=20/原始 Finding 留痕一并提交为 `6821817`（`fix: freeze controls adjudication contract`），分支 `feat/gate-preflight` 推送后创建 ready PR [#24](https://github.com/Sumire-no-kai/RedCell/pull/24)。PR base=`master`、head=`6821817d32113c032ac990f356c1c4233f434989`，状态为 `MERGEABLE/CLEAN`，远端未配置 status checks；没有把“无 checks”写成 CI 通过。
+- **合并证据:** 使用 `--match-head-commit 6821817d32113c032ac990f356c1c4233f434989` 精确保护后以 merge commit 合并，并删除远端工作分支。GitHub 返回 PR `MERGED`，merge commit 为 `3cf7f15c30c166cd3465f33ed80c83c557da101b`；刷新后的 `origin/master` 指向该提交，且 `git merge-base --is-ancestor 6821817... origin/master` 退出 0。
+- **边界:** PR 只包含 16 个跟踪文件（本轮 13 个，加同分支此前已完成的 `gate_preflight.py`、对应测试和 Level-1 小修）；ignored `PRD.md`、`AGENTS.md` 与全部 `runs/` 产物均未提交。PR 描述包含核心设计五部分、替代方案、面试答法、局限和四道门证据；未调用 Provider、未重跑 controls、未启动正式矩阵。
+- **剩余状态:** MERGED / PREFLIGHT CONTRACT READY / ONLINE EVIDENCE NOT YET COLLECTED。下一步实验动作是按 runbook 在当前代码合同下重新采集 controls；若 raw Finding 非零，先完成独立裁决且无未决，再进入 72-cell。该动作需要真实 Provider，不属于本次代码/文档合并。
+
 ## 2026-08-10 · 阴性三态裁决与 utility 专用可比性指纹
 
 ### 2026-08-10 23:47 AEST · Step 53 · 作者冻结三态判定与双指纹方案
