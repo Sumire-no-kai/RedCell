@@ -5,6 +5,15 @@
 
 ---
 
+## 2026-08-10 · Phase 0.5 test readiness preparation
+
+### 2026-08-10 14:05 AEST · Step 45 · 基线指纹补丁复核与整合准备
+
+- **进度:** 作者要求先统一仓库状态并准备测试。当前 `docs/phase-0-baseline-fingerprint-note` 相对 `origin/master` 仅包含 `docs/PHASE0_BASELINE.md`、本日志与 `tests/test_phase_0_5_conditions.py` 三个文件；补丁修正历史指纹的字面承诺，并用两项测试锁定已登记的 schema 形状差异，没有启动 Provider、preflight 或正式 seed。
+- **决策与理由:** 本步骤只整合已经形成的文档/测试修复，不把三项待作者确认的实验口径混入同一 PR。攻击路径解释、机制主效应对照均值与缺失 cached-input 价格语义仍需作者显式确认后，才能修改内部 PRD/协议并进入正式 Gate 准备。
+- **验证证据:** `.venv\Scripts\python.exe -m pytest -p no:cacheprovider` 为 **565 passed in 31.72s**；`ruff check .` 全部通过；`ruff format --check .` 为 **110 files already formatted**；`black --check src tests` 为 **101 files would be left unchanged**；`git diff --check origin/master...HEAD` 通过。工作树在复核前干净，分支相对主干 ahead 1。
+- **剩余状态:** IN PROGRESS；TODO 为提交本条实时日志、推送当前分支、创建并合并小型 PR。正式 Gate 仍为 `INCOMPLETE`，未消耗正式实验资源。
+
 ## 2026-08-09 · Phase 0.5 runtime implementation
 
 ### 2026-08-09 22:52 AEST · Step 44 · 修正基线指纹表述,并把历史形状锁进测试
