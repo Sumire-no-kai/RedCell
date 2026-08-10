@@ -11,6 +11,7 @@ Controller / Store / Orchestrator),然后把结果交给用户。
 from __future__ import annotations
 
 import asyncio
+import sys
 from enum import IntEnum
 from pathlib import Path
 from typing import Annotated
@@ -34,6 +35,7 @@ from redcell.config import (
     load_attacker,
     load_controller,
     load_providers,
+    load_target,
 )
 from redcell.controller import LLMControllerAdapter
 from redcell.controller_controls import (
@@ -50,7 +52,9 @@ from redcell.executor import ConversationExecutor
 from redcell.failures import FailureStage
 from redcell.gate_analysis import SeedPlan
 from redcell.gate_evidence import GoldenReport
+from redcell.gate_plan import GatePlan, build_gate_plan
 from redcell.gate_report import build_gate_report
+from redcell.gate_validation import select_validation_evidence
 from redcell.generation import AttackGenerator, TemplateAttackGenerator
 from redcell.llm.base import LLMProvider
 from redcell.llm.scripted import ScriptedProvider
@@ -86,7 +90,7 @@ from redcell.search import (
 )
 from redcell.storage import DEFAULT_URL, RunStore
 from redcell.strategies import PHASE_0_STRATEGIES
-from redcell.validator import ValidationReport
+from redcell.validator import ValidationReport, validate_attack_paths
 
 app = typer.Typer(
     add_completion=False,
@@ -177,6 +181,26 @@ def _providers(
     return pair.target, generator, pair
 
 
+def _arena_adapter(
+    provider: LLMProvider,
+    configuration: ProviderRunConfiguration,
+    *,
+    defense: DefenseLevel,
+    enforce_permissions: bool = True,
+    enforce_confirmation: bool = True,
+) -> ArenaAdapter:
+    """让实际 Target 调用与落盘的实验条件使用同一份配置。"""
+    return ArenaAdapter(
+        provider,
+        defense=defense,
+        enforce_permissions=enforce_permissions,
+        enforce_confirmation=enforce_confirmation,
+        model=configuration.model,
+        temperature=configuration.temperature,
+        max_tokens=configuration.max_tokens,
+    )
+
+
 def _experiment_conditions(
     *,
     online: bool,
@@ -191,7 +215,7 @@ def _experiment_conditions(
         target = ProviderRunConfiguration(
             provider="scripted",
             base_url="",
-            model="scripted",
+            model="scripted-offline",
             temperature=0.0,
             max_tokens=1,
             rpm=0.0,
@@ -322,12 +346,6 @@ def run(
         typer.secho(f"配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(ExitCode.BAD_CONFIG) from exc
 
-    adapter = ArenaAdapter(
-        target_provider,
-        defense=defense,
-        enforce_permissions=enforce_permissions,
-        enforce_confirmation=enforce_confirmation,
-    )
     controller_provider = None
     controller_configuration = None
     if selector is SearchSelector.LLM:
@@ -377,6 +395,13 @@ def run(
         }
     )
     conditions.require_phase_0_5()
+    adapter = _arena_adapter(
+        target_provider,
+        conditions.target,
+        defense=defense,
+        enforce_permissions=enforce_permissions,
+        enforce_confirmation=enforce_confirmation,
+    )
 
     run_record = Run(
         target_name=policy.target_name,
@@ -548,8 +573,9 @@ def resume(
         typer.secho(f"恢复配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(ExitCode.BAD_CONFIG) from exc
 
-    adapter = ArenaAdapter(
+    adapter = _arena_adapter(
         target_provider,
+        conditions.target,
         defense=defense,
         enforce_permissions=conditions.arena.enforce_permissions,
         enforce_confirmation=conditions.arena.enforce_confirmation,
@@ -708,6 +734,110 @@ def gate_report(
     typer.echo(result.verdict.value)
 
 
+@app.command(name="gate-plan")
+def gate_plan(
+    max_attempts: Annotated[
+        int,
+        typer.Option(help="正式 Run 的安全 attempt 上限；必须在开跑前显式冻结，不能沿用默认 20"),
+    ],
+    seed_plan_json: Annotated[Path, typer.Option(help="冻结的 12+4 seed plan JSON")],
+    db: Annotated[str, typer.Option(help="正式矩阵专用 SQLite 连接串；不得混用开发数据库")],
+    run_out: Annotated[Path, typer.Option(help="每个正式 Run 的报告目录")] = Path("runs/phase-0-5"),
+    out: Annotated[Path, typer.Option(help="只读执行清单 JSON 输出路径")] = Path(
+        "runs/gate-plan.json"
+    ),
+) -> None:
+    """生成 72 个主单元 + 24 个备用单元的命令清单，但绝不执行它们。"""
+    try:
+        seed_plan = SeedPlan.model_validate_json(seed_plan_json.read_text(encoding="utf-8"))
+        plan: GatePlan = build_gate_plan(
+            seed_plan,
+            max_attempts=max_attempts,
+            database_url=db,
+            report_directory=str(run_out),
+        )
+    except (OSError, ValueError) as exc:
+        typer.secho(f"Gate plan 配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG) from exc
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
+    typer.echo(f"Gate plan: {out}")
+    typer.echo(f"primary {plan.primary_cells} cells; reserve {plan.reserve_cells} cells (disabled)")
+    typer.echo("只生成清单；未调用 Provider、未执行任何正式 Run。")
+
+
+@app.command(name="validate-paths")
+def validate_paths(
+    seed_plan_json: Annotated[Path, typer.Option(help="冻结的 12+4 seed plan JSON")],
+    db: Annotated[str, typer.Option(help="正式 Phase 0.5 专用 SQLite 连接串")],
+    out: Annotated[Path, typer.Option(help="冻结 replay validation JSON 输出路径")] = Path(
+        "runs/validation.json"
+    ),
+    repeats: Annotated[int, typer.Option(help="每条攻击路径重放次数；正式 Gate 必须为 5")] = 5,
+) -> None:
+    """只重放正式 320k 前缀中的攻击路径，不重跑 Generator 或 Controller。"""
+    if repeats != 5:
+        typer.secho("配置被拒绝:正式 Gate 的 repeats 必须固定为 5。", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG)
+    try:
+        seed_plan = SeedPlan.model_validate_json(seed_plan_json.read_text(encoding="utf-8"))
+        with RunStore(db) as store:
+            evidence = select_validation_evidence(store, seed_plan)
+    except (OSError, ValueError) as exc:
+        typer.secho(f"Validation 配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG) from exc
+
+    reference = evidence.runs[0].experiment_conditions
+    if reference is None:
+        raise AssertionError("formal Gate run must carry experiment conditions")
+    if reference.arena.defense not in {level.value for level in DefenseLevel}:
+        typer.secho("Validation 配置被拒绝:未知的冻结 defense。", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG)
+    try:
+        target, target_configuration = load_target()
+    except ProviderConfigError as exc:
+        typer.secho(f"Target 配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG) from exc
+    if target_configuration != reference.target:
+        asyncio.run(target.aclose())
+        typer.secho(
+            "Validation 配置被拒绝:当前 Target 配置与正式 Run 冻结快照不一致。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(ExitCode.BAD_CONFIG)
+
+    adapter = _arena_adapter(
+        target,
+        target_configuration,
+        defense=DefenseLevel(reference.arena.defense),
+        enforce_permissions=reference.arena.enforce_permissions,
+        enforce_confirmation=reference.arena.enforce_confirmation,
+    )
+
+    async def _validate_and_close() -> ValidationReport:
+        try:
+            return await validate_attack_paths(
+                adapter=adapter,
+                scorer=Level1Scorer(SUPPORT_AGENT_POLICY),
+                attempts=evidence.attempts,
+                findings=evidence.findings,
+                repeats=repeats,
+            )
+        finally:
+            await target.aclose()
+
+    try:
+        report = asyncio.run(_validate_and_close())
+    except ValueError as exc:
+        typer.secho(f"Validation 执行被拒绝:{exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG) from exc
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+    typer.echo(f"Validation: {out}")
+    typer.echo(f"paths {len(report.results)} × {repeats} replays")
+
+
 @app.command(name="controller-controls")
 def controller_controls(
     out: Annotated[
@@ -779,8 +909,9 @@ def controls(
 
     def _make(enforce_permissions: bool) -> ArenaAdapter:
         # 阳性对照必须在**移除防御措辞**的靶场上跑 —— 那正是 DefenseLevel.NONE 的用途。
-        return ArenaAdapter(
+        return _arena_adapter(
             pair.target,
+            pair.target_configuration,
             defense=DefenseLevel.NONE,
             enforce_permissions=enforce_permissions,
         )
@@ -791,7 +922,12 @@ def controls(
             # 阴性对照用**正常配置**跑:它要回答的是"日常设置下会不会误报",
             # 在无防御的靶场上问这个问题没有意义。
             negative = await run_negative_control(
-                ArenaAdapter(pair.target, defense=DefenseLevel.STANDARD), scorer
+                _arena_adapter(
+                    pair.target,
+                    pair.target_configuration,
+                    defense=DefenseLevel.STANDARD,
+                ),
+                scorer,
             )
             return ControlsReport(
                 positive=positive,
@@ -857,7 +993,6 @@ def attacker_control(
         typer.secho(f"配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(ExitCode.BAD_CONFIG) from exc
 
-    generator = LLMMutationGenerator(attacker, model=attacker.model)
     attacker_configuration = getattr(
         attacker,
         "run_configuration",
@@ -872,6 +1007,12 @@ def attacker_control(
             input_usd_per_mtok=0,
             output_usd_per_mtok=0,
         ),
+    )
+    generator = LLMMutationGenerator(
+        attacker,
+        model=attacker_configuration.model,
+        temperature=attacker_configuration.temperature,
+        max_tokens=attacker_configuration.max_tokens,
     )
     attacker_conditions = AttackerControlConditions.build(
         attacker=attacker_configuration,
@@ -942,7 +1083,22 @@ def _summarise(run_record: Run, findings: list, paths: dict[str, Path]) -> None:
 
 
 def main() -> None:
+    _ensure_cli_output_encoding()
     app()
+
+
+def _ensure_cli_output_encoding() -> None:
+    """在旧 Windows code page 下也保证 Typer/Rich help 不因 Unicode 崩溃。"""
+    probe = "RedCell —— 授权测试"
+    for stream in (sys.stdout, sys.stderr):
+        encoding = getattr(stream, "encoding", None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not encoding or reconfigure is None:
+            continue
+        try:
+            probe.encode(encoding)
+        except (LookupError, UnicodeEncodeError):
+            reconfigure(encoding="utf-8", errors="replace")
 
 
 if __name__ == "__main__":

@@ -1,22 +1,29 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 
 import pytest
 from typer.testing import CliRunner
 
+from redcell.arena.support_agent import DefenseLevel
 from redcell.budget import BudgetLimits
-from redcell.cli import OFFLINE_NOTICE, ExitCode, app
+from redcell.cli import OFFLINE_NOTICE, ExitCode, _arena_adapter, app
 from redcell.config import ProviderConfigError
 from redcell.llm.scripted import ScriptedProvider
 from redcell.protocols import (
+    AdapterInput,
     AdapterOutput,
     Evidence,
     Finding,
     ImpactBasis,
     ImpactStatus,
+    Message,
     ObservabilityLevel,
     ReproductionContext,
+    Role,
     SignalChannel,
     SignalScore,
     ToolCall,
@@ -85,6 +92,129 @@ def test_run_completes_end_to_end_and_writes_both_reports(workspace) -> None:
     assert len(run_dirs) == 1
     assert (run_dirs[0] / "report.json").exists()
     assert (run_dirs[0] / "report.html").exists()
+
+
+@pytest.mark.asyncio
+async def test_arena_adapter_uses_the_same_target_model_and_temperature_as_the_snapshot() -> None:
+    seen: list[tuple[str | None, float, int | None]] = []
+
+    class RecordingProvider(ScriptedProvider):
+        async def complete(self, messages, *, model=None, temperature=0.0, max_tokens=None):
+            seen.append((model, temperature, max_tokens))
+            return await super().complete(
+                messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+
+    configuration = ProviderRunConfiguration(
+        provider="recording",
+        base_url="https://target.example.invalid/v1",
+        model="frozen-target-model",
+        temperature=0.23,
+        max_tokens=512,
+        rpm=0,
+        max_concurrency=1,
+        input_usd_per_mtok=0,
+        output_usd_per_mtok=0,
+    )
+    adapter = _arena_adapter(
+        RecordingProvider(default="I can help."),
+        configuration,
+        defense=DefenseLevel.STANDARD,
+    )
+
+    await adapter.send(
+        AdapterInput(
+            messages=[Message(role=Role.USER, content="Where is my order?")], actor="customer_a"
+        )
+    )
+
+    assert seen == [("frozen-target-model", 0.23, 512)]
+
+
+def test_module_help_survives_a_legacy_windows_output_encoding(workspace) -> None:
+    environment = os.environ.copy()
+    environment["PYTHONIOENCODING"] = "cp1252"
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "redcell.cli", "--help"],
+        cwd=workspace,
+        env=environment,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr.decode("utf-8", errors="replace")
+    assert b"Usage" in completed.stdout
+
+
+def test_gate_plan_generates_primary_and_disabled_reserve_cells_without_running(
+    workspace,
+) -> None:
+    seed_path = workspace / "seed-plan.json"
+    seed_path.write_text(
+        '{"primary":[100,101,102,103,104,105,106,107,108,109,110,111],"reserve":[112,113,114,115]}',
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "gate-plan",
+            "--seed-plan-json",
+            str(seed_path),
+            "--max-attempts",
+            "1000",
+            "--db",
+            "sqlite:///runs/phase-0-5.db",
+            "--out",
+            "gate-plan.json",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CLEAN, result.output
+    payload = json.loads((workspace / "gate-plan.json").read_text(encoding="utf-8"))
+    assert payload["primary_cells"] == 72
+    assert payload["reserve_cells"] == 24
+    assert len(payload["cells"]) == 96
+    assert all(cell["enabled_initially"] for cell in payload["cells"][:72])
+    assert not any(cell["enabled_initially"] for cell in payload["cells"][72:])
+    assert all(cell["max_total_tokens"] == 320000 for cell in payload["cells"])
+    assert all("sqlite:///runs/phase-0-5.db" in cell["argv"] for cell in payload["cells"])
+    assert "未调用 Provider" in result.output
+
+
+def test_validation_rejects_an_incomplete_matrix_before_loading_target(
+    workspace, monkeypatch
+) -> None:
+    seed_path = workspace / "seed-plan.json"
+    seed_path.write_text(
+        '{"primary":[100,101,102,103,104,105,106,107,108,109,110,111],"reserve":[112,113,114,115]}',
+        encoding="utf-8",
+    )
+    target_loaded = False
+
+    def _unexpected_load():
+        nonlocal target_loaded
+        target_loaded = True
+        raise AssertionError("target must not be loaded for an incomplete matrix")
+
+    monkeypatch.setattr("redcell.cli.load_target", _unexpected_load)
+    result = runner.invoke(
+        app,
+        [
+            "validate-paths",
+            "--seed-plan-json",
+            str(seed_path),
+            "--db",
+            _db(workspace),
+        ],
+    )
+
+    assert result.exit_code == ExitCode.BAD_CONFIG, result.output
+    assert not target_loaded
 
 
 def test_gate_report_exports_incomplete_state_for_empty_store(workspace) -> None:
@@ -350,6 +480,44 @@ def test_attacker_control_writes_every_generated_message_for_manual_review(
     detail = json.loads((workspace / "control" / "attacker-control-seed9.json").read_text("utf-8"))
     assert len(detail["samples"]) == 7
     assert all(len(group["messages"]) == 2 for group in detail["samples"])
+
+
+def test_attacker_control_uses_its_recorded_temperature_and_token_limit(
+    workspace, monkeypatch
+) -> None:
+    class RecordingAttacker(_FakeAttacker):
+        def __init__(self) -> None:
+            super().__init__(per_call=_clustered_messages(2))
+            self.seen: list[tuple[str | None, float, int | None]] = []
+            self.run_configuration = ProviderRunConfiguration(
+                provider="recording",
+                base_url="https://attacker.example.invalid/v1",
+                model="frozen-attacker",
+                temperature=0.42,
+                max_tokens=1234,
+                rpm=60,
+                max_concurrency=1,
+                input_usd_per_mtok=0,
+                output_usd_per_mtok=0,
+            )
+
+        async def complete(self, messages, *, model=None, temperature=0.0, max_tokens=None):
+            self.seen.append((model, temperature, max_tokens))
+            return await super().complete(
+                messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+
+    attacker = RecordingAttacker()
+    _install_attacker(monkeypatch, attacker)
+
+    result = runner.invoke(app, ["attacker-control", "--samples", "2", "--out", "control"])
+
+    assert result.exit_code == ExitCode.CLEAN, result.output
+    assert attacker.seen
+    assert set(attacker.seen) == {("frozen-attacker", 0.42, 1234)}
 
 
 def test_attacker_control_fails_when_every_strategy_yields_the_same_wording(

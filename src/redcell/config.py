@@ -194,6 +194,16 @@ def load_controller() -> tuple[OpenAICompatibleProvider, ProviderRunConfiguratio
     return settings.build(name="controller"), settings.run_configuration()
 
 
+def load_target() -> tuple[OpenAICompatibleProvider, ProviderRunConfiguration]:
+    """构造 Target 的独立连接与不含凭据的运行快照。
+
+    Replay validation 只会重放已冻结的攻击路径，不应顺带创建 attacker 或
+    Controller 连接。把单独加载入口放在配置层，也避免 CLI 复制 env 解析规则。
+    """
+    settings = TargetSettings()
+    return settings.build(name="target"), settings.run_configuration()
+
+
 def load_providers() -> ProviderPair:
     """从 env / `.env` 读出并建好两个 provider。配置不全时抛 ProviderConfigError。"""
     target_settings = TargetSettings()

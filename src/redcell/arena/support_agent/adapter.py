@@ -57,6 +57,7 @@ class ArenaAdapter(TargetAdapter):
         codec: ToolCallCodec | None = None,
         model: str | None = None,
         temperature: float = 0.7,
+        max_tokens: int | None = None,
         max_tool_iterations: int = MAX_TOOL_ITERATIONS,
     ) -> None:
         self._provider = provider
@@ -64,6 +65,7 @@ class ArenaAdapter(TargetAdapter):
         self._codec = codec or TextToolCallCodec()
         self._model = model
         self._temperature = temperature
+        self._max_tokens = max_tokens
         self._max_tool_iterations = max_tool_iterations
         self._tools = SupportAgentTools(
             enforce_permissions=enforce_permissions,
@@ -132,6 +134,7 @@ class ArenaAdapter(TargetAdapter):
                 messages,
                 model=self._model,
                 temperature=self._temperature,
+                max_tokens=self._max_tokens,
             )
             prompt_tokens += response.prompt_tokens
             completion_tokens += response.completion_tokens

@@ -7,6 +7,27 @@
 
 ## 2026-08-10 · Phase 0.5 test readiness preparation
 
+### 2026-08-10 14:23 AEST · Step 48 · 测试准备全量门与剩余协议边界复核
+
+- **进度:** 完成 test-readiness 全量回归与逐项 diff 复核；新增入口仍只准备证据链，没有生成 seed plan、没有打开正式数据库、没有调用真实 Provider。进一步确认 `ValidationReport` 当前只保存 `(run_id, attack_path)`、次数与用量，虽然新 CLI 在执行前会要求当前 Target 快照等于正式 Run，但冻结 JSON 本身尚未携带 Target/Gate context 绑定，单独搬运后无法由 `gate-report` 自证来源。
+- **决策与理由:** 不在本步骤擅自扩展 Validation 协议。建议把 Target 配置快照与所选 Gate context fingerprint 写入报告并由 Gate 强校验；替代方案是只写单一摘要，但其字段覆盖范围更难人工复核。此项属于难以回退的证据协议，按协作规则留给作者与其他四项口径一起确认。
+- **验证证据:** `.venv\Scripts\python.exe -m pytest -p no:cacheprovider` 为 **574 passed in 33.99s**；`ruff check .` 全部通过；`ruff format --check .` 为 **114 files already formatted**；`black --check src tests` 为 **104 files would be left unchanged**；`git diff --check` 通过。相较本轮开始的 565 项，新增 9 项覆盖参数透传、Windows 编码、计划生成与 replay 选择拒绝语义。
+- **剩余状态:** IMPLEMENTATION READY / EXPERIMENT INCOMPLETE。待作者一次性确认五项：攻击路径解释、factorial 对照均值、cached-input 未知价格、正式 `max_attempts`、Validation 证据绑定；另需冻结 golden fixture 集与具体 12+4 seed。确认前正式测试不得起跑。
+
+### 2026-08-10 14:18 AEST · Step 47 · 正式测试入口审计与非决策性缺口修复
+
+- **进度:** 对 Phase 0.5 的 CLI、Gate 消费契约、Run 条件快照、replay validator 与 Windows 入口做开跑前审计。新增只生成不执行的 `gate-plan`（72 primary + 24 默认禁用 reserve，强制显式 `max_attempts` 与专用 SQLite）、fail-closed 的 `validate-paths`（只重放 12 个有效 paired block 的 320k 路径，不加载 Attacker/Controller），并新增 `docs/PHASE0_5_TEST_RUNBOOK.md` 串起冻结、对照、正式矩阵、replay 与最终 Gate 的顺序。
+- **发现与根因:** (1) `run`、`resume` 与在线 controls 构造 `ArenaAdapter` 时没有传入已落盘的 Target model/temperature/max_tokens；Adapter 会使用 `model=None`、默认 temperature 0.7 且不发送 max_tokens，导致实验快照可能与真实请求不一致。(2) `attacker-control` 虽记录 Attacker 配置，实际 Generator 只传 model，非默认 temperature/max_tokens 同样可能漂移。(3) Windows CP1252 终端执行 `python -m redcell.cli --help` 会在 Rich 输出 Unicode 时抛 `UnicodeEncodeError`。(4) `gate-report` 消费 validation JSON，但 CLI 没有生成入口；正式矩阵也没有能先审计、后逐 cell 执行的清单。(5) 默认 `--budget 20` 按 Phase 0 中位数约在 64k Token 左右先触发，无法承担必须运行到 320k 的正式 cell。
+- **解决方式:** 用单一 `_arena_adapter` 将实际 Target 调用的 model/temperature/max_tokens 绑定到 `ProviderRunConfiguration`，并覆盖 run/resume/positive/negative controls；Attacker control 同样从其冻结快照构造 Generator；离线快照 model 同步为真实的 `scripted-offline`。CLI 入口仅在输出流无法编码帮助文本时切换 UTF-8。矩阵计划器不读 `.env`、不打开 DB、不调用 Provider；replay 先验证 12×6 完整性、重复/计划外 seed、320k 前缀与 Gate context，再加载与冻结快照完全相同的 Target。`max_attempts` 属预算核心口径，工具只强制显式输入，不替作者选值。
+- **验证证据:** 变更后 CLI/analysis/validator 定向回归先为 **36 passed**；新增 Target/Attacker 配置透传、CP1252 help、96-cell 计划与 validation 早拒绝测试后，CLI 与相关 Adapter/Gate/validator 定向回归最终为 **69 passed**；新增 Gate validation 选择/计划外 seed 拒绝测试为 **2 passed**。CP1252 与默认终端的真实 `python -m redcell.cli --help` 均退出 0。全量四道门待本步骤收尾时执行。
+- **剩余状态:** IN PROGRESS。攻击路径解释、factorial 对照均值、cached-input 未知价格、正式 `max_attempts` 与 Level-1 golden fixture 集仍需作者冻结；确认前不调用 Provider、不执行正式 seed。Golden 消费契约已存在，但生成入口刻意不在未确认 fixture 范围下擅自实现。
+
+### 2026-08-10 14:11 AEST · Step 46 · PR #21 合并与测试准备分支启动
+
+- **进度:** 基线指纹修正文档/测试补丁已通过 ready PR [#21](https://github.com/Sumire-no-kai/RedCell/pull/21) 以 merge commit 合入受保护的 `master`；PR head 为 `4ebaffa`，合并提交为 `2b4d9f1`。随后从该主干创建 `fix/phase-0-5-test-readiness`，开始只读审计正式测试路径。
+- **验证证据:** 合并前 PR 为 `MERGEABLE/CLEAN`、无 review thread；使用精确 head 保护执行合并，刷新后确认 PR 为 `MERGED` 且 head 是 `origin/master` 的祖先。合并前四道本地门见 Step 45；远端没有 status checks，未把“无 checks”写成 CI 通过。
+- **剩余状态:** DONE（PR #21 集成）；正式 Phase 0.5 Gate 仍为 `INCOMPLETE`，未调用 Provider 或正式 seed。
+
 ### 2026-08-10 14:05 AEST · Step 45 · 基线指纹补丁复核与整合准备
 
 - **进度:** 作者要求先统一仓库状态并准备测试。当前 `docs/phase-0-baseline-fingerprint-note` 相对 `origin/master` 仅包含 `docs/PHASE0_BASELINE.md`、本日志与 `tests/test_phase_0_5_conditions.py` 三个文件；补丁修正历史指纹的字面承诺，并用两项测试锁定已登记的 schema 形状差异，没有启动 Provider、preflight 或正式 seed。

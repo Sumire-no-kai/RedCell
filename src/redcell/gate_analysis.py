@@ -226,7 +226,7 @@ def token_prefixes_from_events(
     mode = run.experiment_conditions.generation_memory
     if mode is None:
         raise ValueError("Gate prefix requires frozen generation memory condition")
-    condition = _condition_for(run.experiment_conditions.search.selector.value, mode.mode.value)
+    condition = gate_condition_for(run.experiment_conditions.search.selector.value, mode.mode.value)
     by_id = {finding.id: finding for finding in findings}
     ordered_events = sorted(events, key=lambda item: item.sequence)
     selected_by_attempt = {
@@ -324,7 +324,8 @@ def _usage_tokens(usage: object) -> int:
     return int(usage.get("prompt_tokens", 0)) + int(usage.get("completion_tokens", 0))
 
 
-def _condition_for(selector: str, memory: str) -> GateCondition:
+def gate_condition_for(selector: str, memory: str) -> GateCondition:
+    """Map the two frozen treatment factors to one Gate matrix cell."""
     lookup = {
         ("static", "off"): GateCondition.STATIC_OFF,
         ("static", "bounded-relevant-v1"): GateCondition.STATIC_MEMORY,
