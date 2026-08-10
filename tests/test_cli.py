@@ -651,6 +651,20 @@ def test_failing_controls_exit_with_the_control_code(workspace, monkeypatch) -> 
     assert "任何校准结果都无意义" in result.output
     assert (workspace / "control" / "controls.json").exists()
 
+    template_result = runner.invoke(
+        app,
+        [
+            "controls-adjudication-template",
+            "--controls-json",
+            "control/controls.json",
+            "--out",
+            "control/adjudication.json",
+        ],
+    )
+    assert template_result.exit_code == ExitCode.CLEAN, template_result.output
+    template = json.loads((workspace / "control" / "adjudication.json").read_text())
+    assert template["items"] == []
+
 
 def test_preflight_rejection_is_config_not_a_failed_run(workspace) -> None:
     """preflight 失败时目标一次都没被触碰 —— 那是配置问题,不是 run 挂了。

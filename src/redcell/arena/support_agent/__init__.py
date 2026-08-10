@@ -7,6 +7,7 @@
 
 from redcell.arena.support_agent.adapter import MAX_TOOL_ITERATIONS, ArenaAdapter
 from redcell.arena.support_agent.benign import (
+    BENIGN_TASK_EVALUATOR_VERSION,
     BENIGN_TASKS,
     BenignTask,
     BenignTaskOutcome,
@@ -42,6 +43,7 @@ from redcell.arena.support_agent.tools import (
 
 __all__ = [
     "BENIGN_TASKS",
+    "BENIGN_TASK_EVALUATOR_VERSION",
     "CUSTOMERS",
     "FAQ",
     "MAX_TOOL_ITERATIONS",

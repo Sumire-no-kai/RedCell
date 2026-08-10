@@ -5,6 +5,45 @@
 
 ---
 
+## 2026-08-11 · 阴性三态裁决与 utility 专用指纹实现
+
+### 2026-08-11 00:07 AEST · Step 55 · 裁决 schema、Gate 消费与双指纹机器合同完成
+
+- **进度:** 实现独立 `controls-adjudication-v1` schema：每项用原 controls 的 task ID、violation index 与 Finding signature 精确定位，默认 `unresolved`；已决项必须附独立 evidence summary，重复 occurrence 被拒绝。raw `controls.json` 继续保留旧的“零 Finding”布尔结果和完整违规明细，CLI 只生成未决模板，不替复核者自动归因。Gate 新增 raw / detector false positive / target spontaneous violation / unresolved 及缺失、额外、错配统计：检测器误报硬失败，未决或缺失证据保持 `INCOMPLETE`，错指纹/错签名与检测器误报判 `EXPERIMENT_INVALID`，已确认目标自发违规仅单列并进入 Limitations。
+- **utility 双指纹:** 完整 `conditions_fingerprint` 的字段与历史定义保持不变；另生成 `utility-context-v1` 投影，包含 Target 行为字段、Policy version、阴性 Arena、版本化 evaluator、10 条完整 benign task 合同和 `negative_repeats`，排除价格、RPM、并发度、阳性配置和 `positive_repeats`。冻结的 Phase 0 utility context digest 为 `461ccdefb81d6de341549cd84bb2b9264e527f19fd5028fec465511b4690467d`；Gate 仍使用历史 37/50、总体下限 32/50 与逐任务至少 4/5，不用 34/39/33 下调基线。
+- **兼容性取舍与理由:** 最初曾考虑把 policy/scorer/task contract 作为新字段塞回 `ControlsConditions`，但这会无端改变完整 conditions 指纹，使 2026-08-10 的 n=20 原始报告仅因新代码 schema 而无法读取。最终撤回这些序列化字段：完整指纹继续回答“这是否同一份 controls 条件”，utility 投影在计算时从版本化 Policy 和注册任务合同取值，回答“正常任务完成率是否仍可与 37/50 比”。实测 n=20 报告仍以原 `7c698447…` 指纹成功读取；08-07 旧报告已有的历史 schema 差异不被静默修补，基线可比性由新冻结投影明确承担。
+- **CLI / 文档:** 新增 `controls-adjudication-template` 和 `gate-report --controls-adjudication-json`；runbook 明确 raw 文件不可修改、逐项看 Trace、不得按 task/category 批量豁免。同步修正 benign 模块与 CONCEPTS 中残留的“任一 Finding 自动等于误报”表述；PRD、CALIBRATION、CONCEPTS、PHASE0_BASELINE 与 runbook 均记录三态、双指纹、baseline-ratchet 风险及替代方案取舍。
+- **遇到的问题与解决:** 定向 Ruff format 首次发现 5 个被补丁写入 LF 片段的 Python 文件；按仓库 `.gitattributes` 的 `*.py text eol=lf` 运行 Ruff formatter 统一，而不是依赖会容忍混合行尾的 Black。定向 lint 首次另发现一处新测试 import 排序，修正后复跑通过。没有改写或提交任何 `runs/` 产物。
+- **验证证据:** 三态/utility/CLI/Gate 定向回归 **66 passed**；定向 `ruff check` 通过；定向 `ruff format --check` 为 **7 files already formatted**。机器测试覆盖：未决阻塞、缺失阻塞、签名错配、检测器误报硬失败、目标违规单列通过 specificity、已决项缺 evidence 拒绝、重复 occurrence 拒绝、utility 缺失为 INCOMPLETE、utility context 漂移为 EXPERIMENT_INVALID、价格/RPM/并发/阳性条件不改变 utility 指纹、Target temperature 与阴性重复数会改变指纹。
+- **剩余状态:** IMPLEMENTATION DONE / FULL GATES TODO。未调用 Provider、未重跑 controls、未启动 72-cell；下一步做全量四道门、diff/行尾/敏感产物复核，然后按分支 workflow 提交、推送、提 PR 并合并。
+
+### 2026-08-11 00:10 AEST · Step 56 · 全量四道门与混合行尾复核通过
+
+- **进度:** 对本轮 13 个改动文件完成 diff 自审、全量回归和仓库规定的四道合并门；同时检查 `git diff --check` 与逐文件 CRLF/bare-LF 计数。没有发现把 `runs/`、凭据、内部 PRD 或本地产物纳入跟踪的改动。
+- **遇到的问题与解决:** 补丁工具在既有 CRLF Markdown 中写入 LF，首次扫描发现 5 份文档混合行尾，并发现 CONCEPTS 一处行尾空格；先用精确补丁移除空格，再只对这 5 份 Markdown 做 CRLF 机械归一。所有本轮 Python 文件按 `.gitattributes` 统一为 LF。复扫无 mixed/裸 CR，`git diff --check` 通过；这一步保留为独立证据，因为 Black 本身不能抓混合行尾。
+- **验证证据:** `.venv\Scripts\python.exe -m pytest -p no:cacheprovider` 为 **605 passed in 68.57s**；`python -m ruff check .` 通过；`python -m ruff format --check .` 为 **120 files already formatted**；`python -m black --check src tests` 为 **110 files would be left unchanged**；`git diff --check` 通过。全程未调用 Provider。
+- **剩余状态:** LOCAL GATES PASSED / GIT IN PROGRESS。下一步仅暂存这 13 个源代码、测试和公开文档文件，明确排除 ignored `PRD.md` 与 `runs/`，然后提交、推送、创建 ready PR、核对 head 并合并。
+
+## 2026-08-10 · 阴性三态裁决与 utility 专用可比性指纹
+
+### 2026-08-10 23:47 AEST · Step 53 · 作者冻结三态判定与双指纹方案
+
+- **作者决定:** 按讨论建议实施：阴性 Finding 不再自动等同“检测器误报”，而是通过独立、版本化裁决分成 `detector_false_positive`、`target_spontaneous_violation`、`unresolved`。检测器误报仍必须为零；目标自发违规单独报告；缺失裁决或 `unresolved` 均 fail-closed。utility 保留 2026-08-07 的 **37/50** 与逐任务基线，不用已经看到的 34/39/33 重新下调门槛；完整 controls 指纹继续审计整份产物，另加只覆盖 utility 因果相关字段的专用指纹。
+- **这是什么（类比）:** 一张烟雾报警记录不能只写“响了”，还要由独立复核区分“报警器乱叫”“房间真的着火”和“证据不足”；第三类不可省，否则报警器会变成自己给自己批卷。双指纹像“整车 VIN”和“发动机测试条件单”：VIN 记录整车所有配置，utility 条件单只比较会改变正常任务完成率的部件，换价签或增加另一项测试的重复数不能伪装成发动机变化。
+- **为什么需要:** 2026-08-10 的 `legitimate_refund` Trace 确实出现同回合重复退款调用，Level-1 判定正确；旧规则却把它记作误报，约 7% 的目标自发行为会令 5 次阴性约有 30% 概率随机失败。另一方面，`positive_repeats: 3→20` 与 cached-input 单价只改变完整指纹，不影响阴性 utility；若因此重采并替换 37/50，会在已经看到近期较低观测后产生 baseline ratchet。
+- **替代方案与否决理由:** 不选“任何 Finding 继续失败”，因为它无法指出该修检测器还是目标；不为确认类或单一 task 开豁免，因为特例会制造静默漏报；不让 Finding 自动证明自己是目标违规，因为这是循环自证；不直接缩窄或替换完整指纹，因为会损失审计身份；不以新一轮 controls 覆盖 37/50，因为会抹掉历史保护线。新 controls 只作为当前 preflight 观测；只有 utility 专用指纹也发生行为字段变化时，才允许建立并存、另命名的新环境基线，旧基线不删除。
+- **在 RedCell 中的角色:** 独立 Level-1 golden 继续锁确定性检测器回归；在线阴性 controls 同时观察真实目标行为与 utility。裁决清单必须绑定原 controls 条件指纹，并逐项覆盖全部原始违规；Gate 对检测器误报、未决、额外/缺失裁决一律拒绝，对已确认的目标自发违规只计数并写入报告/Limitations，不把它改写成“10/10 干净”。
+- **面试答法与局限:** 若问“是不是对照失败后改规则让它过”，答：旧 9/10 结果永久保留；新报告同时呈现 raw Finding=1、detector FP=0、target violation=1，且通用三态规则适用于所有任务，不能自动豁免。若问“为什么不重新冻 utility”，答：价格和阳性重复数不在 utility 的因果路径上，重采替换反而可能下调基线；因此保留历史尺子并增加用途专一的可比性投影。局限是目标违规目前只有人工/独立 oracle 裁决，不能据一次观测估稳定发生率或事后设通过阈值。
+- **验证前审计:** 当前分支 `feat/gate-preflight` 工作树干净；历史正式 utility 报告为 37/50、`positive_repeats=3`、cached-input 价格缺失，当前 n=20 报告为 33/50、`positive_repeats=20`、cached-input 价格 0.01；Target 行为字段、10 个 task ID 与 `negative_repeats=5` 相同。`phase0-baseline` 与当前 benign task 文件语义 diff 为空（对象哈希差异来自工作树行尾）。
+- **剩余状态:** IN PROGRESS。先更新 PRD/CALIBRATION/CONCEPTS/基线与 runbook，再实现独立裁决 schema、Gate 三态消费、utility 专用指纹及机器测试；本步骤没有调用 Provider、没有重跑 controls、没有触碰 72-cell。
+
+### 2026-08-10 23:51 AEST · Step 54 · 文档合同先于实现冻结
+
+- **进度:** 已在内部 PRD 的 Phase 0.5 保护线、`docs/CALIBRATION.md`、`docs/CONCEPTS.md`、`docs/PHASE0_BASELINE.md` 与测试 runbook 中统一写入三态裁决、双指纹、历史双写和 baseline-ratchet 防护。runbook 规定 raw `controls.json` 不可手改，另生成绑定原条件指纹的 adjudication 文件；每个 occurrence 默认 `unresolved`，Gate 只接受逐项独立证据裁决。
+- **为什么先写文档:** 这是评分/判定与回归基线协议，若代码先落地、文字随后“解释”，实现细节就会反过来替作者决定产品口径。先冻结合同可让后续测试直接验证：误报硬失败、目标违规单列、未决阻塞；完整指纹变化与 utility 因果可比性互不冒充。
+- **历史不改写:** 文档明确保留 2026-08-10 旧规则阴性 9/10 和当天 34/39/33 三轮 utility；新口径只能追加 raw=1 / detector FP=0 / target violation=1 的归因，不能称“10/10 干净”。37/50、32/50 下限与逐任务基线继续冻结，新 controls 只作当前观测。
+- **剩余状态:** DOCUMENT CONTRACT DONE / CODE IN PROGRESS。下一步实现 schema、CLI 模板、Gate 指标/故障码和 utility 指纹机器锁；仍无 Provider 调用。
+
 ## 2026-08-10 · Phase 0.5 test readiness preparation
 
 ### 2026-08-10 14:55 AEST · Step 54 · PR #22 精确 head 合并验证
