@@ -23,6 +23,13 @@
 - **提交范围审计:** 预期会提交 13 个已跟踪文件；内部 `PRD.md` 同步了作者裁决理由但仍被 ignore，绝不推送；没有 `.env`、凭据、Trace、controls 结果或正式矩阵数据。当前分支的两项既有提交为 `e68f844`（runner/loadability）和 `21d56b6`（reserve/evidence）；本步骤只补作者签字及执行语义的 P0 修复和测试。
 - **剩余状态:** LOCAL GATES PASSED / GIT IN PROGRESS。下一步暂存明确文件、提交、推送、创建 ready PR，核对 mergeable/head 后合并；正式 controls 与 72-cell 仍需要真实 Provider，未在本步骤授权或执行。
 
+### 2026-08-11 10:03 AEST · Step 60 · PR #26 精确 head 合并
+
+- **进度:** 当前分支的三个提交（matrix runner/历史产物可加载性、reserve 追加与证据卷宗、作者签字和执行语义修复）已推送并以 ready PR [#26](https://github.com/Sumire-no-kai/RedCell/pull/26) 合并至受保护的 `master`。
+- **合并证据:** PR base=`master`、head=`feat/gate-matrix-runner`、精确 head 为 `6b9f52e1446bee4e127231acc61d5b0a5f0157f0`；合并前状态 `MERGEABLE/CLEAN`，远端没有 status checks，未把“无 checks”写成 CI 通过。使用 `--match-head-commit` 合并后 GitHub 返回 `MERGED`，merge commit 为 `2ec98b2858bba3c8787572c69cc0706034e885b4`；`git merge-base --is-ancestor 6b9f52e... origin/master` 退出 0。
+- **范围与边界:** 13 个跟踪文件进入 PR；内部 `PRD.md`、`AGENTS.md`、凭据与所有 `runs/` 产物均未提交。624 项本地 pytest 和三道格式门的证据见 Step 59。没有调用 Provider、没有重跑 controls、没有执行 72-cell。
+- **剩余状态:** MERGED / MATRIX EXECUTION CONTRACT READY / ONLINE EVIDENCE NOT YET COLLECTED。下一步仍是按 runbook 先运行真实 controls；若出现 raw Finding，按作者已签字的证据条件独立裁决，只有无未决项且其他 preflight 均通过才能执行正式矩阵。
+
 ## 2026-08-11 · 阴性三态裁决与 utility 专用指纹实现
 
 ### 2026-08-11 00:07 AEST · Step 55 · 裁决 schema、Gate 消费与双指纹机器合同完成
