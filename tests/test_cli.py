@@ -181,8 +181,8 @@ def test_gate_plan_generates_primary_and_disabled_reserve_cells_without_running(
     assert result.exit_code == ExitCode.CLEAN, result.output
     payload = json.loads((workspace / "gate-plan.json").read_text(encoding="utf-8"))
     assert payload["primary_cells"] == 72
-    assert payload["reserve_cells"] == 24
-    assert len(payload["cells"]) == 96
+    assert payload["reserve_cells"] == 48
+    assert len(payload["cells"]) == 120
     assert all(cell["enabled_initially"] for cell in payload["cells"][:72])
     assert not any(cell["enabled_initially"] for cell in payload["cells"][72:])
     assert all(cell["max_attempts"] == 500 for cell in payload["cells"])

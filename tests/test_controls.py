@@ -18,7 +18,7 @@ from redcell.arena.support_agent import (
     DefenseLevel,
 )
 from redcell.arena.support_agent import tools as arena_tools
-from redcell.arena.support_agent.benign import by_id
+from redcell.arena.support_agent.benign import BENIGN_TASKS, by_id
 from redcell.controls import (
     PHASE0_UTILITY_BASELINE_CONTEXT_FINGERPRINT,
     POSITIVE_CASES,
@@ -599,3 +599,102 @@ async def test_confirmation_bypass_title_does_not_claim_the_action_executed() ->
 
     assert not adapter.tools.refunds, "enforce_confirmation 开启时不应真的退款"
     assert "未经用户确认" in outcomes[0].violations[0].title
+
+
+# ── 历史产物的可加载性 ───────────────────────────────────────────────────
+
+PHASE_0_UTILITY_CONDITIONS_FINGERPRINT = (
+    "5ab882c20845e16cdff8356868649c8babde4933ec97c098629bdcf458fa7ae9"
+)
+"""`docs/PHASE0_BASELINE.md` 里 37/50 utility 基线那次 controls 的条件指纹。"""
+
+PHASE_0_UTILITY_CONDITIONS: dict = {
+    "target": {
+        "provider": "glm",
+        "base_url": "https://api.z.ai/api/paas/v4",
+        "model": "glm-4.7-flashx",
+        "temperature": 0.7,
+        "max_tokens": 512,
+        "rpm": 0.0,
+        "max_concurrency": 3,
+        "input_usd_per_mtok": 0.07,
+        "output_usd_per_mtok": 0.4,
+        "extra_body": {"thinking": {"type": "disabled"}},
+    },
+    "positive_defense": "none",
+    "positive_enforce_confirmation": True,
+    "positive_case_permissions": {
+        "canary_direct": True,
+        "cross_user_blocked": True,
+        "cross_user_realized": False,
+    },
+    "negative_arena": {
+        "defense": "standard",
+        "enforce_permissions": True,
+        "enforce_confirmation": True,
+    },
+    "negative_task_ids": [task.id for task in BENIGN_TASKS],
+    "positive_repeats": 3,
+    "negative_repeats": 5,
+}
+"""取自 08-07 正式 controls 产物的 conditions 块;不含凭据。
+
+⚠️ 刻意**不带** `cached_input_usd_per_mtok` —— 当时这个字段还不存在。
+这正是本条测试要保护的形状。
+"""
+
+
+def test_historical_controls_conditions_still_recompute_their_frozen_id() -> None:
+    """给 08-07 那份冻结产物上一把机器锁。
+
+    schema 加一个可选字段就会让旧 JSON 里缺失的键被物化成 `null` 进哈希,
+    于是历史报告重算不出自己的指纹、`from_report_json` 拒绝加载,
+    而报错看起来像"证据被篡改"。`exclude_none` 是唯一挡住它的东西。
+
+    ⚠️ 变红时不要改这里的期望值,先查是哪个字段进了载荷。
+    """
+    from redcell.controls import ControlsConditions
+
+    conditions = ControlsConditions.model_validate(PHASE_0_UTILITY_CONDITIONS)
+
+    assert conditions.fingerprint() == PHASE_0_UTILITY_CONDITIONS_FINGERPRINT
+
+
+def test_historical_controls_report_still_loads_through_the_official_path() -> None:
+    """能重算指纹还不够 —— 正式接口必须真的读得进来。
+
+    `gate-report --controls-json` 指向历史产物时,加载失败会被误读成证据不一致。
+    """
+    raw = json.dumps(
+        {
+            "positive": [],
+            "negative": [],
+            "conditions": PHASE_0_UTILITY_CONDITIONS,
+            "conditions_fingerprint": PHASE_0_UTILITY_CONDITIONS_FINGERPRINT,
+        }
+    )
+
+    report = ControlsReport.from_report_json(raw)
+
+    assert report.conditions is not None
+    assert report.conditions_fingerprint == PHASE_0_UTILITY_CONDITIONS_FINGERPRINT
+
+
+def test_a_newly_added_optional_field_does_not_change_existing_fingerprints() -> None:
+    """显式给出的价格照常参与指纹;只有"缺失"才被排除。
+
+    否则 `exclude_none` 会走到另一个极端 —— 把真实配置差异也抹平。
+    """
+    from redcell.controls import ControlsConditions
+
+    without = ControlsConditions.model_validate(PHASE_0_UTILITY_CONDITIONS)
+    with_price = ControlsConditions.model_validate(
+        {
+            **PHASE_0_UTILITY_CONDITIONS,
+            "target": {**PHASE_0_UTILITY_CONDITIONS["target"], "cached_input_usd_per_mtok": 0.01},
+        }
+    )
+
+    assert without.fingerprint() != with_price.fingerprint()
+    # 但两者在 utility 因果路径上等价 —— 价格不影响正常任务完成率。
+    assert without.utility_context_fingerprint() == with_price.utility_context_fingerprint()
