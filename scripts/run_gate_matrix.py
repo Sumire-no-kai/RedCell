@@ -51,11 +51,23 @@ def _save(path: Path, state: MatrixState) -> None:
     path.write_text(state.model_dump_json(indent=2), encoding="utf-8")
 
 
+def _command_for(cell) -> list[str]:
+    """把计划中的 console-script argv 映射为当前解释器可执行的模块命令。
+
+    `GatePlan` 故意记录用户可复制的 `redcell run …`；脚本执行时不能简单替换成
+    `python -m run …`，后者会寻找名为 `run` 的顶层模块并立即退出。必须显式指定
+    `redcell.cli`，否则 Python 的 exit 1 会伪装成 CLI 的正常 `FINDINGS=1`。
+    """
+    if cell.argv[0] == "redcell":
+        return [sys.executable, "-m", "redcell.cli", *cell.argv[1:]]
+    return list(cell.argv)
+
+
 def _run_cell(cell, log_dir: Path) -> tuple[int, str]:
     """执行一格,返回 (exit_code, 日志路径)。argv 原样取自 plan,不再拼接。"""
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"{cell.condition.value}-seed{cell.seed}.log"
-    argv = [sys.executable, "-m", *cell.argv[1:]] if cell.argv[0] == "redcell" else list(cell.argv)
+    argv = _command_for(cell)
     started = time.time()
     with log_path.open("w", encoding="utf-8") as handle:
         completed = subprocess.run(
@@ -94,6 +106,10 @@ def main() -> int:
         help="显式启用一个备用 seed 的整块;需人工确认失效属于允许补位的类型",
     )
     args = parser.parse_args()
+
+    if args.concurrency < 1:
+        print("并发数必须至少为 1", file=sys.stderr)
+        return 2
 
     try:
         plan = GatePlan.model_validate_json(args.plan.read_text(encoding="utf-8"))

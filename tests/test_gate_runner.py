@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from scripts.run_gate_matrix import _command_for
 
 from redcell.gate_analysis import GateCondition, SeedPlan
 from redcell.gate_plan import SeedRole, build_gate_plan
@@ -44,6 +45,16 @@ def test_initial_state_covers_every_planned_cell() -> None:
 
     assert len(state.cells) == len(plan.cells) == 120
     assert all(cell.status is CellStatus.PENDING for cell in state.cells)
+
+
+def test_matrix_script_invokes_the_redcell_cli_module() -> None:
+    """计划记录的是 console script，不得误转成不存在的 `python -m run`。"""
+    cell = _plan().cells[0]
+
+    argv = _command_for(cell)
+
+    assert argv[1:4] == ["-m", "redcell.cli", "run"]
+    assert argv[4:] == cell.argv[2:]
 
 
 def test_only_primary_cells_are_dispatched_before_a_reserve_is_enabled() -> None:
@@ -95,7 +106,7 @@ def test_other_blocks_keep_running_after_one_fails() -> None:
     plan = _plan()
     failed_seed = plan.cells[0].seed
     state = record_outcome(
-        initial_state(plan), seed=failed_seed, condition=GateCondition.STATIC_OFF, exit_code=1
+        initial_state(plan), seed=failed_seed, condition=GateCondition.STATIC_OFF, exit_code=3
     )
 
     ready = pending_cells(plan, state, limit=96)
@@ -117,6 +128,31 @@ def test_completed_cells_are_never_dispatched_again() -> None:
     assert (seed, GateCondition.STATIC_OFF) not in {(c.seed, c.condition) for c in ready}
 
 
+def test_a_normal_run_with_findings_keeps_its_block_usable() -> None:
+    """Finding 是实验结果，不是失败；CLI 用退出码 1 表示这种正常完成。"""
+    plan = _plan()
+    seed = plan.cells[0].seed
+
+    state = record_outcome(
+        initial_state(plan), seed=seed, condition=GateCondition.STATIC_OFF, exit_code=1
+    )
+
+    assert state.block(seed).completed == 1
+    assert not state.block(seed).invalid
+    assert any(cell.seed == seed for cell in pending_cells(plan, state, limit=96))
+
+
+def test_a_cell_cannot_have_its_outcome_overwritten() -> None:
+    plan = _plan()
+    seed = plan.cells[0].seed
+    state = record_outcome(
+        initial_state(plan), seed=seed, condition=GateCondition.STATIC_OFF, exit_code=0
+    )
+
+    with pytest.raises(ValueError, match="已有状态"):
+        record_outcome(state, seed=seed, condition=GateCondition.STATIC_OFF, exit_code=3)
+
+
 def test_enabling_a_reserve_block_puts_exactly_that_block_in_play() -> None:
     plan = _plan()
     reserve_seed = next(c.seed for c in plan.cells if c.seed_role is SeedRole.RESERVE)
@@ -135,6 +171,21 @@ def test_a_primary_seed_cannot_be_enabled_as_reserve() -> None:
 
     with pytest.raises(ValueError, match="不是备用 seed"):
         enable_reserve_block(initial_state(plan), primary_seed)
+
+
+def test_reserve_blocks_must_be_enabled_in_the_frozen_order() -> None:
+    plan = _plan()
+    reserve_seeds = list(
+        dict.fromkeys(cell.seed for cell in plan.cells if cell.seed_role is SeedRole.RESERVE)
+    )
+    state = initial_state(plan)
+
+    with pytest.raises(ValueError, match=f"备用 seed {reserve_seeds[0]}"):
+        enable_reserve_block(state, reserve_seeds[1])
+
+    state = enable_reserve_block(state, reserve_seeds[0])
+    state = enable_reserve_block(state, reserve_seeds[1])
+    assert state.enabled_reserve_seeds == reserve_seeds[:2]
 
 
 def test_state_from_a_different_plan_is_refused() -> None:

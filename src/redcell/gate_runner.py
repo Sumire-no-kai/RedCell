@@ -33,6 +33,13 @@ from redcell.gate_plan import GatePlan, GatePlanCell, SeedRole
 from redcell.protocols.common import RedCellModel
 
 GATE_RUNNER_STATE_VERSION = "phase-0.5-gate-runner-state-v1"
+NORMAL_RUN_EXIT_CODES = frozenset({0, 1})
+"""`redcell run` 正常完成的退出码：`CLEAN=0` 或 `FINDINGS=1`。
+
+Finding 是本实验要测量的结果，不是调度失败。把 1 当失败会在第一次发现漏洞时使整个
+seed block 作废，系统性删除有 Finding 的数据并偏向零结果。真正使 block 失效的是
+`RUN_FAILED=3`、`BAD_CONFIG=4` 或其他未约定的退出码。
+"""
 
 
 class CellStatus(StrEnum):
@@ -91,13 +98,20 @@ class MatrixState(RedCellModel):
     database_url: str
     cells: list[CellRecord] = Field(default_factory=list)
     enabled_reserve_seeds: list[int] = Field(default_factory=list)
-    """已被**显式**启用的备用 seed;空表示尚无 block 需要补位。"""
+    """已显式启用的备用 seed，且必须是冻结顺序的前缀。"""
 
     @model_validator(mode="after")
     def cells_are_unique(self) -> MatrixState:
         keys = [cell.key for cell in self.cells]
         if len(keys) != len(set(keys)):
             raise ValueError("同一 seed×condition 不得出现两条记录")
+        reserve_order = list(
+            dict.fromkeys(cell.seed for cell in self.cells if cell.seed_role is SeedRole.RESERVE)
+        )
+        if len(self.enabled_reserve_seeds) != len(set(self.enabled_reserve_seeds)):
+            raise ValueError("备用 seed 不得重复启用")
+        if self.enabled_reserve_seeds != reserve_order[: len(self.enabled_reserve_seeds)]:
+            raise ValueError("备用 seed 必须按冻结顺序连续启用")
         return self
 
     # ── 查询 ─────────────────────────────────────────────────────────────
@@ -195,7 +209,12 @@ def record_outcome(
     detail: str | None = None,
 ) -> MatrixState:
     """落一格结果;失败时同 block 的未跑格子一并标为不再派发。"""
-    succeeded = exit_code == 0
+    target = next((cell for cell in state.cells if cell.key == (seed, condition)), None)
+    if target is None:
+        raise KeyError(f"state 中没有 seed {seed} / {condition.value}")
+    if target.status is not CellStatus.PENDING:
+        raise ValueError(f"seed {seed} / {condition.value} 已有状态 {target.status}")
+    succeeded = exit_code in NORMAL_RUN_EXIT_CODES
     updated: list[CellRecord] = []
     for cell in state.cells:
         if cell.key == (seed, condition):
@@ -237,6 +256,12 @@ def enable_reserve_block(state: MatrixState, seed: int) -> MatrixState:
         raise ValueError(f"seed {seed} 不是备用 seed")
     if seed in state.enabled_reserve_seeds:
         return state
+    reserve_order = list(
+        dict.fromkeys(cell.seed for cell in state.cells if cell.seed_role is SeedRole.RESERVE)
+    )
+    next_seed = reserve_order[len(state.enabled_reserve_seeds)]
+    if seed != next_seed:
+        raise ValueError(f"必须先按冻结顺序启用备用 seed {next_seed}")
     return state.model_copy(update={"enabled_reserve_seeds": [*state.enabled_reserve_seeds, seed]})
 
 
