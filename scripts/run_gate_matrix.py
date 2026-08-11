@@ -25,17 +25,28 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from redcell.gate_plan import GatePlan
 from redcell.gate_runner import (
+    NORMAL_RUN_EXIT_CODES,
     MatrixState,
     enable_reserve_block,
+    find_cell_run,
     initial_state,
     pending_cells,
     progress_summary,
     record_outcome,
     require_matching_state,
+    verify_cell_run,
 )
+from redcell.storage import RunStore
 
 # Target 并发上限为 3(GLM 实测:并发 3 零 429,并发 5 因排队反而更慢)。
 DEFAULT_CONCURRENCY = 3
+
+EXIT_VERIFICATION_FAILED = 90
+"""逐格核验未通过时记入 state 的合成退出码。
+
+刻意不复用 CLI 的任何退出码:进程本身是正常结束的,失败发生在**我们的核验**这一层。
+两者混用会让事后分不清"CLI 报了错"和"CLI 说好了但产出不合格"。
+"""
 
 
 def _load_state(path: Path, plan: GatePlan) -> MatrixState:
@@ -142,13 +153,23 @@ def main() -> int:
         print(f"=== 本批 {len(batch)} 格 ===")
         with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
             results = list(pool.map(lambda cell: _run_cell(cell, args.log_dir), batch))
+        # 逐格核验 runbook §5 的硬条件。退出码只说明进程正常结束,说明不了
+        # "耗尽的是 Token 而不是墙钟/attempt 上限",而后者产出的 Run 到不了 320k 前缀。
+        with RunStore(plan.database_url) as store:
+            runs = store.list_runs()
         for cell, (exit_code, log_path) in zip(batch, results, strict=True):
+            reason = None
+            if exit_code in NORMAL_RUN_EXIT_CODES:
+                reason = verify_cell_run(find_cell_run(runs, cell), cell)
+                if reason is not None:
+                    print(f"    ✗ {cell.condition.value} seed {cell.seed}: {reason}")
             state = record_outcome(
                 state,
                 seed=cell.seed,
                 condition=cell.condition,
-                exit_code=exit_code,
-                detail=log_path,
+                # 核验不过即按失败落账 —— 让整块当场退出,而不是等到 gate-report。
+                exit_code=exit_code if reason is None else EXIT_VERIFICATION_FAILED,
+                detail=f"{log_path}" if reason is None else f"{log_path} — {reason}",
             )
         # 每批结束立刻落盘:崩溃时最多丢一批的进度,而不是整轮。
         _save(args.state, state)

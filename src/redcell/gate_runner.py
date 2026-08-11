@@ -24,13 +24,16 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable
 from enum import StrEnum
 
 from pydantic import Field, model_validator
 
+from redcell.budget import BudgetLimit
 from redcell.gate_analysis import GateCondition
 from redcell.gate_plan import GatePlan, GatePlanCell, SeedRole
 from redcell.protocols.common import RedCellModel
+from redcell.protocols.run import Run, RunStatus
 
 GATE_RUNNER_STATE_VERSION = "phase-0.5-gate-runner-state-v1"
 NORMAL_RUN_EXIT_CODES = frozenset({0, 1})
@@ -242,6 +245,50 @@ def record_outcome(
         else:
             updated.append(cell)
     return state.model_copy(update={"cells": updated})
+
+
+def find_cell_run(runs: Iterable[Run], cell: GatePlanCell) -> Run | None:
+    """按 seed 与治疗条件定位这一格产出的 Run。
+
+    不按时间取"最近一条":同一 seed 有六个条件,取错会让核验通过而数据错位。
+    """
+    for run in runs:
+        conditions = run.experiment_conditions
+        if run.seed != cell.seed or conditions is None:
+            continue
+        if conditions.search is None or conditions.generation_memory is None:
+            continue
+        if (
+            conditions.search.selector is cell.search
+            and conditions.generation_memory.mode is cell.cross_attempt_memory
+        ):
+            return run
+    return None
+
+
+def verify_cell_run(run: Run | None, cell: GatePlanCell) -> str | None:
+    """逐格核验 runbook §5 的硬条件;返回失败原因,`None` 表示通过。
+
+    **为什么退出码不够。** `redcell run` 在预算耗尽时正常退出,而"耗尽的是哪一项"
+    它不体现在退出码里:一格因**墙钟**或 **attempt 上限**停下,同样是 exit 0/1。
+    那样的 Run 没有跑到 320k 前缀,却会被记成 `completed`、block 显示 usable ——
+    直到 21 小时之后 `gate-report` 才拒绝它,而那时补位又要再花六个 cell。
+    **让坏 block 在第一时间暴露,是这个函数存在的全部理由。**
+    """
+    if run is None:
+        return "数据库中找不到该 seed×condition 的 Run"
+    if run.status is not RunStatus.COMPLETED:
+        return f"Run 状态为 {run.status.value},不是 completed"
+    if run.stopped_by is not BudgetLimit.TOKENS:
+        stopped = run.stopped_by.value if run.stopped_by else "未记录"
+        return f"停止原因为 {stopped},不是 Token —— 未跑满 Token 前缀"
+    usage = run.usage
+    if usage.total_tokens < cell.max_total_tokens:
+        return f"累计 Token {usage.total_tokens} 未达 checkpoint {cell.max_total_tokens}"
+    if usage.role_total_tokens != usage.total_tokens:
+        # 总账与三角色账不守恒 ⇒ 等 Token 比较的分母本身不可信。
+        return f"角色账 {usage.role_total_tokens} 与总账 {usage.total_tokens} 不一致"
+    return None
 
 
 def enable_reserve_block(state: MatrixState, seed: int) -> MatrixState:

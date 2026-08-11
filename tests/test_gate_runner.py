@@ -11,11 +11,13 @@ from redcell.gate_runner import (
     CellStatus,
     MatrixState,
     enable_reserve_block,
+    find_cell_run,
     initial_state,
     pending_cells,
     progress_summary,
     record_outcome,
     require_matching_state,
+    verify_cell_run,
 )
 
 FROZEN_PLAN = SeedPlan.model_validate_json(
@@ -222,3 +224,163 @@ def test_twelve_usable_blocks_are_reported_as_ready_for_replay() -> None:
     assert len(state.usable_blocks) == 12
     assert "可以进入 validate-paths" in summary
     assert "72/72 completed" in summary
+
+
+# ── 逐格核验 ─────────────────────────────────────────────────────────────
+
+
+def _finished_run(cell, **updates):
+    from redcell.budget import BudgetLimit, BudgetLimits, BudgetUsage
+    from redcell.protocols.run import (
+        ArenaRunConfiguration,
+        ExperimentConditions,
+        GenerationMemoryConfiguration,
+        GenerationMemoryLimits,
+        GenerationMemoryMode,
+        ProviderRunConfiguration,
+        Run,
+        RunStatus,
+        SearchConfiguration,
+    )
+
+    provider = ProviderRunConfiguration(
+        provider="p",
+        base_url="https://p.invalid/v1",
+        model="m",
+        temperature=0.0,
+        max_tokens=512,
+        rpm=0,
+        max_concurrency=1,
+    )
+    payload = {
+        "status": RunStatus.COMPLETED,
+        "stopped_by": BudgetLimit.TOKENS,
+        "usage": BudgetUsage(
+            prompt_tokens=200000,
+            completion_tokens=120000,
+            generator_prompt_tokens=100000,
+            generator_completion_tokens=60000,
+            target_prompt_tokens=100000,
+            target_completion_tokens=60000,
+        ),
+    }
+    payload.update(updates)
+    return Run(
+        target_name="t",
+        policy_version="v1",
+        adapter_type="arena",
+        algorithm=cell.search.value,
+        limits=BudgetLimits(max_attempts=500, max_total_tokens=cell.max_total_tokens),
+        seed=cell.seed,
+        experiment_conditions=ExperimentConditions(
+            online=True,
+            actor="customer_a",
+            target=provider,
+            attacker=provider,
+            arena=ArenaRunConfiguration(
+                defense="standard", enforce_permissions=True, enforce_confirmation=True
+            ),
+            search=SearchConfiguration(selector=cell.search),
+            generation_memory=(
+                GenerationMemoryConfiguration(
+                    mode=cell.cross_attempt_memory,
+                    policy_version="bounded-relevant-v1",
+                    limits=GenerationMemoryLimits(),
+                )
+                if cell.cross_attempt_memory is GenerationMemoryMode.BOUNDED_RELEVANT_V1
+                else GenerationMemoryConfiguration(mode=cell.cross_attempt_memory)
+            ),
+        ),
+        **payload,
+    )
+
+
+def test_a_run_that_reached_the_token_prefix_verifies() -> None:
+    cell = _plan().cells[0]
+
+    assert verify_cell_run(_finished_run(cell), cell) is None
+
+
+def test_a_run_stopped_by_something_other_than_tokens_is_refused() -> None:
+    """⭐ 退出码看不出"耗尽的是哪一项"。
+
+    墙钟或 attempt 上限停下的 Run 同样 exit 0/1,却到不了 320k 前缀 ——
+    不当场拦下,它会一路装成 usable 直到 21 小时后的 gate-report。
+    """
+    from redcell.budget import BudgetLimit
+
+    cell = _plan().cells[0]
+    run = _finished_run(cell, stopped_by=BudgetLimit.WALL_CLOCK)
+
+    reason = verify_cell_run(run, cell)
+
+    assert reason is not None
+    assert "不是 Token" in reason
+
+
+def test_a_run_short_of_the_checkpoint_is_refused() -> None:
+    from redcell.budget import BudgetUsage
+
+    cell = _plan().cells[0]
+    run = _finished_run(
+        cell,
+        usage=BudgetUsage(
+            prompt_tokens=100,
+            completion_tokens=100,
+            generator_prompt_tokens=50,
+            generator_completion_tokens=50,
+            target_prompt_tokens=50,
+            target_completion_tokens=50,
+        ),
+    )
+
+    assert "未达 checkpoint" in (verify_cell_run(run, cell) or "")
+
+
+def test_role_and_total_token_ledgers_must_agree() -> None:
+    """总账与三角色账不守恒 ⇒ 等 Token 比较的分母本身不可信。"""
+    from redcell.budget import BudgetUsage
+
+    cell = _plan().cells[0]
+    run = _finished_run(
+        cell,
+        usage=BudgetUsage(
+            prompt_tokens=200000,
+            completion_tokens=120000,
+            generator_prompt_tokens=100000,
+            generator_completion_tokens=60000,
+            target_prompt_tokens=100000,
+            target_completion_tokens=59999,
+        ),
+    )
+
+    assert "不一致" in (verify_cell_run(run, cell) or "")
+
+
+def test_an_incomplete_run_is_refused() -> None:
+    from redcell.protocols.run import RunStatus
+
+    cell = _plan().cells[0]
+
+    assert "不是 completed" in (
+        verify_cell_run(_finished_run(cell, status=RunStatus.FAILED), cell) or ""
+    )
+
+
+def test_a_missing_run_is_refused() -> None:
+    cell = _plan().cells[0]
+
+    assert "找不到" in (verify_cell_run(None, cell) or "")
+
+
+def test_the_run_is_matched_by_treatment_not_by_recency() -> None:
+    """同一 seed 有六个条件,取错会让核验通过而数据错位。"""
+    plan = _plan()
+    static_off, static_memory = plan.cells[0], plan.cells[1]
+    runs = [_finished_run(static_memory), _finished_run(static_off)]
+
+    found = find_cell_run(runs, static_off)
+
+    assert found is not None
+    assert found.experiment_conditions.search.selector is static_off.search
+    assert found.experiment_conditions.generation_memory.mode is static_off.cross_attempt_memory
