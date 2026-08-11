@@ -462,3 +462,27 @@ async def test_unlimited_concurrency_by_default() -> None:
     await asyncio.gather(*(provider.complete(_user(str(i))) for i in range(4)))
 
     assert peak == 4
+
+
+# ── 畸形用量(2026-08-11 安全审查)───────────────────────────────────────
+
+
+def test_boolean_token_counts_are_not_accepted_as_known_usage() -> None:
+    """⭐ Python 里 `isinstance(True, int)` 为真。
+
+    于是 `{"prompt_tokens": true}` 会被当成"已知用量、值为 1" —— 一次完全没有
+    记账的调用就此冒充成记账正确的调用。而 `usage_known` 正是 Token 预算与
+    Phase 0.5 Gate 证据赖以成立的那个标志位;Provider 在信任边界之外,
+    畸形回包必须当作未知,不能当作 1。
+    """
+    from redcell.llm.openai_compatible import _as_int, _is_token_count
+
+    assert _is_token_count(5)
+    assert _is_token_count(0)
+    assert not _is_token_count(True)
+    assert not _is_token_count(False)
+    assert not _is_token_count(-1)
+    assert not _is_token_count("7")
+    assert not _is_token_count(1.5)
+    assert _as_int(True) == 0
+    assert _as_int(7) == 7

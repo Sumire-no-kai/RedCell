@@ -5,6 +5,59 @@
 
 ---
 
+## 2026-08-11 · 外部安全审查:修复六条已复核的缺陷
+
+### 2026-08-11 12:30 AEST · Step 61 · Codex 安全审查的第一批修复
+
+- **来源:** 作者用 Codex 对 `dd7bc70` 做了 deep repository 安全审查,报告 15 条
+  (medium 9 / low 6)。本步骤**逐条独立复核**后修掉其中六条,其余按性质分流(见下)。
+- **⚠️ 为什么这批优先:** Phase 0.5 的**全部判据是"相同总 Token 下的比较"**。
+  任何一处账本漏计,分母就系统性偏小 —— 而那不是报表难看,是**比较的已经不是同一件事**。
+  另两条属于凭据落盘,与 PRD「Secret 永不进 SQLite/指纹/日志/报告」直接冲突。
+
+**已修(六条,均带回归测试)**
+
+| # | 缺陷 | 复核结论 |
+|---|---|---|
+| [5] | `bool` 被当作已知 token 计数 | 实测 `isinstance(True, int)` 为真,守卫恰好是 `isinstance(..., int)`。畸形回包 `{"prompt_tokens": true}` 会被记成"已知用量、值为 1" —— **一次完全没记账的调用冒充成记账正确的调用**,而 `usage_known` 正是 Token 预算与 Gate 证据的立足点。新增 `_is_token_count()` 显式排除 `bool`。 |
+| [9] | 凭据穿过 `safe_error_message` | 实测 `{"api_key":"quoted-secret"}` **原样输出**。原模式只认无引号的 `key=值`,而 JSON 是最常见的回包形态。改为按**键名**匹配(12 类)并覆盖 `:` 与 `=` 两种分隔。 |
+| [8] | 重采样用量被丢弃 | `generate()` 循环里每次 `complete()` 都是付费调用,但返回的 `CostRecord` 只取**最后一次**。函数上方的注释本身就写着"用量必须带回去",实现却漏了重试。改为累计,`usage_known` 取合取。 |
+| [7] | 靶场发送失败时丢掉已生成话术的成本 | 话术在 `turns.append` **之前**就生成完毕;send 失败时该 Turn 未落盘,`_cost_of(turns)` 自然漏掉它。`_attempt_error` 新增 `pending_cost`。 |
+| [1] | 选择器耗尽预算后仍起一整场 attempt | 循环顶部的检查发生在 Controller **花钱之前**;`_select_strategy` 与 `reserve_attempt` 之间没有复查。PRD 允许的是"已开始的 attempt 跑完",不是"耗尽后再开一场"。 |
+| [2] | 预算耗尽后仍发起重试 | 同理,失败用量刚入账就直接重试。 |
+
+- **[2] 的一处自我更正:** 首版检查写成 `budget.exhausted() is not None`,**跑测试时红了三条** ——
+  重试的是**同一场** attempt,而 `ATTEMPTS` 名额在 `reserve_attempt` 时就已占用,
+  拿它拦重试等于把重试机制整个关掉。改为只看资源型上限
+  (`_RESOURCE_LIMITS = {TOKENS, COST, WALL_CLOCK}`)。**是我的检查太宽,不是测试有误。**
+- **写测试时的第二处自我更正:** 首版用 `FlakyGenerator` 构造"预算耗尽后重试",
+  但它失败时不带成本,预算根本没被打穿,于是 30 次调用照跑。**测试写错了,不是代码。**
+  改用"失败但已付费"的生成器 —— 那正是 [8] 修复所传播的真实形状。
+- **验证证据:** 新增 8 条回归测试;修复前后各跑一次探针,确认
+  `_is_token_count(True)` 由真变假、`quoted-secret` 由穿透变 `[REDACTED]`。
+  全量 **631 passed**;四道门全部通过。**未调用任何 Provider。**
+
+**未修,按性质分流**
+
+- **[3] max-cost 信任 provider usage(medium):** 与已知的 thinking-token 不计入 usage 是
+  同一件事,项目文档早已记录。属于**能力声明**问题,应要求"设了 `--max-cost` 就必须声明
+  usage 覆盖计费 token",牵涉 provider 能力契约,单独处理。
+- **[4] Controller 定价未进 preflight(medium):** 确认属实 —— preflight 只枚举
+  target/attacker。但当前 Phase 0.5 用 Token 而非美元作主预算,影响面小于报告估计;
+  应与 [3] 一并做成"每个参与角色都必须有已知定价才允许 `--max-cost`"。
+- **[6] `extra_body` 原样落盘(medium):** 属实,但需要操作者主动把 secret 放进该字段。
+  修法(允许清单 / 递归遮蔽)会改变条件指纹,须与作者确认后再动。
+- **[10]–[15](low):** 其中 [11][12][13][15] 全部落在我本轮新写的 matrix runner 上 ——
+  reserve 授权未绑进 Gate 证据、按 seed+treatment 匹配可能取到陈旧 Run、多进程并发绕过
+  单进程限流、state 每批才落盘。均属实,与 [14] 一并作为下一批。
+- **[Arena NaN] 已被审查方主动排除** —— SECURITY.md 明确靶场的故意脆弱行为不在范围内,
+  这个判断是对的。
+
+- **剩余状态:** 第一批 DONE。检测器误报模式(Step 60)与本报告的第二批仍未处理;
+  正式矩阵仍不得起跑。
+
+---
+
 ## 2026-08-11 · controls 第四轮:阳性/utility 全好,但发现检测器存在误报模式
 
 ### 2026-08-11 11:05 AEST · Step 60 · 本轮 Finding 不符合签字条件,且很可能是真误报

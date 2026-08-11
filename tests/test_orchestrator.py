@@ -811,3 +811,72 @@ async def test_the_reliability_thresholds_used_are_persisted_with_the_run(
     assert result.run.reliability == policy
     # 落盘的那一份也必须带着它,而不只是内存里的对象。
     assert store.get_run(result.run.id).reliability == policy
+
+
+# ── 硬预算不得在新的外部调用上被突破(2026-08-11 安全审查)──────────────
+
+
+async def test_a_retry_does_not_start_after_the_token_budget_is_exhausted(
+    store: RunStore,
+) -> None:
+    """⭐ 失败那次的用量刚入账,可能正好把资源预算打穿。
+
+    重试会发起**全新**的外部调用,不属于"已经开始的 attempt 可以跑完"那条豁免。
+    不复查的话,每一次可重试故障都会把硬上限多突破一次。
+    """
+
+    class CostlyFlakyGenerator(FlakyGenerator):
+        """失败,但**已经付过费** —— 重采样打到一半挂掉就是这个形状。"""
+
+        async def generate(self, request: AttackGenerationRequest) -> AttackMessage:
+            try:
+                return await super().generate(request)
+            except TransientAgentError as exc:
+                exc.cost = CostRecord(prompt_tokens=40, completion_tokens=20, usage_known=True)
+                raise
+
+    generator = CostlyFlakyGenerator(failures_before_success=100)
+    run = Run(
+        target_name=SUPPORT_AGENT_POLICY.target_name,
+        policy_version=SUPPORT_AGENT_POLICY.version,
+        adapter_type="test",
+        algorithm="static",
+        # 一次失败的生成就会把它耗尽。
+        limits=BudgetLimits(max_attempts=5, max_total_tokens=50),
+        seed=42,
+    )
+    strategy = _one_turn_strategy()
+    orchestrator = RunOrchestrator(
+        executor=_executor(StableAdapter(), generator),
+        controller=StaticController([strategy.id]),
+        store=store,
+        retry_policy=RetryPolicy(max_agent_retries=5, base_delay_seconds=0, max_delay_seconds=0),
+        sleep=_no_sleep,
+    )
+
+    with pytest.raises(RunFailedError):
+        await orchestrator.execute(
+            RunExecutionRequest(run=run, strategies=[strategy], actor="customer_a")
+        )
+
+    # 预算耗尽后不得再起新调用:只应看到首次那一次。
+    assert generator.calls == 1
+
+
+async def test_attempt_slots_do_not_block_a_retry(store: RunStore) -> None:
+    """与上一条相对:`ATTEMPTS` 的名额在 reserve 时就占掉了。
+
+    重试的是**同一场** attempt,不再占第二个名额;拿它拦重试等于把重试机制关掉。
+    """
+    generator = FlakyGenerator(failures_before_success=2)
+
+    result = await _execute(
+        store=store,
+        adapter=StableAdapter(),
+        generator=generator,
+        max_attempts=1,
+        retry_policy=RetryPolicy(max_agent_retries=2, base_delay_seconds=0, max_delay_seconds=0),
+    )
+
+    assert result.run.status is RunStatus.COMPLETED
+    assert generator.calls == 3

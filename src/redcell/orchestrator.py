@@ -63,6 +63,14 @@ Sleep = Callable[[float], Awaitable[None]]
 UtcNow = Callable[[], datetime]
 T = TypeVar("T")
 
+_RESOURCE_LIMITS = frozenset({BudgetLimit.TOKENS, BudgetLimit.COST, BudgetLimit.WALL_CLOCK})
+"""会被**新的外部调用**继续消耗的上限。
+
+与 `ATTEMPTS` / `STRATEGY_SHARE` 的区别是本质的:后两者的名额在 `reserve_attempt`
+时就已占用,重试的是同一场 attempt、不再占第二个名额。用它们去拦重试,
+等于把重试机制整个关掉 —— 而重试存在的理由是"可恢复故障不该让有效样本流失"。
+"""
+
 
 class RunExecutionRequest(RedCellModel):
     run: Run
@@ -370,6 +378,16 @@ class RunOrchestrator:
                     )
                     continue
                 consecutive_abandoned_selections = 0
+                # ⚠️ 选择器本身可能是**付费**的(`--search llm`),而它的用量刚刚才记进
+                # 账本。循环顶部那次检查发生在花钱之前,所以这里必须复查一次:
+                # 否则一次把预算耗尽的 Controller 调用之后,还会再起一整场对靶场的
+                # attempt。PRD 允许的是"已经开始的 attempt 可以跑完",不是"耗尽之后
+                # 再开一场"。
+                exhausted = budget.exhausted()
+                if exhausted is not None:
+                    run = self._completed_run(run, budget, stopped_by=exhausted)
+                    break
+
                 strategy = by_id[strategy_id]
                 attempt_index = budget.usage().attempts
                 attempt_id = new_id()
@@ -711,6 +729,14 @@ class RunOrchestrator:
                 )
                 max_retries = self._retry_policy.max_retries_for(exc.failure)
                 if exc.failure.stage is FailureStage.PERSISTENCE or retry_index >= max_retries:
+                    raise
+                # 失败那次的用量刚刚才入账,可能正好把资源预算打穿。重试会发起**全新**
+                # 的外部调用,不复查的话硬上限会在每次可重试故障上被多突破一次。
+                #
+                # ⚠️ 只看**资源型**上限。`ATTEMPTS` 与 `STRATEGY_SHARE` 的槽位在
+                # `reserve_attempt` 时就已经占掉了,重试的是**同一场** attempt、
+                # 不再占第二个名额;拿它们拦重试等于把重试机制整个关掉。
+                if budget.exhausted() in _RESOURCE_LIMITS:
                     raise
 
                 retry_index += 1

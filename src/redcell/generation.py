@@ -19,7 +19,16 @@ from redcell.protocols.trace import Turn
 
 
 class AttackGenerationError(RuntimeError):
-    """Generator 无法为当前轮生成有效消息。"""
+    """Generator 无法为当前轮生成有效消息。
+
+    ⚠️ **必须带上已经花掉的用量。** 生成失败前的每一次重采样都是真实付费调用;
+    不把它们带回上层,这些 token 就完全不进 Run 预算 —— 而 Phase 0.5 的整个
+    判据是"相同总 Token 下的比较",分母漏了就不再是同一场比较。
+    """
+
+    def __init__(self, message: str, *, cost: CostRecord | None = None) -> None:
+        super().__init__(message)
+        self.cost = cost or CostRecord()
 
 
 class GenerationMemory(RedCellModel):

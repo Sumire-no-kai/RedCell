@@ -39,7 +39,7 @@ from redcell.generation import (
     AttackGenerator,
     AttackMessage,
 )
-from redcell.llm.base import LLMMessage, LLMProvider
+from redcell.llm.base import LLMMessage, LLMProvider, LLMResponse
 from redcell.protocols.common import Role
 from redcell.protocols.policy import TargetBrief
 from redcell.protocols.strategy import Strategy
@@ -82,6 +82,21 @@ _REASONING_TAGS = ("thought", "think", "reasoning")
    ("Direct Instruction Override" 等),于是组间差异主要来自**标签被复述**,
    不是话术真的不同 —— 那道对照会以一个错误的理由通过。
 """
+
+
+def _add_cost(total: CostRecord, response: LLMResponse) -> CostRecord:
+    """把一次调用的用量并入累计值。
+
+    `usage_known` 取**合取**:只要有一次调用报不出用量,这一轮的总额就不是已知的 ——
+    把它当已知会让一个漏计的分母冒充精确值。
+    """
+    return CostRecord(
+        prompt_tokens=total.prompt_tokens + response.prompt_tokens,
+        completion_tokens=total.completion_tokens + response.completion_tokens,
+        cached_input_tokens=total.cached_input_tokens + response.cached_input_tokens,
+        usage_known=total.usage_known and response.usage_known,
+        usd=total.usd + response.cost_usd,
+    )
 
 
 def _strip_reasoning(text: str) -> tuple[str, bool]:
@@ -175,6 +190,10 @@ class LLMMutationGenerator(AttackGenerator):
         而不是庆幸没有 attempt 被放弃。
         """
         retries = 0
+        # 每一次重采样都是真实付费调用。只带回最后一次的用量,等于让被丢弃的那几次
+        # 完全不进 Run 预算 —— `max_total_tokens` / `max_cost_usd` 会挡不住攻击方,
+        # 而 Phase 0.5 的"相同总 Token"分母也会系统性偏小。
+        spent = CostRecord()
         while True:
             seed = (
                 request.seed
@@ -187,6 +206,7 @@ class LLMMutationGenerator(AttackGenerator):
                 temperature=self._temperature,
                 max_tokens=self._max_tokens,
             )
+            spent = _add_cost(spent, response)
             content, stripped = _strip_reasoning(response.content.strip())
             content = content.strip()
             if content:
@@ -197,23 +217,20 @@ class LLMMutationGenerator(AttackGenerator):
                 # 由上层处理,而不是往下游发空串。
                 raise AttackGenerationError(
                     f"attacker LLM 对策略 '{request.strategy.id}' 第 {request.turn_index} 轮"
-                    f"连续 {retries + 1} 次返回空内容"
+                    f"连续 {retries + 1} 次返回空内容",
+                    # 失败同样要把已花的用量带上去 —— 这几次调用真金白银发生过。
+                    cost=spent,
                 )
             retries += 1
         # ⚠️ 用量必须带回去:不带的话 attacker 的开销完全不进 Run 预算,
         # `max_total_tokens` / `max_cost_usd` 就成了挡不住攻击方的假安全网。
+        # 带回的是**累计值**而非最后一次:被丢弃的重采样也已经付过费。
         return AttackMessage(
             content=content,
             generator=self.name,
             reasoning_stripped=stripped,
             generation_retries=retries,
-            cost=CostRecord(
-                prompt_tokens=response.prompt_tokens,
-                completion_tokens=response.completion_tokens,
-                cached_input_tokens=response.cached_input_tokens,
-                usage_known=response.usage_known,
-                usd=response.cost_usd,
-            ),
+            cost=spent,
         )
 
     # ── prompt 组装 ─────────────────────────────────────────────

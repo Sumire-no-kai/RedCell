@@ -211,6 +211,8 @@ class ConversationExecutor:
                     stage=FailureStage.GENERATION,
                     turns=turns,
                     cause=exc,
+                    # 生成失败前的重采样都已付费,由 AttackGenerationError 带回。
+                    pending_cost=getattr(exc, "cost", None),
                 ) from exc
 
             conversation.append(Message(role=Role.USER, content=attack.content))
@@ -231,6 +233,8 @@ class ConversationExecutor:
                     stage=FailureStage.TARGET_SEND,
                     turns=turns,
                     cause=exc,
+                    # 话术已经生成完毕、钱已经花了,但这一轮的 Turn 还没落进 turns。
+                    pending_cost=attack.cost,
                 ) from exc
 
             turns.append(
@@ -348,12 +352,24 @@ class ConversationExecutor:
         stage: FailureStage,
         turns: list[Turn],
         cause: Exception,
+        pending_cost: CostRecord | None = None,
     ) -> AttemptExecutionError:
+        """把失败折成可记账的错误。
+
+        `pending_cost` 是**已经花掉但还没进 `turns`** 的那部分:攻击话术在
+        `turns.append` 之前就已经生成完毕,若靶场发送失败,那次生成的 token
+        会随着未落盘的 Turn 一起消失。生成本身失败时同理 —— 重采样都付过费了。
+        少算的后果不是"报表不好看",而是 `max_total_tokens` 挡不住实际开销,
+        且 Phase 0.5 的等 Token 分母系统性偏小。
+        """
+        partial = _cost_of(turns)
+        if pending_cost is not None:
+            partial = _sum_costs(partial, pending_cost)
         failure = _classify_failure(
             cause,
             stage=stage,
             capabilities=self._adapter.capabilities,
-            partial_cost=_cost_of(turns),
+            partial_cost=partial,
         )
         return AttemptExecutionError(
             attempt_id=request.attempt_id,

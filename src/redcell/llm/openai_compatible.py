@@ -384,11 +384,8 @@ class OpenAICompatibleProvider(LLMProvider):
 
         usage_value = data.get("usage")
         usage = usage_value if isinstance(usage_value, dict) else {}
-        usage_known = (
-            isinstance(usage.get("prompt_tokens"), int)
-            and usage["prompt_tokens"] >= 0
-            and isinstance(usage.get("completion_tokens"), int)
-            and usage["completion_tokens"] >= 0
+        usage_known = _is_token_count(usage.get("prompt_tokens")) and _is_token_count(
+            usage.get("completion_tokens")
         )
         prompt_tokens = _as_int(usage.get("prompt_tokens"))
         completion_tokens = _as_int(usage.get("completion_tokens"))
@@ -464,8 +461,20 @@ def _retry_after(response: httpx.Response) -> float | None:
     return seconds if seconds >= 0 else None
 
 
+def _is_token_count(value: Any) -> bool:
+    """远端回传的 token 计数是否可信。
+
+    ⚠️ **必须显式排除 `bool`。** Python 里 `isinstance(True, int)` 为真,
+    于是 `{"prompt_tokens": true}` 会被当成"已知用量、值为 1" ——
+    一次完全没有记账的调用就此冒充成记账正确的调用,
+    而 `usage_known` 正是 Token 预算与 Gate 证据赖以成立的那个标志位。
+    Provider 在信任边界之外,畸形回包必须当作未知而不是当作 1。
+    """
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def _as_int(value: Any) -> int:
-    return value if isinstance(value, int) and value >= 0 else 0
+    return value if _is_token_count(value) else 0
 
 
 def _preview(data: dict[str, Any]) -> str:
