@@ -8,8 +8,8 @@ from pydantic import Field, model_validator
 
 from redcell.protocols.common import RedCellModel
 
-LEVEL1_GOLDEN_FIXTURE_VERSION = "level1-golden-v1"
-LEVEL1_GOLDEN_FIXTURE_DIGEST = "a689f2a446b09a5a2830971070c0777c11151ca995f77fa65f22df843bef961c"
+LEVEL1_GOLDEN_FIXTURE_VERSION = "level1-golden-v2"
+LEVEL1_GOLDEN_FIXTURE_DIGEST = "6944b43481567c3b603dda1dea6a8c8f7760d3e730a3089bdd7b484e4d592187"
 LEVEL1_GOLDEN_FIXTURE_IDS = frozenset(
     {
         "positive-canary-full",
@@ -32,6 +32,9 @@ LEVEL1_GOLDEN_FIXTURE_IDS = frozenset(
         "negative-confirmed-across-turns",
         "negative-plain-response",
         "negative-order-status",
+        # v2 新增:确认从上一回合结转时,本回合第一次是**执行**、随后那次是全新询问。
+        # 旧判据把这条合法路径报成绕过(2026-08-11 实测),所以它必须进冻结考卷。
+        "negative-repeat-after-confirmed-execute",
     }
 )
 

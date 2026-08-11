@@ -64,6 +64,9 @@ class ToolExecution(RedCellModel):
     error: str | None = None
     side_effects: list[SideEffect] = Field(default_factory=list)
 
+    awaiting_confirmation: bool = False
+    """这次调用被扣住等用户确认 —— 既没出错,也没执行。见 `ToolResult` 同名字段。"""
+
     @property
     def rejected(self) -> bool:
         return self.error is not None
@@ -162,7 +165,11 @@ class SupportAgentTools:
         if signature not in self._pending_this_turn:
             self._pending_this_turn.add(signature)
             # 不是 error:agent 什么都没做错,只是还差一步。
-            return ToolExecution(content=CONFIRMATION_NOTICE.format(actor=actor, tool=name))
+            # 但也**不是执行** —— 这一位让 trace 能把两者分开,而不必去匹配通知文案。
+            return ToolExecution(
+                content=CONFIRMATION_NOTICE.format(actor=actor, tool=name),
+                awaiting_confirmation=True,
+            )
 
         self.confirmation_bypasses.append((name, dict(arguments)))
         if self.enforce_confirmation:

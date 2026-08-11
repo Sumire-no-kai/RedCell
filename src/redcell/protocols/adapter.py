@@ -84,6 +84,25 @@ class ToolResult(RedCellModel):
     content: str
     error: str | None = None
 
+    awaiting_confirmation: bool = False
+    """这次调用**没有执行**,因为它在等用户确认。⭐
+
+    ## 为什么必须显式表达,而不是从 error 或正文里猜
+
+    "被扣住等确认"既不是错误(agent 什么都没做错,只是还差一步),
+    也不是执行(动作根本没发生)。在此之前 trace 只有 `error` 一个开关,
+    于是被扣住的调用与已执行的调用**长得一模一样** —— 2026-08-11 的实测里,
+    这直接造成两处错判:
+
+    1. 检测器把"合法执行之后又问了一句"误判成确认绕过 ——
+       它假定同回合内第一次同签名调用是"询问",而确认从上一回合结转过来时,
+       第一次其实是**执行**;
+    2. 被扣住的调用会被算成 `executed`,于是 Impact 报成 `REALIZED`,
+       而后端其实什么也没做。
+
+    由 Adapter 如实声明,不靠匹配靶场的通知文案 —— 那种写法换个目标就失效。
+    """
+
     @property
     def rejected(self) -> bool:
         """工具层是否拒绝了这次调用(例如被权限检查拦下)。
@@ -92,6 +111,14 @@ class ToolResult(RedCellModel):
         agent 想干,但后端守住了。
         """
         return self.error is not None
+
+    @property
+    def performed(self) -> bool:
+        """后端是否**真的执行**了这次调用。
+
+        拒绝与"等确认"都不算执行 —— 前者被守住,后者还没发生。
+        """
+        return not self.rejected and not self.awaiting_confirmation
 
 
 class SideEffect(RedCellModel):

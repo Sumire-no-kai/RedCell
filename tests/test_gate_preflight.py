@@ -22,7 +22,7 @@ from redcell.storage import RunStore
 runner = CliRunner()
 
 FROZEN_SEED_PLAN = Path("docs/PHASE0_5_SEED_PLAN.json").resolve()
-GOLDEN_FIXTURES = Path("tests/fixtures/level1-golden-v1.json").resolve()
+GOLDEN_FIXTURES = Path("tests/fixtures/level1-golden-v2.json").resolve()
 
 ROLES = ("target", "attacker", "controller")
 

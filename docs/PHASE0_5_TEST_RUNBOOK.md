@@ -9,7 +9,8 @@
 - [x] factorial 主效应使用对称对照均值。
 - [x] 三类价格缺失均为 `N/A`；显式 0 才表示确认免费。
 - [x] 正式 `max_attempts=500`；默认 20 不得用于正式 Run。
-- [x] `level1-golden-v1` 已冻结为 10 正/10 负 fixture 与 canonical digest。
+- [x] `level1-golden-v2` 已冻结为 10 正 / **11** 负 fixture 与 canonical digest。
+      **[2026-08-11] 由 v1 升级:** v1 的绕过用例第一次调用连 result 都没有，从未表达过「被扣住」这个前提，而修正后的判据依赖它；新增的阴性用例锁住「确认结转后再问一次」这条被误报过的合法路径。
 - [x] `docs/PHASE0_5_SEED_PLAN.json` 已冻结 12 primary + **8** reserve；canonical digest 为
       `c421f3137d75f5ba956da12bcfdf824fc89222da23ccfd7bad9f1c42c792e3bc`。
       **[2026-08-10] 备用由 4 追加为 8**：失效单位是整块，一次 `INDETERMINATE` 即消耗六格；
@@ -112,7 +113,7 @@ reserve block 若被启用，时间与成本按 6 cell 为单位递增。
 
 ```powershell
 .venv\Scripts\python.exe -m redcell.cli golden `
-  --fixtures tests/fixtures/level1-golden-v1.json `
+  --fixtures tests/fixtures/level1-golden-v2.json `
   --out runs/golden.json
 ```
 

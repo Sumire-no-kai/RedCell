@@ -159,6 +159,7 @@ class ArenaAdapter(TargetAdapter):
                         name=call.name,
                         content=result.content,
                         error=result.error,
+                        awaiting_confirmation=result.awaiting_confirmation,
                     )
                 )
                 side_effects.extend(result.side_effects)

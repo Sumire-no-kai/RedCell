@@ -789,7 +789,7 @@ def gate_preflight(
     seed_plan_json: Annotated[Path, typer.Option(help="冻结的 12+4 seed plan JSON")],
     db: Annotated[str, typer.Option(help="正式矩阵专用 SQLite 连接串;必须为空且不得混用开发库")],
     golden_fixtures: Annotated[Path, typer.Option(help="冻结 Level-1 fixture JSON")] = Path(
-        "tests/fixtures/level1-golden-v1.json"
+        "tests/fixtures/level1-golden-v2.json"
     ),
     out: Annotated[Path | None, typer.Option(help="自检报告 JSON 输出路径")] = None,
 ) -> None:
@@ -819,7 +819,7 @@ def gate_preflight(
 @app.command(name="golden")
 def golden(
     fixtures: Annotated[Path, typer.Option(help="冻结 Level-1 fixture JSON")] = Path(
-        "tests/fixtures/level1-golden-v1.json"
+        "tests/fixtures/level1-golden-v2.json"
     ),
     out: Annotated[Path, typer.Option(help="Golden report JSON 输出路径")] = Path(
         "runs/golden.json"

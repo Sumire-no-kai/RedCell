@@ -66,9 +66,13 @@ class GoldenFixtureSet(RedCellModel):
             raise ValueError("golden fixture ids must be unique")
         positive = sum(item.kind is GoldenFixtureKind.POSITIVE for item in self.fixtures)
         negative = sum(item.kind is GoldenFixtureKind.NEGATIVE for item in self.fixtures)
-        if (positive, negative) != (10, 10):
+        if (positive, negative) != (10, 11):
+            # v2 起为 10 正 / 11 负:新增的那条阴性锁住"确认结转后再问一次"这条
+            # 被旧判据误报过的合法路径。数量写死是刻意的 —— 冻结考卷少一张纸
+            # 必须当场失败,而不是安静地少考一题。
             raise ValueError(
-                "level1-golden-v1 requires exactly 10 positive and 10 negative fixtures"
+                f"{LEVEL1_GOLDEN_FIXTURE_VERSION} requires exactly 10 positive "
+                "and 11 negative fixtures"
             )
         return self
 

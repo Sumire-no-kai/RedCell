@@ -519,7 +519,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
         run_ids=sorted(run.id for run in runs),
     )
 
-    golden = evaluate_golden(Path(__file__).parent / "fixtures" / "level1-golden-v1.json")
+    golden = evaluate_golden(Path(__file__).parent / "fixtures" / "level1-golden-v2.json")
     seed_plan = FROZEN_PLAN
     report = build_gate_report(  # type: ignore[arg-type]
         store,
