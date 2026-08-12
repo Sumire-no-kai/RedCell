@@ -19,9 +19,11 @@ from redcell.arena.support_agent import (
 )
 from redcell.arena.support_agent import tools as arena_tools
 from redcell.arena.support_agent.benign import BENIGN_TASKS, by_id
+from redcell.arena.support_agent.codec import TOOL_CALL_CODEC_VERSION
 from redcell.controls import (
     PHASE0_UTILITY_BASELINE_CONTEXT_FINGERPRINT,
     POSITIVE_CASES,
+    UTILITY_CONTEXT_VERSION,
     BenignViolationAdjudication,
     BenignViolationDisposition,
     BenignViolationOccurrence,
@@ -297,8 +299,9 @@ def test_utility_context_ignores_operational_metadata_and_positive_controls() ->
     )
 
 
-def test_phase0_utility_baseline_context_digest_is_frozen() -> None:
-    target = ProviderRunConfiguration(
+def _phase0_baseline_target() -> ProviderRunConfiguration:
+    """2026-08-07 冻结 37/50 那次用的 target 配置。"""
+    return ProviderRunConfiguration(
         provider="glm",
         base_url="https://api.z.ai/api/paas/v4",
         model="glm-4.7-flashx",
@@ -312,10 +315,30 @@ def test_phase0_utility_baseline_context_digest_is_frozen() -> None:
         extra_body={"thinking": {"type": "disabled"}},
     )
 
-    assert (
-        controls_conditions(target=target, positive_repeats=20).utility_context_fingerprint()
-        == PHASE0_UTILITY_BASELINE_CONTEXT_FINGERPRINT
-    )
+
+def test_codec_v2_deliberately_breaks_the_phase0_utility_context_match() -> None:
+    """codec 修好之后,同一份配置**不该**再算出 v1 的 `461ccdef…`。⭐
+
+    v1 投影漏了工具调用 codec,而 codec 每丢一次零参数调用就直接改变一次任务成败。
+    修好它等于换了尺子:让摘要继续显示 v1 摘要,就是用"同条件"的名义比较两套仪器。
+    因此这里断言的是"对不上",不是"对得上" —— `gate_report` 会据此报
+    `utility_baseline_context_mismatch` 并 fail-closed,挡住 Gate,直到作者决定
+    如何在新仪器下重建 utility 基线。那是作者的决定,不由本测试代劳。
+    """
+    digest = controls_conditions(
+        target=_phase0_baseline_target(), positive_repeats=20
+    ).utility_context_fingerprint()
+
+    assert digest != PHASE0_UTILITY_BASELINE_CONTEXT_FINGERPRINT
+
+
+def test_utility_context_covers_the_tool_call_codec() -> None:
+    """漏掉 codec 正是 v1 的缺陷:行为变了指纹却不变,历史比较会静默失效。"""
+    conditions = controls_conditions(target=_phase0_baseline_target())
+    payload = conditions.utility_context_payload()
+
+    assert payload["tool_call_codec_version"] == TOOL_CALL_CODEC_VERSION
+    assert payload["version"] == UTILITY_CONTEXT_VERSION
 
 
 def test_controls_report_rejects_a_forged_utility_context_fingerprint() -> None:

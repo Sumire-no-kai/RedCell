@@ -181,6 +181,85 @@ def test_codec_still_counts_genuine_garbage_as_malformed() -> None:
     assert decoded.malformed == 1
 
 
+def test_codec_accepts_a_bare_tool_name_as_a_zero_argument_call() -> None:
+    """零参数工具会被写成光秃秃一个名字 —— 2026-08-12 线上实测,22 次里 7 次。
+
+    有参数的工具不会出现这种写法:参数逼着模型写出 `{` 或 `(`。零参数的没有任何
+    东西逼它,于是每次都被判坏格式丢弃,在数据里伪装成"模型没调工具"。
+    """
+    codec = TextToolCallCodec(known_tools=[arena_tools.LIST_MY_ORDERS])
+    decoded = codec.decode(
+        LLMResponse(content=f"<tool_call>{arena_tools.LIST_MY_ORDERS}</tool_call>")
+    )
+
+    assert [call.name for call in decoded.calls] == [arena_tools.LIST_MY_ORDERS]
+    assert decoded.calls[0].arguments == {}
+    assert decoded.malformed == 0
+
+
+def test_bare_name_fallback_needs_the_tool_catalogue() -> None:
+    """没有工具名单就不猜。
+
+    猜错的代价不是漏一次调用,而是把模型的乱码升格成"调用了不存在的工具",
+    执行器会回一条拒绝 —— 一个格式问题就此被记成一次目标行为。
+    """
+    assert TextToolCallCodec().decode(LLMResponse(content="<tool_call>whatever</tool_call>")) == (
+        TextToolCallCodec(known_tools=["list_my_orders"]).decode(
+            LLMResponse(content="<tool_call>whatever</tool_call>")
+        )
+    )
+    blind = TextToolCallCodec().decode(LLMResponse(content="<tool_call>list_my_orders</tool_call>"))
+    assert blind.calls == []
+    assert blind.malformed == 1
+
+
+def test_bare_name_fallback_does_not_swallow_prose_or_unknown_tools() -> None:
+    """宽容解析不能变成来者不拒:标记里是正文、或不是我们的工具,都仍算坏格式。"""
+    codec = TextToolCallCodec(known_tools=[arena_tools.LIST_MY_ORDERS])
+
+    for content in (
+        "<tool_call>I will list your orders</tool_call>",
+        "<tool_call>definitely_not_a_tool</tool_call>",
+    ):
+        decoded = codec.decode(LLMResponse(content=content))
+        assert decoded.calls == [], content
+        assert decoded.malformed == 1, content
+
+
+def test_codec_counts_an_untagged_json_call_instead_of_showing_it_as_prose() -> None:
+    """模型把 JSON 吐对了却漏了标记 —— 同一批实测里 22 次出现 1 次。
+
+    不执行它:标记是模型表达调用意图的凭据,没有标记就只是一段长得像调用的文本,
+    升格成真调用会凭空制造 Finding。但必须计数,否则它和"模型选择直接回话"
+    在数据里完全无法区分,而这正是 `malformed` 存在的理由。
+    """
+    codec = TextToolCallCodec(known_tools=[arena_tools.LIST_MY_ORDERS])
+    raw = json.dumps({"name": arena_tools.LIST_MY_ORDERS, "arguments": {}})
+    decoded = codec.decode(LLMResponse(content=raw))
+
+    assert decoded.calls == []
+    assert decoded.malformed == 1
+
+    # 正文里恰好带一段 JSON 不算尝试调用 —— 只认"整条消息就是它"。
+    chatty = codec.decode(LLMResponse(content=f"Here is your record: {raw} — anything else?"))
+    assert chatty.malformed == 0
+
+
+async def test_adapter_recovers_a_bare_zero_argument_call_end_to_end() -> None:
+    """裸名兜底要一路走到工具执行 —— 只在 codec 里认得没有意义。
+
+    这里特意用 `close_my_account`(破坏性 + 需确认):丢掉这种调用,等于把一次
+    真实的目标越权记成没发生,系统性地把 Gate 推向零结果。
+    """
+    provider = ScriptedProvider([f"<tool_call>{arena_tools.CLOSE_MY_ACCOUNT}</tool_call>", "done"])
+    adapter = ArenaAdapter(provider)
+
+    result = await adapter.send(_input("Please close my account."))
+
+    assert [call.name for call in result.tool_calls] == [arena_tools.CLOSE_MY_ACCOUNT]
+    assert result.malformed_tool_calls == 0
+
+
 async def test_adapter_surfaces_malformed_count_for_calibration() -> None:
     """计数必须一路走到 AdapterOutput —— 只在 codec 里数没有意义。
 

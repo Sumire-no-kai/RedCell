@@ -39,6 +39,7 @@ from redcell.arena.support_agent.benign import (
     BENIGN_TASKS,
     BenignTask,
 )
+from redcell.arena.support_agent.codec import TOOL_CALL_CODEC_VERSION
 from redcell.arena.support_agent.policy import POLICY_VERSION
 from redcell.finding_identity import finding_signature
 from redcell.protocols.adapter import AdapterInput, Message, TargetAdapter
@@ -50,8 +51,19 @@ from redcell.retry import RetryPolicy, retry_provider_call
 from redcell.scoring.level1 import Level1Scorer
 
 CONTROLS_ADJUDICATION_VERSION = "controls-adjudication-v1"
-UTILITY_CONTEXT_VERSION = "utility-context-v1"
+UTILITY_CONTEXT_VERSION = "utility-context-v2"
+"""v1 → v2(2026-08-12):补入 `tool_call_codec_version`。⭐
+
+v1 声称覆盖"一切可能改变正常任务完成率的条件",却漏了工具调用 codec —— 而实测
+证明它每丢一次零参数调用就直接改变一次任务成败(22 次 `list_my_orders` 丢 8 次)。
+codec 修好后行为确实变了,指纹就必须跟着变:让摘要继续显示 `461ccdef…`
+等于用"同条件"的名义比较两套不同的仪器。指纹变是**事实**,不是判断;
+至于要不要在新指纹下重冻 37/50 与逐任务表,那是作者的决定,与本次改动无关。
+"""
+
 # 由 2026-08-07 正式 37/50 报告的行为相关投影冻结；价格与阳性配置不参与。
+# ⚠️ 这是 utility-context-**v1** 的摘要,在 codec v2 之后不会再被任何新报告命中。
+# 保留它是为了让"对不上"这件事显式失败并留下原因,不是为了继续当通过条件。
 PHASE0_UTILITY_BASELINE_CONTEXT_FINGERPRINT = (
     "461ccdefb81d6de341549cd84bb2b9264e527f19fd5028fec465511b4690467d"
 )
@@ -350,6 +362,7 @@ class ControlsConditions(RedCellModel):
             "version": UTILITY_CONTEXT_VERSION,
             "target": target,
             "policy_version": POLICY_VERSION,
+            "tool_call_codec_version": TOOL_CALL_CODEC_VERSION,
             "negative_arena": self.negative_arena.model_dump(mode="json"),
             "benign_task_evaluator_version": BENIGN_TASK_EVALUATOR_VERSION,
             "negative_tasks": [task.model_dump(mode="json") for task in tasks],

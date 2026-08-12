@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Collection
 from typing import Any, NamedTuple
 
 from redcell.arena.support_agent.tools import ToolExecution
@@ -68,6 +69,14 @@ class ToolCallCodec(ABC):
         """把工具结果格式化成喂回模型的一条消息。"""
 
 
+TOOL_CALL_CODEC_VERSION = "text-tool-call-codec-v2"
+"""解码行为的版本号。⭐
+
+v1 → v2(2026-08-12):接受 `<tool_call>tool_name</tool_call>` 这种零参数裸名写法,
+并把「无标记的裸 JSON 工具调用」计入 malformed。**这会改变同一模型输出的解码结果**,
+因此凡是声称"同条件可比"的指纹都必须带上它 —— 见 `utility_context_payload`。
+"""
+
 _OPEN_TAG = "<tool_call>"
 _CLOSE_TAG = "</tool_call>"
 _DECODER = json.JSONDecoder()
@@ -85,6 +94,23 @@ _PY_ARG_PATTERN = re.compile(
     r"""\s*([A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*(?:"([^"]*)"|'([^']*)'|([^,)]+))\s*,?"""
 )
 
+# 2026-08-12 实测:零参数工具会被写成光秃秃一个名字,连括号都没有:
+#   <tool_call>list_my_orders</tool_call>
+# 有参数的工具不会出现这种写法——参数逼着模型写出 `{` 或 `(`,两条既有路径都能接住;
+# 零参数的没有任何东西逼它。22 次 `list_my_orders` 里 7 次是这个形状,全被判成坏格式
+# 丢弃,于是在数据里伪装成"模型没调工具"。零参数工具还包括 `close_my_account`
+# (破坏性 + 需确认),丢掉它等于把一次真实的目标越权记成没发生,系统性偏向零结果。
+# 整段必须**只有**一个标识符才接受:留了 `\Z` 锚点,`<tool_call>I will list them</tool_call>`
+# 这类正文不会被误当成调用。
+_BARE_NAME_PATTERN = re.compile(r"\A\s*([A-Za-z_][A-Za-z0-9_]*)\s*\Z")
+
+# 同一批实测里还有一种:模型把 JSON 吐对了,却完全不带 `<tool_call>` 标记。
+# 它比裸名更麻烦——decode 连"模型试过"都不知道,malformed 为 0,
+# 在数据里和"模型选择直接回话"完全无法区分,正是本模块开头说的那种静默丢弃。
+# 这里只**计数**、不执行:标记是模型表达调用意图的凭据,没有标记就只是一段长得像
+# 调用的文本。把它升格成真调用会凭空制造 Finding,那比漏记更伤可信度。
+_UNTAGGED_KEYS = frozenset({"name", "arguments"})
+
 _INSTRUCTIONS = """
 
 You can call tools. To call one, emit a line of the form:
@@ -101,6 +127,16 @@ class TextToolCallCodec(ToolCallCodec):
     适用于任何能跟随格式指令的模型,包括测试用的 ScriptedProvider ——
     后者只会返回字符串,原生 FC 在它上面无从测起。
     """
+
+    def __init__(self, known_tools: Collection[str] | None = None) -> None:
+        """`known_tools` 是零参数裸名兜底的**前提**,不是可选优化。
+
+        没有工具名单时不做这项兜底:那样只能猜"标记里的这个词是不是工具名",
+        猜错就把模型的乱码升格成一次"调用了不存在的工具",执行器会回一条拒绝,
+        于是一个格式问题被记成了一次目标行为。有名单才能说准确的那句话 ——
+        "这个词确实是我们的工具" —— 说不准就宁可继续计坏格式。
+        """
+        self._known_tools = frozenset(known_tools or ())
 
     def system_suffix(self, specs: list[dict[str, Any]]) -> str:
         lines = []
@@ -155,7 +191,10 @@ class TextToolCallCodec(ToolCallCodec):
                     payload = None
 
             if payload is None:
-                call = _parse_python_style_call(content[after_tag:region_end])
+                region = content[after_tag:region_end]
+                call = _parse_python_style_call(region) or _parse_bare_name_call(
+                    region, self._known_tools
+                )
                 if call is not None:
                     calls.append(call)
                     cursor = (
@@ -181,7 +220,10 @@ class TextToolCallCodec(ToolCallCodec):
                 calls.append(call)
 
         kept.append(content[cursor:])
-        return DecodedReply(visible="".join(kept).strip(), calls=calls, malformed=malformed)
+        visible = "".join(kept).strip()
+        if not calls and _looks_like_untagged_call(visible):
+            malformed += 1
+        return DecodedReply(visible=visible, calls=calls, malformed=malformed)
 
     def encode_results(self, executed: list[tuple[ToolCall, ToolExecution]]) -> str:
         parts = []
@@ -231,6 +273,38 @@ def _parse_python_style_call(region: str) -> ToolCall | None:
         arguments[key] = _coerce_scalar(raw_value.strip())
 
     return ToolCall(id=new_id(), name=name, arguments=arguments)
+
+
+def _parse_bare_name_call(region: str, known_tools: frozenset[str]) -> ToolCall | None:
+    """JSON 与 Python 两条路径都失败后的兜底:整段只有一个已知工具名 = 零参数调用。
+
+    只在 `<tool_call>` 标记内触发;要求整段**除了标识符什么都没有**(正文有空格,
+    不会被误吞),且该标识符必须真的是一个工具 —— 见 `TextToolCallCodec.__init__`。
+    """
+    match = _BARE_NAME_PATTERN.match(region)
+    if match is None or match.group(1) not in known_tools:
+        return None
+    return ToolCall(id=new_id(), name=match.group(1), arguments={})
+
+
+def _looks_like_untagged_call(visible: str) -> bool:
+    """整条可见文本恰好是一个工具调用形状的 JSON —— 模型试过,只是漏了标记。
+
+    刻意只认"整条消息就是它"这一种,不去正文里搜:搜出来的越多,把普通对话
+    误记成"尝试调用"的机会也越多,而这个计数存在的意义就是让两件事可区分。
+    """
+    if not visible.startswith("{") or not visible.endswith("}"):
+        return False
+    try:
+        payload = json.loads(visible)
+    except json.JSONDecodeError:
+        return False
+    return (
+        isinstance(payload, dict)
+        and payload.keys() >= _UNTAGGED_KEYS
+        and isinstance(payload.get("name"), str)
+        and isinstance(payload.get("arguments"), dict)
+    )
 
 
 def _coerce_scalar(value: str) -> Any:
