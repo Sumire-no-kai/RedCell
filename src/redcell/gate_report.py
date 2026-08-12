@@ -52,6 +52,11 @@ from redcell.protocols.run import (
 )
 from redcell.search import ControllerDecisionOutcome
 from redcell.storage.store import RunStore
+from redcell.utility_baseline import (
+    AGGREGATE_FLOOR,
+    PHASE0_UTILITY_BASELINE_V1,
+    per_task_regressions,
+)
 from redcell.validator import ValidationReport
 
 PRIMARY_CHECKPOINT = 160000
@@ -458,11 +463,16 @@ def _controls_assessment(
     elif controls.utility_context_fingerprint != PHASE0_UTILITY_BASELINE_CONTEXT_FINGERPRINT:
         failures.append("utility_baseline_context_mismatch")
     utility = controls.utility
+    observed = {
+        outcome.id: outcome.completed_runs or 0
+        for outcome in controls.negative
+        if outcome.completed_runs is not None
+    }
     if (
         utility is None
-        or utility.task_runs != 50
-        or utility.completed_task_runs < 32
-        or any((outcome.completed_runs or 0) < 4 for outcome in controls.negative)
+        or utility.task_runs != PHASE0_UTILITY_BASELINE_V1.task_runs
+        or utility.completed_task_runs < AGGREGATE_FLOOR
+        or per_task_regressions(observed)
     ):
         failures.append("utility_failed")
     return assessment, failures
