@@ -94,6 +94,11 @@ from redcell.search import (
 )
 from redcell.storage import DEFAULT_URL, RunStore
 from redcell.strategies import PHASE_0_STRATEGIES
+from redcell.utility_baseline import (
+    PHASE0_5_UTILITY_BASELINE_PATH,
+    freeze_utility_baseline,
+    utility_baseline_json,
+)
 from redcell.validator import ValidationReport, validate_attack_paths
 
 app = typer.Typer(
@@ -1032,6 +1037,52 @@ def controls(
     if not report_data.passed:
         raise typer.Exit(ExitCode.CONTROL_FAILED)
     raise typer.Exit(ExitCode.CLEAN)
+
+
+@app.command(name="utility-baseline-freeze")
+def utility_baseline_freeze(
+    controls_json: Annotated[Path, typer.Option(help="要冻结为基线的 controls JSON")],
+    out: Annotated[Path, typer.Option(help="基线落盘路径")] = PHASE0_5_UTILITY_BASELINE_PATH,
+    note: Annotated[str, typer.Option(help="冻结说明,写进记录")] = "",
+) -> None:
+    """把一份 controls 产物固化为 utility 回归基线。
+
+    ⚠️ **已存在则拒绝覆盖。** 这是「预承诺 + 跑一次即冻结」的机械落点:
+    重新冻结必须先显式删掉旧文件,而那是一次在 git 里看得见的动作。
+    否则"跑几轮挑一轮好的"和"跑一轮冻结一轮"在产物上长得完全一样,
+    而这两件事的可信度天差地别。
+    """
+    if out.exists():
+        typer.secho(
+            f"基线已存在:{out}。要重新冻结请先显式删除它 —— 覆盖不会静默发生。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(ExitCode.BAD_CONFIG)
+
+    source = controls_json.read_text(encoding="utf-8")
+    controls_result = ControlsReport.from_report_json(source)
+    if controls_result.utility_context_fingerprint is None:
+        typer.secho("这份 controls 没有 utility context 指纹,不能当基线", fg=typer.colors.RED)
+        raise typer.Exit(ExitCode.BAD_CONFIG)
+    repeats = {outcome.runs for outcome in controls_result.negative}
+    if len(repeats) != 1:
+        typer.secho("阴性重复次数不一致,无法作为基线", fg=typer.colors.RED)
+        raise typer.Exit(ExitCode.BAD_CONFIG)
+
+    baseline = freeze_utility_baseline(
+        context_fingerprint=controls_result.utility_context_fingerprint,
+        negative_repeats=repeats.pop(),
+        per_task={outcome.id: outcome.completed_runs or 0 for outcome in controls_result.negative},
+        source_report=source,
+        note=note,
+    )
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(utility_baseline_json(baseline), encoding="utf-8")
+    typer.echo(f"utility 基线已冻结: {out}")
+    typer.echo(f"总体 {baseline.aggregate}/{baseline.task_runs}，下限 {baseline.aggregate_floor}")
+    typer.echo(f"context fingerprint: {baseline.context_fingerprint}")
+    typer.echo(f"来源产物 sha256: {baseline.source_report_sha256}")
 
 
 @app.command(name="controls-adjudication-template")

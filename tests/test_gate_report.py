@@ -22,6 +22,7 @@ from redcell.controller_controls import (
     controller_contract_cases,
 )
 from redcell.controls import (
+    DEFAULT_NEGATIVE_REPEATS,
     DEFAULT_POSITIVE_REPEATS,
     POSITIVE_CASES,
     BenignViolation,
@@ -53,6 +54,7 @@ from redcell.protocols import (
 from redcell.search import ControllerDecision, ControllerDecisionOutcome
 from redcell.storage import RunStore
 from redcell.strategies import PHASE_0_STRATEGIES
+from redcell.utility_baseline import UtilityBaseline
 from redcell.validator import ReplayValidation, ValidationReport
 
 runner = CliRunner()
@@ -95,6 +97,27 @@ def _treatment(condition: GateCondition) -> tuple[SearchSelector, bool]:
         GateCondition.RANDOM_OFF: (SearchSelector.RANDOM, False),
         GateCondition.THOMPSON_OFF: (SearchSelector.THOMPSON, False),
     }[condition]
+
+
+_BASELINE_COMPLETIONS = 18
+"""合成 controls 里每条任务的完成次数,同时用作注入基线的值。
+
+取相等值是刻意的:判据的起点必须是"和基线一模一样的一轮不算退化"。
+"""
+
+
+def _use_utility_baseline(monkeypatch, context_fingerprint: str) -> None:
+    """注入一份冻结基线。
+
+    基线现在从 `docs/PHASE0_5_UTILITY_BASELINE.json` 读,测试不能依赖仓库里
+    有没有那个文件 —— 它正是"跑一次即冻结"的产物,在基线建立前本就不存在。
+    """
+    baseline = UtilityBaseline(
+        context_fingerprint=context_fingerprint,
+        negative_repeats=DEFAULT_NEGATIVE_REPEATS,
+        per_task={task.id: _BASELINE_COMPLETIONS for task in BENIGN_TASKS},
+    )
+    monkeypatch.setattr("redcell.gate_report.load_frozen_utility_baseline", lambda: baseline)
 
 
 def _formal_run(seed: int, condition: GateCondition) -> Run:
@@ -445,10 +468,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
     )
     conditions = controls_conditions(target=reference.target)
     utility_context_fingerprint = conditions.utility_context_fingerprint()
-    monkeypatch.setattr(
-        "redcell.gate_report.PHASE0_UTILITY_BASELINE_CONTEXT_FINGERPRINT",
-        utility_context_fingerprint,
-    )
+    _use_utility_baseline(monkeypatch, utility_context_fingerprint)
     controls = ControlsReport(
         positive=[
             ControlOutcome(id=case.id, passed=True, detail="passed", runs=DEFAULT_POSITIVE_REPEATS)
@@ -459,8 +479,8 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
                 id=task.id,
                 passed=True,
                 detail="passed",
-                runs=5,
-                completed_runs=4,
+                runs=DEFAULT_NEGATIVE_REPEATS,
+                completed_runs=_BASELINE_COMPLETIONS,
             )
             for task in BENIGN_TASKS
         ],
@@ -552,7 +572,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
     assert "controls_utility_context_missing" in missing_utility_context.protection_failures
     assert missing_utility_context.verdict is GateVerdict.INCOMPLETE
 
-    monkeypatch.setattr("redcell.gate_report.PHASE0_UTILITY_BASELINE_CONTEXT_FINGERPRINT", "f" * 64)
+    _use_utility_baseline(monkeypatch, "f" * 64)
     changed_utility_context = build_gate_report(  # type: ignore[arg-type]
         store,
         controls=controls,
@@ -564,10 +584,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
     )
     assert "utility_baseline_context_mismatch" in changed_utility_context.protection_failures
     assert changed_utility_context.verdict is GateVerdict.EXPERIMENT_INVALID
-    monkeypatch.setattr(
-        "redcell.gate_report.PHASE0_UTILITY_BASELINE_CONTEXT_FINGERPRINT",
-        utility_context_fingerprint,
-    )
+    _use_utility_baseline(monkeypatch, utility_context_fingerprint)
 
     negative_with_raw = list(controls.negative)
     negative_with_raw[0] = negative_with_raw[0].model_copy(

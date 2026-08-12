@@ -19,7 +19,6 @@ from redcell.budget import BudgetLimit
 from redcell.controller import ControllerInvocationStatus, UsageStatus
 from redcell.controller_controls import ControllerContractReport, controller_contract_cases
 from redcell.controls import (
-    PHASE0_UTILITY_BASELINE_CONTEXT_FINGERPRINT,
     POSITIVE_CASES,
     ControlsAdjudicationReport,
     ControlsAssessment,
@@ -53,8 +52,7 @@ from redcell.protocols.run import (
 from redcell.search import ControllerDecisionOutcome
 from redcell.storage.store import RunStore
 from redcell.utility_baseline import (
-    AGGREGATE_FLOOR,
-    PHASE0_UTILITY_BASELINE_V1,
+    load_frozen_utility_baseline,
     per_task_regressions,
 )
 from redcell.validator import ValidationReport
@@ -82,6 +80,7 @@ _MISSING_EVIDENCE_FAILURES = {
     "controls_adjudication_missing",
     "controls_adjudication_unresolved",
     "controls_utility_context_missing",
+    "utility_baseline_not_established",
     "missing_attacker_control",
     "missing_controller_controls",
     "missing_controls",
@@ -458,24 +457,45 @@ def _controls_assessment(
         assessment.extra_adjudications or not assessment.adjudication_environment_matches
     ):
         failures.append("controls_adjudication_mismatch")
+    failures.extend(_utility_failures(controls))
+    return assessment, failures
+
+
+def _utility_failures(controls: ControlsReport) -> list[str]:
+    """utility 回归判定。基线缺失时挡住 Gate,不拿旧刻度凑合。"""
+    failures: list[str] = []
+    baseline = load_frozen_utility_baseline()
+    if baseline is None:
+        # 仪器换过之后还没重新采集参照 —— 这是证据缺失,不是实验失败。
+        failures.append("utility_baseline_not_established")
     if controls.utility_context_fingerprint is None:
         failures.append("controls_utility_context_missing")
-    elif controls.utility_context_fingerprint != PHASE0_UTILITY_BASELINE_CONTEXT_FINGERPRINT:
+    elif baseline is not None and controls.utility_context_fingerprint != (
+        baseline.context_fingerprint
+    ):
         failures.append("utility_baseline_context_mismatch")
+
     utility = controls.utility
+    if utility is None:
+        failures.append("utility_failed")
+        return failures
+    if baseline is None:
+        return failures
+
+    repeats = {outcome.runs for outcome in controls.negative}
     observed = {
         outcome.id: outcome.completed_runs or 0
         for outcome in controls.negative
         if outcome.completed_runs is not None
     }
     if (
-        utility is None
-        or utility.task_runs != PHASE0_UTILITY_BASELINE_V1.task_runs
-        or utility.completed_task_runs < AGGREGATE_FLOOR
-        or per_task_regressions(observed)
+        len(repeats) != 1
+        or utility.task_runs != baseline.task_runs
+        or utility.completed_task_runs < baseline.aggregate_floor
+        or per_task_regressions(observed, repeats.pop(), baseline)
     ):
         failures.append("utility_failed")
-    return assessment, failures
+    return failures
 
 
 def _attacker_control_failures(
