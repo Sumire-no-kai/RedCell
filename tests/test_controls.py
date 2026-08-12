@@ -345,7 +345,47 @@ def test_controls_report_rejects_a_forged_utility_context_fingerprint() -> None:
     conditions = controls_conditions(target=_target())
 
     with pytest.raises(ValueError, match="utility_context_fingerprint"):
-        ControlsReport(conditions=conditions, utility_context_fingerprint="f" * 64)
+        ControlsReport(
+            conditions=conditions,
+            utility_context_fingerprint="f" * 64,
+            utility_context_version=UTILITY_CONTEXT_VERSION,
+        )
+
+
+def test_a_missing_utility_fingerprint_is_never_backfilled() -> None:
+    """缺字段的旧产物不得被补算成今天的摘要。⭐
+
+    补上去等于替一次旧仪器下的运行断言了它从未处在的条件 —— 而那个摘要的全部
+    意义就是"这组数字是用哪台仪器量的"。缺失就是缺失,由 Gate 判为证据不全。
+    """
+    report = ControlsReport(conditions=controls_conditions(target=_target()))
+
+    assert report.utility_context_fingerprint is None
+    assert report.utility_context_version is None
+
+
+def test_a_historical_report_still_loads_after_the_projection_changes() -> None:
+    """投影定义改了,旧产物必须仍然读得出来。⭐
+
+    否则一次代码改动就让所有历史证据加载失败,而报错文案是"与 conditions 不一致"——
+    读起来像产物被人动过手脚。2026-08-07 与 2026-08-12 各炸过一次,都是这个形状。
+    验不了就说验不了(旧版本的计算代码已经不在了),不能报成不一致。
+    """
+    conditions = controls_conditions(target=_target())
+    historical = json.dumps(
+        {
+            "positive": [],
+            "negative": [],
+            "conditions": conditions.model_dump(mode="json"),
+            "conditions_fingerprint": conditions.fingerprint(),
+            "utility_context_fingerprint": "0" * 64,
+        }
+    )
+
+    report = ControlsReport.from_report_json(historical)
+
+    assert report.utility_context_fingerprint == "0" * 64
+    assert report.utility_context_version is None
 
 
 def test_resolved_adjudication_requires_independent_evidence() -> None:

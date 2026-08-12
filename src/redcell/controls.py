@@ -387,6 +387,18 @@ class ControlsReport(RedCellModel):
     conditions: ControlsConditions | None = None
     conditions_fingerprint: str | None = None
     utility_context_fingerprint: str | None = None
+    utility_context_version: str | None = None
+    """产出这份报告时 utility 投影用的是哪一版定义。⭐
+
+    没有它,投影定义一改,**所有历史产物都会加载失败**,而报错文案是
+    "fingerprint 与 conditions 不一致" —— 读起来像产物被人动过手脚。
+    2026-08-07 那份基线报告已经因为同一形状的原因炸过一次(当时的直接原因是
+    `exclude_none`),2026-08-12 加 `tool_call_codec_version` 时又炸了一次。
+
+    根因是把两件事混成了一个断言:「这份产物内部自洽」和「这份产物是今天的代码
+    产出的」。后者不该是加载条件。摘要**只在版本与当前一致时才重算校验** ——
+    生成它的代码已经不在了,就诚实地说验不了,而不是报成不一致。
+    """
 
     @model_validator(mode="after")
     def bind_conditions_fingerprint(self) -> ControlsReport:
@@ -402,8 +414,12 @@ class ControlsReport(RedCellModel):
             self.__dict__["conditions_fingerprint"] = expected
         elif self.conditions_fingerprint != expected:
             raise ValueError("conditions_fingerprint 与 conditions 不一致")
+
+        # 刻意**不**在缺字段时补算:那会给一次旧仪器下的运行盖上今天的摘要,
+        # 等于替它断言了它从未处在的条件。缺失就是缺失,由 Gate 判为证据不全。
         if (
             self.utility_context_fingerprint is not None
+            and self.utility_context_version == UTILITY_CONTEXT_VERSION
             and self.utility_context_fingerprint != self.conditions.utility_context_fingerprint()
         ):
             raise ValueError("utility_context_fingerprint 与 conditions 不一致")

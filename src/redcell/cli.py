@@ -43,6 +43,7 @@ from redcell.controller_controls import (
     run_controller_contract_controls,
 )
 from redcell.controls import (
+    UTILITY_CONTEXT_VERSION,
     ControlsAdjudicationReport,
     ControlsReport,
     build_controls_adjudication_template,
@@ -1020,6 +1021,7 @@ def controls(
                 negative=negative,
                 conditions=conditions,
                 utility_context_fingerprint=conditions.utility_context_fingerprint(),
+                utility_context_version=UTILITY_CONTEXT_VERSION,
             )
         finally:
             await pair.aclose()
