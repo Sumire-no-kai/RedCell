@@ -2629,6 +2629,18 @@ child process 启动**之前**，父进程先把 exact `run_id` 写入 `DISPATCH
 我们不知道 Provider 是否已经收到请求、也不知道某个 Run 是否只写了一半；这类 cell 不能靠 seed、
 时间戳或“最近的一条 Run”猜回去。恢复时它会令整个 paired seed block 失效，原记录保留但不得进入分析。
 
+这里还有两个容易漏掉的工程层次。第一，调用 `write_text` 不等于“耐崩溃持久化”：进程可能在清空旧文件
+之后、写完新 JSON 之前死亡。matrix runner 因此先写同目录临时文件，flush 并 `fsync`，最后用
+`os.replace` 原子替换；要么看到旧的完整 state，要么看到新的完整 state，不接受半份 JSON。第二，原子写
+也挡不住两个 runner 各自读到同一个 PENDING 快照后重复派发，所以执行器在整个生命周期持有对应 state
+的 OS 文件锁。第二个进程会在任何 Provider 调用前失败；第一个进程崩溃时锁由 OS 自动释放，不会像普通
+“存在一个 lock 文件”那样留下永久死锁。
+
+恢复也以**保存时整批 in-flight cell**为单位处理，而不是只处理列表中的第一格。并发 3 时若机器掉电，
+三格都处于未知交付；一次恢复会把三格全部标为失败并保留各自 Run ID。reserve 入口随后只允许在确有
+尚未补位的 invalid block 时启用下一块，代码同时检查 activation 顺序、人工摘要与前态 digest 的形状。
+这让“人工裁决原因”仍由人负责，但“没有失败也能偷偷加 seed”不再是 interface 留给操作者自律的漏洞。
+
 这看似会浪费一次已发出的调用，实际是在“少花一点钱”和“不要把未知交付伪装成可配对样本”之间选择后者。
 备用 seed 也因此永不自动启用：必须按冻结顺序，由人确认失效属于 infrastructure / unknown token /
 reliability / integrity 中允许的类别，并保存启用前 state digest。这样备用不是结果不好时换一副骰子。

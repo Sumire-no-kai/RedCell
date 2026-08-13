@@ -5,6 +5,66 @@
 
 ---
 
+## 2026-08-13 · Phase 0.5 Gate 合并后深度代码审阅
+
+### 2026-08-13 23:51 AEST · Step 81 · 计费证据与矩阵恢复接口的反向审计及修复
+
+- **审阅范围:** 以已合并 PR #30 为起点，回看 `gate_billing_evidence`、preflight/report 双重核验、
+  reserve activation、matrix dispatch/recovery、CLI 与相应测试；同时沿调用链检查模块 interface
+  是否把关键不变量留给调用者记忆。未调用 Provider、未运行 controls 或正式 Gate。
+
+- **确认的实质问题 ① — evidence 模板可被“只翻布尔值”误放行:** 模板原先预填当日
+  `checked_on` 与三个 `TO_FILL` 字符串；操作者只把两个 coverage 字段改成 `true`，`passed` 就会成立，
+  与“布尔声明不构成证明”的作者裁决直接冲突。修复为草稿元数据使用 `null`，`passed` 同时要求
+  service tier、检查日期、非占位依据、非占位摘要和两项 coverage；版本固定为 v1、subject digest
+  限定为小写 SHA-256，bundle digest 对角色顺序做 canonicalize。缺配置生成模板时改为干净的
+  `BAD_CONFIG`，不再泄出 traceback。
+  模板命令同时改为拒绝覆盖已有 evidence，避免一次误执行抹掉已经人工复核的依据。
+
+- **确认的实质问题 ② — reserve 可在无失效时提前启用:** `enable_reserve_block` 曾只验证 seed 顺序、
+  reason 与摘要，没有证明存在尚未补位的 invalid block；因此 8 个 reserve 可以在结果出现前全部进场。
+  修复为启用数量不得超过当前 active primary/reserve 中的失效数量，并把 activation 数量、顺序、
+  摘要和 digest 形状提升为 `MatrixState` schema 不变量；低层 dispatch interface 也拒绝未启用 reserve
+  或已失效 block，避免调用者绕过 `pending_cells`。
+
+- **确认的实质问题 ③ — 并发崩溃只清掉第一格:** 一批通常有 3 个 `DISPATCHED` cell，旧恢复函数
+  遇到第一个就 return，剩余两格会长期悬空。修复为对保存时所有 in-flight cell 逐格 fail-closed，
+  保留各自预分配 Run ID，并使相关 block 一次恢复后不再存在 unresolved dispatch。
+
+- **确认的实质问题 ④ — “已持久化”不等于耐崩溃且缺少单写者:** state 曾直接覆盖写；写入中崩溃
+  可能截断唯一恢复文件，两个 runner 同时指向同一 state 也可能重复派发。修复为临时文件写入、flush/
+  `fsync`、`os.replace` 原子替换；runner 全生命周期持有 OS 文件锁，第二个实例在任何 Provider 调用前
+  被拒绝，进程崩溃后锁由 OS 自动释放。lock 文件本身不删除，避免删除/重建 inode 的竞态。
+
+- **附带契约加固:** `CellRecord` 的 dispatched/completed/failed 状态必须绑定非空 Run ID；outcome
+  必须显式提交并匹配派发 ID；state 与 plan 除 seed×condition 外也核对 primary/reserve 角色；
+  `gate-report` / `validate-paths --help` 遗留的 `12+4` 已更正为冻结的 `12+8`。
+
+- **验证证据:** 定向 Gate/CLI 回归 **87 passed**；新增用例覆盖布尔翻转不能完成 evidence、digest
+  与 record 顺序无关、三格并发崩溃一次清空、无 invalid block 禁止 reserve、伪造 reserve provenance
+  被 schema 拒绝、disabled reserve 不能低层派发、state 原子写 round-trip、同 state 双 runner 被拒绝。
+
+- **剩余状态:** IN PROGRESS — 继续跑全量测试及 Ruff/Ruff format/Black/diff 四道门；全部通过后按
+  分支工作流提交、推送、提 PR 并合并。正式 Gate 仍为 `GATE-PREFLIGHT PENDING`。
+
+### 2026-08-13 23:54 AEST · Step 82 · 深度审阅修复的全量回归与四道质量门
+
+- **全量验证:** `python -m pytest -p no:cacheprovider` 为 **688 passed in 52.31s**。该数字比 PR #30
+  的 676 增加 12 个防回归用例；全程未调用 Provider，也未创建正式 Gate 数据库或 seed 结果。
+  两份测试文件完成纯格式化后再次全量复跑，结果仍为 **688 passed in 53.13s**。
+  最后两处 CLI help/锁错误处理收口后第三次全量复跑为 **688 passed in 52.87s**。
+
+- **格式门问题与解决:** 第一次 `ruff format --check .` 精确抓到两个新增测试文件的纯格式差异；
+  使用仓库固定 Ruff 只格式化这两份 `.py` 后，从第一道门重新执行。最终 `ruff check .`、
+  `ruff format --check .`（129 files）、`black --check src tests`（117 files）和 `git diff --check`
+  全部通过。Python 文件继续由 `.gitattributes` 固定 LF；diff check 的文档 CRLF 转换提示不是错误，
+  未出现 Python 混合行尾回归。
+
+- **剩余状态:** IN PROGRESS — 代码、测试、Runbook、CONCEPTS 与 DEVLOG 已同步；待最终 diff/status
+  复核后提交、推送、提 PR 并按作者既有授权合并。正式 Phase 0.5 Gate 状态没有被工程测试改变。
+
+---
+
 ## 2026-08-13 · Phase 0.5 最终裁决与 Gate 可审计性加固
 
 ### 2026-08-13 22:00 AEST · Step 69 · 作者签字的五项裁决，实施开始

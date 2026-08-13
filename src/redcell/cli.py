@@ -701,7 +701,7 @@ def gate_report(
         Path | None, typer.Option(help="冻结 replay validation JSON；缺失时报告保持 INCOMPLETE")
     ] = None,
     seed_plan_json: Annotated[
-        Path | None, typer.Option(help="冻结的 12+4 seed plan JSON；缺失时报告保持 INCOMPLETE")
+        Path | None, typer.Option(help="冻结的 12+8 seed plan JSON；缺失时报告保持 INCOMPLETE")
     ] = None,
     golden_json: Annotated[
         Path | None, typer.Option(help="冻结 Level-1 golden 结果；缺失时报告保持 INCOMPLETE")
@@ -880,9 +880,22 @@ def billing_evidence_template_command(
     ] = Path("runs/billing-evidence.json"),
 ) -> None:
     """从当前三角色配置生成**不完整** billing evidence 模板；不调用 Provider。"""
-    roles = load_role_settings()
-    configurations = {BillingRole(name): settings.run_configuration() for name, settings in roles}
-    template = billing_evidence_template(configurations)
+    if out.exists():
+        typer.secho(
+            f"Billing evidence 模板拒绝覆盖已有文件:{out}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(ExitCode.BAD_CONFIG)
+    try:
+        roles = load_role_settings()
+        configurations = {
+            BillingRole(name): settings.run_configuration() for name, settings in roles
+        }
+        template = billing_evidence_template(configurations)
+    except ValueError as exc:
+        typer.secho(f"Billing evidence 模板配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG) from exc
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(template.model_dump_json(indent=2), encoding="utf-8")
     typer.echo(f"Billing evidence template: {out}")
@@ -917,7 +930,7 @@ def golden(
 
 @app.command(name="validate-paths")
 def validate_paths(
-    seed_plan_json: Annotated[Path, typer.Option(help="冻结的 12+4 seed plan JSON")],
+    seed_plan_json: Annotated[Path, typer.Option(help="冻结的 12+8 seed plan JSON")],
     db: Annotated[str, typer.Option(help="正式 Phase 0.5 专用 SQLite 连接串")],
     out: Annotated[Path, typer.Option(help="冻结 replay validation JSON 输出路径")] = Path(
         "runs/validation.json"

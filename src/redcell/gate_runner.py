@@ -27,6 +27,7 @@ import hashlib
 import json
 from collections import Counter
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import Field, model_validator
 
@@ -77,6 +78,15 @@ class CellRecord(RedCellModel):
     exit_code: int | None = None
     detail: str | None = None
 
+    @model_validator(mode="after")
+    def status_has_durable_identity(self) -> CellRecord:
+        if self.status in (CellStatus.DISPATCHED, CellStatus.COMPLETED, CellStatus.FAILED):
+            if not self.run_id:
+                raise ValueError(f"{self.status.value} cell 必须绑定非空 Run ID")
+        elif self.run_id is not None:
+            raise ValueError(f"{self.status.value} cell 不得携带 Run ID")
+        return self
+
     @property
     def key(self) -> tuple[int, GateCondition]:
         return (self.seed, self.condition)
@@ -86,7 +96,13 @@ class ReserveActivation(RedCellModel):
     seed: int
     reason: ReserveInvalidationReason
     summary: str = Field(min_length=1)
-    state_digest_before: str
+    state_digest_before: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def summary_is_meaningful(self) -> ReserveActivation:
+        if not self.summary.strip():
+            raise ValueError("备用 seed activation 摘要不得只含空白")
+        return self
 
 
 class BlockView(RedCellModel):
@@ -114,7 +130,7 @@ class BlockView(RedCellModel):
 
 
 class MatrixState(RedCellModel):
-    version: str = GATE_RUNNER_STATE_VERSION
+    version: Literal["phase-0.5-gate-runner-state-v2"] = GATE_RUNNER_STATE_VERSION
     seed_plan_digest: str
     database_url: str
     cells: list[CellRecord] = Field(default_factory=list)
@@ -135,6 +151,16 @@ class MatrixState(RedCellModel):
             raise ValueError("备用 seed 不得重复启用")
         if self.enabled_reserve_seeds != reserve_order[: len(self.enabled_reserve_seeds)]:
             raise ValueError("备用 seed 必须按冻结顺序连续启用")
+        activation_seeds = [item.seed for item in self.reserve_activations]
+        if activation_seeds != self.enabled_reserve_seeds:
+            raise ValueError("每个已启用备用 seed 必须有且仅有一条同序 activation 证据")
+        active_invalid_blocks = sum(
+            view.invalid
+            for view in self.blocks()
+            if view.seed_role is SeedRole.PRIMARY or view.seed in self.enabled_reserve_seeds
+        )
+        if len(self.enabled_reserve_seeds) > active_invalid_blocks:
+            raise ValueError("启用的备用 seed 数超过已失效且可补位的 block 数")
         return self
 
     def state_digest(self) -> str:
@@ -198,10 +224,12 @@ def require_matching_state(plan: GatePlan, state: MatrixState) -> None:
         raise ValueError("state 与 plan 的 seed plan digest 不一致")
     if state.database_url != plan.database_url:
         raise ValueError("state 与 plan 的数据库不一致")
-    planned = {(cell.seed, cell.condition) for cell in plan.cells}
-    recorded = {cell.key for cell in state.cells}
-    if planned != recorded:
+    planned = {(cell.seed, cell.condition): cell.seed_role for cell in plan.cells}
+    recorded = {cell.key: cell.seed_role for cell in state.cells}
+    if planned.keys() != recorded.keys():
         raise ValueError("state 与 plan 的 seed×condition 集合不一致")
+    if planned != recorded:
+        raise ValueError("state 与 plan 的 primary/reserve 角色不一致")
 
 
 def pending_cells(plan: GatePlan, state: MatrixState, *, limit: int) -> list[GatePlanCell]:
@@ -235,6 +263,8 @@ def record_dispatch(
         raise KeyError(f"state 中没有 seed {seed} / {condition.value}")
     if target.status is not CellStatus.PENDING:
         raise ValueError(f"seed {seed} / {condition.value} 已有状态 {target.status}")
+    if not state.is_active(seed, target.seed_role):
+        raise ValueError(f"seed {seed} / {condition.value} 当前未启用或所属 block 已失效")
     assigned_id = run_id or new_id()
     return state.model_copy(
         update={
@@ -251,18 +281,20 @@ def record_dispatch(
 
 
 def invalidate_unknown_delivery(state: MatrixState) -> MatrixState:
-    """Fail closed after a crash: DISPATCHED means delivery is unknowable, never reusable."""
-    for cell in state.cells:
-        if cell.status is CellStatus.DISPATCHED:
-            return record_outcome(
-                state,
-                seed=cell.seed,
-                condition=cell.condition,
-                exit_code=91,
-                run_id=cell.run_id,
-                detail="进程中断后交付状态未知；整块按完整性失效，禁止猜测或复用 Run",
-            )
-    return state
+    """Fail closed after a crash: invalidate every in-flight cell from the saved batch."""
+    dispatched = [cell for cell in state.cells if cell.status is CellStatus.DISPATCHED]
+    recovered = state
+    for cell in dispatched:
+        assert cell.run_id is not None
+        recovered = record_outcome(
+            recovered,
+            seed=cell.seed,
+            condition=cell.condition,
+            exit_code=91,
+            run_id=cell.run_id,
+            detail="进程中断后交付状态未知；整块按完整性失效，禁止猜测或复用 Run",
+        )
+    return recovered
 
 
 def record_outcome(
@@ -271,7 +303,7 @@ def record_outcome(
     seed: int,
     condition: GateCondition,
     exit_code: int,
-    run_id: str | None = None,
+    run_id: str,
     detail: str | None = None,
     gate_context_fingerprint: str | None = None,
 ) -> MatrixState:
@@ -281,7 +313,7 @@ def record_outcome(
         raise KeyError(f"state 中没有 seed {seed} / {condition.value}")
     if target.status is not CellStatus.DISPATCHED:
         raise ValueError(f"seed {seed} / {condition.value} 已有状态 {target.status}")
-    if run_id is not None and target.run_id != run_id:
+    if target.run_id != run_id:
         raise ValueError("cell Run ID 与派发前持久化的 Run ID 不一致")
     if gate_context_fingerprint is not None and state.gate_context_fingerprint not in (
         None,
@@ -397,20 +429,26 @@ def enable_reserve_block(
         raise ValueError(f"必须先按冻结顺序启用备用 seed {next_seed}")
     if not summary.strip():
         raise ValueError("启用备用 seed 必须记录人工复核摘要")
-    return state.model_copy(
-        update={
-            "enabled_reserve_seeds": [*state.enabled_reserve_seeds, seed],
-            "reserve_activations": [
-                *state.reserve_activations,
-                ReserveActivation(
-                    seed=seed,
-                    reason=reason,
-                    summary=summary.strip(),
-                    state_digest_before=state.state_digest(),
-                ),
-            ],
-        }
-    )
+    active_invalid_blocks = [
+        block
+        for block in state.blocks()
+        if block.invalid
+        and (block.seed_role is SeedRole.PRIMARY or block.seed in state.enabled_reserve_seeds)
+    ]
+    if len(active_invalid_blocks) <= len(state.enabled_reserve_seeds):
+        raise ValueError("没有尚未补位的失效 block，禁止提前启用备用 seed")
+    payload = state.model_dump(mode="python")
+    payload["enabled_reserve_seeds"] = [*state.enabled_reserve_seeds, seed]
+    payload["reserve_activations"] = [
+        *state.reserve_activations,
+        ReserveActivation(
+            seed=seed,
+            reason=reason,
+            summary=summary.strip(),
+            state_digest_before=state.state_digest(),
+        ),
+    ]
+    return MatrixState.model_validate(payload)
 
 
 def progress_summary(plan: GatePlan, state: MatrixState) -> str:

@@ -429,7 +429,7 @@ def _matrix_state_failures(
 def _billing_evidence_failures(
     selected_runs: list[Run], evidence: BillingEvidenceBundle | None
 ) -> list[str]:
-    """Recheck the signed billing subject against persisted Run conditions.
+    """Recheck the reviewed billing subject against persisted Run conditions.
 
     Preflight inspects the live environment. The final report must instead inspect
     the configuration that actually produced the selected prefixes, otherwise a

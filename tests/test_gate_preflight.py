@@ -84,6 +84,7 @@ def _billing_evidence(roles: list[tuple[str, ProviderSettings]]) -> BillingEvide
                 reasoning_tokens_covered=True,
             )
             for role, settings in roles
+            if settings.provider and settings.model
         ]
     )
 
@@ -173,6 +174,7 @@ def test_billing_template_is_explicitly_incomplete(tmp_path) -> None:
     )
 
     assert all(not record.passed for record in template.records)
+    assert all(record.checked_on is None for record in template.records)
     assert "billing_evidence_coverage_unconfirmed:target" in {
         item.name
         for item in run_preflight(
@@ -184,6 +186,52 @@ def test_billing_template_is_explicitly_incomplete(tmp_path) -> None:
             billing_evidence=template,
         ).checks
     }
+
+
+def test_billing_template_cannot_pass_by_only_flipping_booleans() -> None:
+    roles = _roles()
+    template = billing_evidence_template(
+        {BillingRole(role): settings.run_configuration() for role, settings in roles}
+    )
+    toggled = template.model_copy(
+        update={
+            "records": [
+                record.model_copy(
+                    update={
+                        "usage_covers_billed_tokens": True,
+                        "reasoning_tokens_covered": True,
+                    }
+                )
+                for record in template.records
+            ]
+        }
+    )
+    legacy_placeholders = toggled.model_copy(
+        update={
+            "records": [
+                record.model_copy(
+                    update={
+                        "service_tier": "TO_FILL",
+                        "checked_on": "2026-08-13",
+                        "source_reference": "TO_FILL: documentation",
+                        "source_summary": "TO_FILL: coverage explanation",
+                    }
+                )
+                for record in toggled.records
+            ]
+        }
+    )
+
+    assert all(not record.passed for record in toggled.records)
+    assert all(not record.passed for record in legacy_placeholders.records)
+
+
+def test_billing_digest_is_independent_of_record_order() -> None:
+    evidence = _billing_evidence(_roles())
+
+    reordered = BillingEvidenceBundle(records=list(reversed(evidence.records)))
+
+    assert reordered.digest() == evidence.digest()
 
 
 def test_baseline_database_is_refused(tmp_path) -> None:
@@ -323,3 +371,31 @@ def test_cli_output_does_not_read_as_ready_to_conclude(isolated_env, tmp_path) -
 
     assert result.exit_code == ExitCode.CLEAN, result.output
     assert "可以开始跑对照" in result.output
+
+
+def test_billing_template_reports_incomplete_role_configuration_cleanly(
+    isolated_env, tmp_path
+) -> None:
+    result = runner.invoke(
+        app,
+        ["billing-evidence-template", "--out", str(tmp_path / "billing-evidence.json")],
+    )
+
+    assert result.exit_code == ExitCode.BAD_CONFIG
+    assert "模板配置被拒绝" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_billing_template_never_overwrites_reviewed_evidence(isolated_env, tmp_path) -> None:
+    _fill_env(isolated_env, tmp_path)
+    evidence_path = tmp_path / "billing-evidence.json"
+    evidence_path.write_text("reviewed evidence must survive", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        ["billing-evidence-template", "--out", str(evidence_path)],
+    )
+
+    assert result.exit_code == ExitCode.BAD_CONFIG
+    assert "拒绝覆盖已有文件" in result.output
+    assert evidence_path.read_text(encoding="utf-8") == "reviewed evidence must survive"
