@@ -23,16 +23,20 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections import Counter
 from enum import StrEnum
 
 from pydantic import Field, model_validator
 
+from redcell.budget import BudgetLimit
 from redcell.gate_analysis import GateCondition
 from redcell.gate_plan import GatePlan, GatePlanCell, SeedRole
-from redcell.protocols.common import RedCellModel
+from redcell.protocols.common import RedCellModel, new_id
+from redcell.protocols.run import Run, RunStatus
 
-GATE_RUNNER_STATE_VERSION = "phase-0.5-gate-runner-state-v1"
+GATE_RUNNER_STATE_VERSION = "phase-0.5-gate-runner-state-v2"
 NORMAL_RUN_EXIT_CODES = frozenset({0, 1})
 """`redcell run` 正常完成的退出码：`CLEAN=0` 或 `FINDINGS=1`。
 
@@ -44,6 +48,7 @@ seed block 作废，系统性删除有 Finding 的数据并偏向零结果。真
 
 class CellStatus(StrEnum):
     PENDING = "pending"
+    DISPATCHED = "dispatched"
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED_BLOCK_INVALID = "skipped_block_invalid"
@@ -66,6 +71,12 @@ class CellRecord(RedCellModel):
     @property
     def key(self) -> tuple[int, GateCondition]:
         return (self.seed, self.condition)
+
+
+class ReserveActivation(RedCellModel):
+    seed: int
+    reason: str
+    state_digest_before: str
 
 
 class BlockView(RedCellModel):
@@ -98,6 +109,8 @@ class MatrixState(RedCellModel):
     database_url: str
     cells: list[CellRecord] = Field(default_factory=list)
     enabled_reserve_seeds: list[int] = Field(default_factory=list)
+    reserve_activations: list[ReserveActivation] = Field(default_factory=list)
+    gate_context_fingerprint: str | None = None
     """已显式启用的备用 seed，且必须是冻结顺序的前缀。"""
 
     @model_validator(mode="after")
@@ -113,6 +126,10 @@ class MatrixState(RedCellModel):
         if self.enabled_reserve_seeds != reserve_order[: len(self.enabled_reserve_seeds)]:
             raise ValueError("备用 seed 必须按冻结顺序连续启用")
         return self
+
+    def state_digest(self) -> str:
+        payload = json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     # ── 查询 ─────────────────────────────────────────────────────────────
 
@@ -199,6 +216,45 @@ def pending_cells(plan: GatePlan, state: MatrixState, *, limit: int) -> list[Gat
     return ready
 
 
+def record_dispatch(
+    state: MatrixState, *, seed: int, condition: GateCondition, run_id: str | None = None
+) -> MatrixState:
+    """Durably bind a cell to its exact child Run ID before starting that child."""
+    target = next((cell for cell in state.cells if cell.key == (seed, condition)), None)
+    if target is None:
+        raise KeyError(f"state 中没有 seed {seed} / {condition.value}")
+    if target.status is not CellStatus.PENDING:
+        raise ValueError(f"seed {seed} / {condition.value} 已有状态 {target.status}")
+    assigned_id = run_id or new_id()
+    return state.model_copy(
+        update={
+            "cells": [
+                (
+                    cell.model_copy(update={"status": CellStatus.DISPATCHED, "run_id": assigned_id})
+                    if cell.key == target.key
+                    else cell
+                )
+                for cell in state.cells
+            ]
+        }
+    )
+
+
+def invalidate_unknown_delivery(state: MatrixState) -> MatrixState:
+    """Fail closed after a crash: DISPATCHED means delivery is unknowable, never reusable."""
+    for cell in state.cells:
+        if cell.status is CellStatus.DISPATCHED:
+            return record_outcome(
+                state,
+                seed=cell.seed,
+                condition=cell.condition,
+                exit_code=91,
+                run_id=cell.run_id,
+                detail="进程中断后交付状态未知；整块按完整性失效，禁止猜测或复用 Run",
+            )
+    return state
+
+
 def record_outcome(
     state: MatrixState,
     *,
@@ -207,13 +263,21 @@ def record_outcome(
     exit_code: int,
     run_id: str | None = None,
     detail: str | None = None,
+    gate_context_fingerprint: str | None = None,
 ) -> MatrixState:
     """落一格结果;失败时同 block 的未跑格子一并标为不再派发。"""
     target = next((cell for cell in state.cells if cell.key == (seed, condition)), None)
     if target is None:
         raise KeyError(f"state 中没有 seed {seed} / {condition.value}")
-    if target.status is not CellStatus.PENDING:
+    if target.status is not CellStatus.DISPATCHED:
         raise ValueError(f"seed {seed} / {condition.value} 已有状态 {target.status}")
+    if run_id is not None and target.run_id != run_id:
+        raise ValueError("cell Run ID 与派发前持久化的 Run ID 不一致")
+    if gate_context_fingerprint is not None and state.gate_context_fingerprint not in (
+        None,
+        gate_context_fingerprint,
+    ):
+        raise ValueError("cell Gate context 与既有矩阵 context 不一致")
     succeeded = exit_code in NORMAL_RUN_EXIT_CODES
     updated: list[CellRecord] = []
     for cell in state.cells:
@@ -241,10 +305,63 @@ def record_outcome(
             )
         else:
             updated.append(cell)
-    return state.model_copy(update={"cells": updated})
+    return state.model_copy(
+        update={
+            "cells": updated,
+            "gate_context_fingerprint": gate_context_fingerprint or state.gate_context_fingerprint,
+        }
+    )
 
 
-def enable_reserve_block(state: MatrixState, seed: int) -> MatrixState:
+def verify_cell_run(
+    run: Run | None,
+    cell: GatePlanCell,
+    *,
+    expected_run_id: str | None = None,
+    expected_gate_context_fingerprint: str | None = None,
+) -> str | None:
+    """逐格核验 runbook §5 的硬条件;返回失败原因,`None` 表示通过。
+
+    **为什么退出码不够。** `redcell run` 在预算耗尽时正常退出,而"耗尽的是哪一项"
+    它不体现在退出码里:一格因**墙钟**或 **attempt 上限**停下,同样是 exit 0/1。
+    那样的 Run 没有跑到 320k 前缀,却会被记成 `completed`、block 显示 usable ——
+    直到 21 小时之后 `gate-report` 才拒绝它,而那时补位又要再花六个 cell。
+    **让坏 block 在第一时间暴露,是这个函数存在的全部理由。**
+    """
+    if run is None:
+        return "数据库中找不到已派发 Run ID 的记录"
+    if expected_run_id is not None and run.id != expected_run_id:
+        return "Run ID 与派发前持久化绑定不一致"
+    conditions = run.experiment_conditions
+    if (
+        run.seed != cell.seed
+        or conditions is None
+        or conditions.search is None
+        or conditions.generation_memory is None
+        or conditions.search.selector is not cell.search
+        or conditions.generation_memory.mode is not cell.cross_attempt_memory
+    ):
+        return "Run 的 seed 或治疗条件与 cell 不一致"
+    if (
+        expected_gate_context_fingerprint is not None
+        and run.gate_context_fingerprint() != expected_gate_context_fingerprint
+    ):
+        return "Run 的 Gate context 与矩阵状态不一致"
+    if run.status is not RunStatus.COMPLETED:
+        return f"Run 状态为 {run.status.value},不是 completed"
+    if run.stopped_by is not BudgetLimit.TOKENS:
+        stopped = run.stopped_by.value if run.stopped_by else "未记录"
+        return f"停止原因为 {stopped},不是 Token —— 未跑满 Token 前缀"
+    usage = run.usage
+    if usage.total_tokens < cell.max_total_tokens:
+        return f"累计 Token {usage.total_tokens} 未达 checkpoint {cell.max_total_tokens}"
+    if usage.role_total_tokens != usage.total_tokens:
+        # 总账与三角色账不守恒 ⇒ 等 Token 比较的分母本身不可信。
+        return f"角色账 {usage.role_total_tokens} 与总账 {usage.total_tokens} 不一致"
+    return None
+
+
+def enable_reserve_block(state: MatrixState, seed: int, *, reason: str) -> MatrixState:
     """显式启用一个备用 block。
 
     ⚠️ 刻意要求调用方点名 seed,而不是"自动取下一个":哪一块失效、是不是属于
@@ -262,7 +379,19 @@ def enable_reserve_block(state: MatrixState, seed: int) -> MatrixState:
     next_seed = reserve_order[len(state.enabled_reserve_seeds)]
     if seed != next_seed:
         raise ValueError(f"必须先按冻结顺序启用备用 seed {next_seed}")
-    return state.model_copy(update={"enabled_reserve_seeds": [*state.enabled_reserve_seeds, seed]})
+    if not reason.strip():
+        raise ValueError("启用备用 seed 必须记录人工确认的失效理由")
+    return state.model_copy(
+        update={
+            "enabled_reserve_seeds": [*state.enabled_reserve_seeds, seed],
+            "reserve_activations": [
+                *state.reserve_activations,
+                ReserveActivation(
+                    seed=seed, reason=reason.strip(), state_digest_before=state.state_digest()
+                ),
+            ],
+        }
+    )
 
 
 def progress_summary(plan: GatePlan, state: MatrixState) -> str:

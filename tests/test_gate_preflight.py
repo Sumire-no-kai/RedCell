@@ -22,7 +22,7 @@ from redcell.storage import RunStore
 runner = CliRunner()
 
 FROZEN_SEED_PLAN = Path("docs/PHASE0_5_SEED_PLAN.json").resolve()
-GOLDEN_FIXTURES = Path("tests/fixtures/level1-golden-v1.json").resolve()
+GOLDEN_FIXTURES = Path("tests/fixtures/level1-golden-v2.json").resolve()
 
 ROLES = ("target", "attacker", "controller")
 
@@ -33,7 +33,9 @@ SETTINGS_TYPES = {
 }
 
 
-def _settings(role: str, *, connected: bool = True, prices: bool = True) -> ProviderSettings:
+def _settings(
+    role: str, *, connected: bool = True, prices: bool = True, usage_coverage: bool = True
+) -> ProviderSettings:
     """构造与运行环境完全无关的配置对象。
 
     **每个字段都显式赋值**,而不是只关掉 dotenv。`_env_file=None` 只停掉 `.env`
@@ -51,6 +53,7 @@ def _settings(role: str, *, connected: bool = True, prices: bool = True) -> Prov
         input_usd_per_mtok=0.07 if prices else None,
         output_usd_per_mtok=0.4 if prices else None,
         cached_input_usd_per_mtok=0.0 if prices else None,
+        usage_covers_billed_tokens=usage_coverage,
     )
 
 
@@ -68,6 +71,7 @@ def _report(tmp_path: Path, roles=None):
         database_url=_db(tmp_path),
         golden_fixtures=GOLDEN_FIXTURES,
         roles=roles if roles is not None else _roles(),
+        shared_rate_limit_db=f"sqlite:///{tmp_path / 'shared-rate-limit.db'}",
     )
 
 
@@ -109,6 +113,15 @@ def test_unset_price_is_unknown_not_free(tmp_path) -> None:
 
 def test_explicit_zero_price_is_accepted(tmp_path) -> None:
     assert _check(_report(tmp_path), "attacker.pricing").passed
+
+
+def test_partial_usage_declaration_is_refused(tmp_path) -> None:
+    roles = _roles(target=_settings("target", usage_coverage=False))
+
+    check = _check(_report(tmp_path, roles), "target.usage_coverage")
+
+    assert not check.passed
+    assert "USAGE_COVERS_BILLED_TOKENS" in check.detail
 
 
 def test_baseline_database_is_refused(tmp_path) -> None:
@@ -187,12 +200,14 @@ def isolated_env(tmp_path, monkeypatch):
             "INPUT_USD_PER_MTOK",
             "OUTPUT_USD_PER_MTOK",
             "CACHED_INPUT_USD_PER_MTOK",
+            "USAGE_COVERS_BILLED_TOKENS",
         ):
             monkeypatch.delenv(f"REDCELL_{role.upper()}_{suffix}", raising=False)
+    monkeypatch.delenv("REDCELL_SHARED_RATE_LIMIT_DB", raising=False)
     return monkeypatch
 
 
-def _fill_env(monkeypatch) -> None:
+def _fill_env(monkeypatch, tmp_path) -> None:
     for role in ROLES:
         prefix = f"REDCELL_{role.upper()}_"
         monkeypatch.setenv(f"{prefix}PROVIDER", "glm")
@@ -202,6 +217,10 @@ def _fill_env(monkeypatch) -> None:
         monkeypatch.setenv(f"{prefix}INPUT_USD_PER_MTOK", "0.07")
         monkeypatch.setenv(f"{prefix}OUTPUT_USD_PER_MTOK", "0.4")
         monkeypatch.setenv(f"{prefix}CACHED_INPUT_USD_PER_MTOK", "0")
+        monkeypatch.setenv(f"{prefix}USAGE_COVERS_BILLED_TOKENS", "true")
+    monkeypatch.setenv(
+        "REDCELL_SHARED_RATE_LIMIT_DB", f"sqlite:///{tmp_path / 'shared-rate-limit.db'}"
+    )
 
 
 def _invoke(tmp_path):
@@ -222,7 +241,7 @@ def _invoke(tmp_path):
 @pytest.mark.parametrize("configured", [True, False])
 def test_cli_exit_code_tracks_configuration(isolated_env, tmp_path, configured) -> None:
     if configured:
-        _fill_env(isolated_env)
+        _fill_env(isolated_env, tmp_path)
 
     result = _invoke(tmp_path)
 
@@ -231,7 +250,7 @@ def test_cli_exit_code_tracks_configuration(isolated_env, tmp_path, configured) 
 
 def test_cli_output_does_not_read_as_ready_to_conclude(isolated_env, tmp_path) -> None:
     """全绿最容易被读成"可以出结论了" —— 输出必须自己挡住这个误读。"""
-    _fill_env(isolated_env)
+    _fill_env(isolated_env, tmp_path)
 
     result = _invoke(tmp_path)
 

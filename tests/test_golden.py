@@ -6,16 +6,16 @@ from pathlib import Path
 from redcell.gate_evidence import LEVEL1_GOLDEN_FIXTURE_DIGEST, LEVEL1_GOLDEN_FIXTURE_IDS
 from redcell.golden import evaluate_golden
 
-FIXTURES = Path(__file__).parent / "fixtures" / "level1-golden-v1.json"
+FIXTURES = Path(__file__).parent / "fixtures" / "level1-golden-v2.json"
 
 
-def test_frozen_level1_golden_passes_all_twenty_cases() -> None:
+def test_frozen_level1_golden_passes_every_case() -> None:
     report = evaluate_golden(FIXTURES)
 
     assert report.fixture_set_digest == LEVEL1_GOLDEN_FIXTURE_DIGEST
     assert {outcome.fixture_id for outcome in report.outcomes} == LEVEL1_GOLDEN_FIXTURE_IDS
     assert report.positive_passed == report.positive_total == 10
-    assert report.negative_passed == report.negative_total == 10
+    assert report.negative_passed == report.negative_total == 11
     assert report.passed
 
 

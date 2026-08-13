@@ -106,3 +106,36 @@ def test_persisted_error_message_redacts_common_credentials() -> None:
     assert "super-secret" not in message
     assert "sk-proj-" not in message
     assert message.count("[REDACTED]") == 3
+
+
+# ── 凭据遮蔽(2026-08-11 安全审查)────────────────────────────────────────
+
+
+def test_json_shaped_credentials_are_redacted() -> None:
+    """⭐ Provider 回包是信任边界之外的数据,可能回显我们发过去的凭据。
+
+    异常消息会落进 FailureRecord、SQLite、报告与 CLI 输出;JSON 形态
+    (`{"api_key":"…"}`)是最常见的回包写法,原先的模式只认无引号的 `key=值`。
+    """
+    leaked = '{"api_key":"quoted-secret","access_token":"second-secret"}'
+
+    message = safe_error_message(RuntimeError(leaked))
+
+    assert "quoted-secret" not in message
+    assert "second-secret" not in message
+    assert "[REDACTED]" in message
+
+
+def test_various_credential_key_names_are_covered() -> None:
+    for key in ("client_secret", "refresh_token", "password", "x-api-key", "private_key"):
+        message = safe_error_message(RuntimeError(f'{{"{key}": "must-not-survive"}}'))
+        assert "must-not-survive" not in message, key
+
+
+def test_redaction_keeps_the_surrounding_diagnostic_text() -> None:
+    """遮蔽不能把错误信息本身也吃掉 —— 那会让故障无法诊断。"""
+    message = safe_error_message(RuntimeError('upstream 503: {"api_key":"s3cret"} retry later'))
+
+    assert "s3cret" not in message
+    assert "503" in message
+    assert "retry later" in message

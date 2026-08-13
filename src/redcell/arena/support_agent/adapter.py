@@ -62,7 +62,6 @@ class ArenaAdapter(TargetAdapter):
     ) -> None:
         self._provider = provider
         self._defense = defense
-        self._codec = codec or TextToolCallCodec()
         self._model = model
         self._temperature = temperature
         self._max_tokens = max_tokens
@@ -70,6 +69,10 @@ class ArenaAdapter(TargetAdapter):
         self._tools = SupportAgentTools(
             enforce_permissions=enforce_permissions,
             enforce_confirmation=enforce_confirmation,
+        )
+        # 工具名单先建再建 codec:零参数裸名兜底要靠它才能落地(见 codec 的 __init__)。
+        self._codec = codec or TextToolCallCodec(
+            known_tools=[spec["name"] for spec in self._tools.specs()]
         )
 
     # ── TargetAdapter 接口 ───────────────────────────────────────────────
@@ -97,6 +100,7 @@ class ArenaAdapter(TargetAdapter):
             # 同一个靶场接 ScriptedProvider 时成本恒为 0(真实且无意义),
             # 接真实 API 时才有可用的成本数字。
             reports_cost=self._provider.reports_cost,
+            usage_covers_billed_tokens=self._provider.usage_covers_billed_tokens,
         )
 
     @property
@@ -159,6 +163,7 @@ class ArenaAdapter(TargetAdapter):
                         name=call.name,
                         content=result.content,
                         error=result.error,
+                        awaiting_confirmation=result.awaiting_confirmation,
                     )
                 )
                 side_effects.extend(result.side_effects)

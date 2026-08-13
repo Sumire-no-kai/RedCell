@@ -302,3 +302,36 @@ async def test_prompt_pins_the_language_without_blocking_the_encoding_strategy()
     system = provider.calls[0][0].content
     assert "language of the target brief" in system
     assert "altering the surface form" in system
+
+
+# ── 重采样用量守恒(2026-08-11 安全审查)─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_discarded_resamples_are_still_charged_to_the_ledger() -> None:
+    """⭐ 每一次重采样都是真实付费调用。
+
+    只带回最后一次的用量,等于让被丢弃的那几次完全不进 Run 预算 ——
+    `max_total_tokens` 会挡不住攻击方,而 Phase 0.5「相同总 Token」的分母
+    也会系统性偏小,那时比较的已经不是同一件事。
+    """
+    provider = ScriptedProvider(["", "", "finally some content"], tokens_per_call=(10, 5))
+    generator = LLMMutationGenerator(provider, model="m")
+
+    message = await generator.generate(_request())
+
+    assert message.generation_retries == 2
+    # 三次调用 × (10+5),而不是最后一次的 15。
+    assert message.cost.total_tokens == 45
+
+
+@pytest.mark.asyncio
+async def test_a_terminal_generation_failure_still_reports_what_it_spent() -> None:
+    """放弃之前的每一次调用同样付过费,不能随异常一起丢掉。"""
+    provider = ScriptedProvider([""] * 6, tokens_per_call=(10, 5))
+    generator = LLMMutationGenerator(provider, model="m", max_empty_retries=2)
+
+    with pytest.raises(AttackGenerationError) as excinfo:
+        await generator.generate(_request())
+
+    assert excinfo.value.cost.total_tokens == 45

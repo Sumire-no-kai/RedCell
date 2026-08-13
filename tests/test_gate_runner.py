@@ -12,10 +12,15 @@ from redcell.gate_runner import (
     MatrixState,
     enable_reserve_block,
     initial_state,
+    invalidate_unknown_delivery,
     pending_cells,
     progress_summary,
-    record_outcome,
+    record_dispatch,
     require_matching_state,
+    verify_cell_run,
+)
+from redcell.gate_runner import (
+    record_outcome as _persist_outcome,
 )
 
 FROZEN_PLAN = SeedPlan.model_validate_json(
@@ -31,6 +36,18 @@ def _plan(**updates):
     }
     payload.update(updates)
     return build_gate_plan(FROZEN_PLAN, **payload)
+
+
+def record_outcome(state: MatrixState, **kwargs) -> MatrixState:
+    """Tests model the mandatory dispatch write before a cell can complete."""
+    state = record_dispatch(state, seed=kwargs["seed"], condition=kwargs["condition"])
+    kwargs.setdefault(
+        "run_id",
+        next(
+            cell.run_id for cell in state.cells if cell.key == (kwargs["seed"], kwargs["condition"])
+        ),
+    )
+    return _persist_outcome(state, **kwargs)
 
 
 def _complete_block(state: MatrixState, seed: int) -> MatrixState:
@@ -128,6 +145,34 @@ def test_completed_cells_are_never_dispatched_again() -> None:
     assert (seed, GateCondition.STATIC_OFF) not in {(c.seed, c.condition) for c in ready}
 
 
+def test_crash_after_dispatch_invalidates_the_whole_block() -> None:
+    """A child may have run, but without a durable outcome it must never be guessed or reused."""
+    plan = _plan()
+    cell = plan.cells[0]
+    state = record_dispatch(
+        initial_state(plan), seed=cell.seed, condition=cell.condition, run_id="preassigned-run"
+    )
+
+    recovered = invalidate_unknown_delivery(state)
+
+    record = next(item for item in recovered.cells if item.key == (cell.seed, cell.condition))
+    assert record.status is CellStatus.FAILED
+    assert record.run_id == "preassigned-run"
+    assert recovered.block(cell.seed).skipped == 5
+
+
+def test_reserve_activation_records_reason_and_prior_state_digest() -> None:
+    plan = _plan()
+    state = initial_state(plan)
+    reserve_seed = next(cell.seed for cell in plan.cells if cell.seed_role is SeedRole.RESERVE)
+    before = state.state_digest()
+
+    activated = enable_reserve_block(state, reserve_seed, reason="provider outage reviewed")
+
+    assert activated.reserve_activations[0].reason == "provider outage reviewed"
+    assert activated.reserve_activations[0].state_digest_before == before
+
+
 def test_a_normal_run_with_findings_keeps_its_block_usable() -> None:
     """Finding 是实验结果，不是失败；CLI 用退出码 1 表示这种正常完成。"""
     plan = _plan()
@@ -156,7 +201,7 @@ def test_a_cell_cannot_have_its_outcome_overwritten() -> None:
 def test_enabling_a_reserve_block_puts_exactly_that_block_in_play() -> None:
     plan = _plan()
     reserve_seed = next(c.seed for c in plan.cells if c.seed_role is SeedRole.RESERVE)
-    state = enable_reserve_block(initial_state(plan), reserve_seed)
+    state = enable_reserve_block(initial_state(plan), reserve_seed, reason="infrastructure failure")
 
     ready = pending_cells(plan, state, limit=96)
     reserve_ready = {cell.seed for cell in ready if cell.seed_role is SeedRole.RESERVE}
@@ -170,7 +215,7 @@ def test_a_primary_seed_cannot_be_enabled_as_reserve() -> None:
     primary_seed = plan.cells[0].seed
 
     with pytest.raises(ValueError, match="不是备用 seed"):
-        enable_reserve_block(initial_state(plan), primary_seed)
+        enable_reserve_block(initial_state(plan), primary_seed, reason="infrastructure failure")
 
 
 def test_reserve_blocks_must_be_enabled_in_the_frozen_order() -> None:
@@ -181,10 +226,10 @@ def test_reserve_blocks_must_be_enabled_in_the_frozen_order() -> None:
     state = initial_state(plan)
 
     with pytest.raises(ValueError, match=f"备用 seed {reserve_seeds[0]}"):
-        enable_reserve_block(state, reserve_seeds[1])
+        enable_reserve_block(state, reserve_seeds[1], reason="infrastructure failure")
 
-    state = enable_reserve_block(state, reserve_seeds[0])
-    state = enable_reserve_block(state, reserve_seeds[1])
+    state = enable_reserve_block(state, reserve_seeds[0], reason="infrastructure failure")
+    state = enable_reserve_block(state, reserve_seeds[1], reason="infrastructure failure")
     assert state.enabled_reserve_seeds == reserve_seeds[:2]
 
 
@@ -222,3 +267,159 @@ def test_twelve_usable_blocks_are_reported_as_ready_for_replay() -> None:
     assert len(state.usable_blocks) == 12
     assert "可以进入 validate-paths" in summary
     assert "72/72 completed" in summary
+
+
+# ── 逐格核验 ─────────────────────────────────────────────────────────────
+
+
+def _finished_run(cell, **updates):
+    from redcell.budget import BudgetLimit, BudgetLimits, BudgetUsage
+    from redcell.protocols.run import (
+        ArenaRunConfiguration,
+        ExperimentConditions,
+        GenerationMemoryConfiguration,
+        GenerationMemoryLimits,
+        GenerationMemoryMode,
+        ProviderRunConfiguration,
+        Run,
+        RunStatus,
+        SearchConfiguration,
+    )
+
+    provider = ProviderRunConfiguration(
+        provider="p",
+        base_url="https://p.invalid/v1",
+        model="m",
+        temperature=0.0,
+        max_tokens=512,
+        rpm=0,
+        max_concurrency=1,
+    )
+    payload = {
+        "status": RunStatus.COMPLETED,
+        "stopped_by": BudgetLimit.TOKENS,
+        "usage": BudgetUsage(
+            prompt_tokens=200000,
+            completion_tokens=120000,
+            generator_prompt_tokens=100000,
+            generator_completion_tokens=60000,
+            target_prompt_tokens=100000,
+            target_completion_tokens=60000,
+        ),
+    }
+    payload.update(updates)
+    return Run(
+        target_name="t",
+        policy_version="v1",
+        adapter_type="arena",
+        algorithm=cell.search.value,
+        limits=BudgetLimits(max_attempts=500, max_total_tokens=cell.max_total_tokens),
+        seed=cell.seed,
+        experiment_conditions=ExperimentConditions(
+            online=True,
+            actor="customer_a",
+            target=provider,
+            attacker=provider,
+            arena=ArenaRunConfiguration(
+                defense="standard", enforce_permissions=True, enforce_confirmation=True
+            ),
+            search=SearchConfiguration(selector=cell.search),
+            generation_memory=(
+                GenerationMemoryConfiguration(
+                    mode=cell.cross_attempt_memory,
+                    policy_version="bounded-relevant-v1",
+                    limits=GenerationMemoryLimits(),
+                )
+                if cell.cross_attempt_memory is GenerationMemoryMode.BOUNDED_RELEVANT_V1
+                else GenerationMemoryConfiguration(mode=cell.cross_attempt_memory)
+            ),
+        ),
+        **payload,
+    )
+
+
+def test_a_run_that_reached_the_token_prefix_verifies() -> None:
+    cell = _plan().cells[0]
+
+    assert verify_cell_run(_finished_run(cell), cell) is None
+
+
+def test_a_run_stopped_by_something_other_than_tokens_is_refused() -> None:
+    """⭐ 退出码看不出"耗尽的是哪一项"。
+
+    墙钟或 attempt 上限停下的 Run 同样 exit 0/1,却到不了 320k 前缀 ——
+    不当场拦下,它会一路装成 usable 直到 21 小时后的 gate-report。
+    """
+    from redcell.budget import BudgetLimit
+
+    cell = _plan().cells[0]
+    run = _finished_run(cell, stopped_by=BudgetLimit.WALL_CLOCK)
+
+    reason = verify_cell_run(run, cell)
+
+    assert reason is not None
+    assert "不是 Token" in reason
+
+
+def test_a_run_short_of_the_checkpoint_is_refused() -> None:
+    from redcell.budget import BudgetUsage
+
+    cell = _plan().cells[0]
+    run = _finished_run(
+        cell,
+        usage=BudgetUsage(
+            prompt_tokens=100,
+            completion_tokens=100,
+            generator_prompt_tokens=50,
+            generator_completion_tokens=50,
+            target_prompt_tokens=50,
+            target_completion_tokens=50,
+        ),
+    )
+
+    assert "未达 checkpoint" in (verify_cell_run(run, cell) or "")
+
+
+def test_role_and_total_token_ledgers_must_agree() -> None:
+    """总账与三角色账不守恒 ⇒ 等 Token 比较的分母本身不可信。"""
+    from redcell.budget import BudgetUsage
+
+    cell = _plan().cells[0]
+    run = _finished_run(
+        cell,
+        usage=BudgetUsage(
+            prompt_tokens=200000,
+            completion_tokens=120000,
+            generator_prompt_tokens=100000,
+            generator_completion_tokens=60000,
+            target_prompt_tokens=100000,
+            target_completion_tokens=59999,
+        ),
+    )
+
+    assert "不一致" in (verify_cell_run(run, cell) or "")
+
+
+def test_an_incomplete_run_is_refused() -> None:
+    from redcell.protocols.run import RunStatus
+
+    cell = _plan().cells[0]
+
+    assert "不是 completed" in (
+        verify_cell_run(_finished_run(cell, status=RunStatus.FAILED), cell) or ""
+    )
+
+
+def test_a_missing_run_is_refused() -> None:
+    cell = _plan().cells[0]
+
+    assert "找不到" in (verify_cell_run(None, cell) or "")
+
+
+def test_exact_run_id_is_required_instead_of_treatment_matching() -> None:
+    """条件相同也不能替代派发前持久化的精确 Run ID。"""
+    plan = _plan()
+    static_off, static_memory = plan.cells[0], plan.cells[1]
+    run = _finished_run(static_memory)
+
+    assert "Run ID" in (verify_cell_run(run, static_off, expected_run_id="the-dispatched-id") or "")

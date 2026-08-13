@@ -12,7 +12,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Literal
 
 from pydantic import Field, model_validator
 
@@ -67,6 +67,18 @@ class RunEvent(RedCellModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class ThinkingConfiguration(RedCellModel):
+    """The sole approved vendor extension; unknown and secret fields are forbidden."""
+
+    type: Literal["enabled", "disabled"]
+
+
+class ProviderExtraBody(RedCellModel):
+    """Versioned allowlist for non-standard provider payload fields."""
+
+    thinking: ThinkingConfiguration | None = None
+
+
 class ProviderRunConfiguration(RedCellModel):
     """不含凭据、但足以复核模型行为与节流条件的 provider 快照。"""
 
@@ -81,7 +93,9 @@ class ProviderRunConfiguration(RedCellModel):
     output_usd_per_mtok: float | None = Field(default=None, ge=0.0)
     cached_input_usd_per_mtok: float | None = Field(default=None, ge=0.0)
     """`None` 表示价格未知；只有显式 0 才表示确认免费。"""
-    extra_body: dict[str, Any] = Field(default_factory=dict)
+    extra_body: ProviderExtraBody = Field(default_factory=ProviderExtraBody)
+    usage_covers_billed_tokens: bool | None = None
+    """`None` preserves historical snapshots; only explicit `True` permits a formal Gate."""
 
 
 class SearchSelector(StrEnum):

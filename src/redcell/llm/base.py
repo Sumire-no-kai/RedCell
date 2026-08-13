@@ -63,6 +63,11 @@ class LLMProvider(ABC):
         """
         return False
 
+    @property
+    def usage_covers_billed_tokens(self) -> bool:
+        """Whether reported usage includes every billable token class (default: no)."""
+        return False
+
     @abstractmethod
     async def complete(
         self,

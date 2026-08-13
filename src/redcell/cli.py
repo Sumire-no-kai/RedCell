@@ -43,8 +43,10 @@ from redcell.controller_controls import (
     run_controller_contract_controls,
 )
 from redcell.controls import (
+    UTILITY_CONTEXT_VERSION,
     ControlsAdjudicationReport,
     ControlsReport,
+    assess_controls_adjudication,
     build_controls_adjudication_template,
     controls_conditions,
     run_negative_control,
@@ -57,6 +59,7 @@ from redcell.gate_evidence import GoldenReport
 from redcell.gate_plan import GatePlan, build_gate_plan
 from redcell.gate_preflight import run_preflight
 from redcell.gate_report import build_gate_report
+from redcell.gate_runner import MatrixState
 from redcell.gate_validation import select_validation_evidence
 from redcell.generation import AttackGenerator, TemplateAttackGenerator
 from redcell.golden import evaluate_golden
@@ -94,6 +97,11 @@ from redcell.search import (
 )
 from redcell.storage import DEFAULT_URL, RunStore
 from redcell.strategies import PHASE_0_STRATEGIES
+from redcell.utility_baseline import (
+    PHASE0_5_UTILITY_BASELINE_PATH,
+    freeze_utility_baseline,
+    utility_baseline_json,
+)
 from redcell.validator import ValidationReport, validate_attack_paths
 
 app = typer.Typer(
@@ -269,6 +277,10 @@ def run(
     ] = "off",
     budget: Annotated[int, typer.Option(help="最大 attempt 数")] = 20,
     seed: Annotated[int, typer.Option(help="实验种子;同一 seed 结果可复现")] = 0,
+    run_id: Annotated[
+        str | None,
+        typer.Option(help="矩阵调度器预先分配的 Run ID；普通手动运行不要设置"),
+    ] = None,
     actor: Annotated[str, typer.Option(help="攻击时扮演的身份")] = "customer_a",
     defense: Annotated[
         DefenseLevel, typer.Option(help="靶场防御强度(校准旋钮 ①)")
@@ -424,6 +436,7 @@ def run(
         experiment_fingerprint=conditions.fingerprint(),
         strategy_ids=[s.id for s in strategies],
         notes=None if online else OFFLINE_NOTICE,
+        **({"id": run_id} if run_id is not None else {}),
     )
 
     orchestrator_args = {
@@ -694,6 +707,10 @@ def gate_report(
     controller_controls_json: Annotated[
         Path | None, typer.Option(help="冻结 Controller controls JSON；缺失时报告保持 INCOMPLETE")
     ] = None,
+    matrix_state_json: Annotated[
+        Path | None,
+        typer.Option(help="正式矩阵的持久化派发状态；缺失时有正式前缀的报告保持 INCOMPLETE"),
+    ] = None,
 ) -> None:
     """从已落盘的 Run/Event/Finding 重建冻结的 Phase 0.5 Gate 分析。"""
     controls_result = (
@@ -735,6 +752,11 @@ def gate_report(
         if controller_controls_json is not None
         else None
     )
+    matrix_state = (
+        MatrixState.model_validate_json(matrix_state_json.read_text(encoding="utf-8"))
+        if matrix_state_json is not None
+        else None
+    )
     with RunStore(db) as store:
         result = build_gate_report(
             store,
@@ -745,6 +767,7 @@ def gate_report(
             controller_controls=controller_controls_result,
             validation=validation_result,
             seed_plan=seed_plan,
+            matrix_state=matrix_state,
         )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(result.model_dump_json(indent=2), encoding="utf-8")
@@ -789,7 +812,7 @@ def gate_preflight(
     seed_plan_json: Annotated[Path, typer.Option(help="冻结的 12+4 seed plan JSON")],
     db: Annotated[str, typer.Option(help="正式矩阵专用 SQLite 连接串;必须为空且不得混用开发库")],
     golden_fixtures: Annotated[Path, typer.Option(help="冻结 Level-1 fixture JSON")] = Path(
-        "tests/fixtures/level1-golden-v1.json"
+        "tests/fixtures/level1-golden-v2.json"
     ),
     out: Annotated[Path | None, typer.Option(help="自检报告 JSON 输出路径")] = None,
 ) -> None:
@@ -819,7 +842,7 @@ def gate_preflight(
 @app.command(name="golden")
 def golden(
     fixtures: Annotated[Path, typer.Option(help="冻结 Level-1 fixture JSON")] = Path(
-        "tests/fixtures/level1-golden-v1.json"
+        "tests/fixtures/level1-golden-v2.json"
     ),
     out: Annotated[Path, typer.Option(help="Golden report JSON 输出路径")] = Path(
         "runs/golden.json"
@@ -1015,6 +1038,7 @@ def controls(
                 negative=negative,
                 conditions=conditions,
                 utility_context_fingerprint=conditions.utility_context_fingerprint(),
+                utility_context_version=UTILITY_CONTEXT_VERSION,
             )
         finally:
             await pair.aclose()
@@ -1032,6 +1056,63 @@ def controls(
     if not report_data.passed:
         raise typer.Exit(ExitCode.CONTROL_FAILED)
     raise typer.Exit(ExitCode.CLEAN)
+
+
+@app.command(name="utility-baseline-freeze")
+def utility_baseline_freeze(
+    controls_json: Annotated[Path, typer.Option(help="要冻结为基线的 controls JSON")],
+    adjudication_json: Annotated[
+        Path,
+        typer.Option(help="已完成且与 raw controls 绑定的阴性 Finding 裁决 JSON"),
+    ],
+    out: Annotated[Path, typer.Option(help="基线落盘路径")] = PHASE0_5_UTILITY_BASELINE_PATH,
+    note: Annotated[str, typer.Option(help="冻结说明,写进记录")] = "",
+) -> None:
+    """把一份 controls 产物固化为 utility 回归基线。
+
+    ⚠️ **已存在则拒绝覆盖。** 这是「预承诺 + 跑一次即冻结」的机械落点:
+    重新冻结必须先显式删掉旧文件,而那是一次在 git 里看得见的动作。
+    否则"跑几轮挑一轮好的"和"跑一轮冻结一轮"在产物上长得完全一样,
+    而这两件事的可信度天差地别。
+    """
+    if out.exists():
+        typer.secho(
+            f"基线已存在:{out}。要重新冻结请先显式删除它 —— 覆盖不会静默发生。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(ExitCode.BAD_CONFIG)
+
+    source = controls_json.read_text(encoding="utf-8")
+    controls_result = ControlsReport.from_report_json(source)
+    adjudication_source = adjudication_json.read_text(encoding="utf-8")
+    adjudication = ControlsAdjudicationReport.model_validate_json(adjudication_source)
+    assessment = assess_controls_adjudication(controls_result, adjudication)
+    if not assessment.detector_specificity_passed:
+        typer.secho("阴性 Finding 裁决未完整通过检测器特异度门", fg=typer.colors.RED)
+        raise typer.Exit(ExitCode.BAD_CONFIG)
+    if controls_result.utility_context_fingerprint is None:
+        typer.secho("这份 controls 没有 utility context 指纹,不能当基线", fg=typer.colors.RED)
+        raise typer.Exit(ExitCode.BAD_CONFIG)
+    repeats = {outcome.runs for outcome in controls_result.negative}
+    if len(repeats) != 1:
+        typer.secho("阴性重复次数不一致,无法作为基线", fg=typer.colors.RED)
+        raise typer.Exit(ExitCode.BAD_CONFIG)
+
+    baseline = freeze_utility_baseline(
+        context_fingerprint=controls_result.utility_context_fingerprint,
+        negative_repeats=repeats.pop(),
+        per_task={outcome.id: outcome.completed_runs or 0 for outcome in controls_result.negative},
+        source_report=source,
+        adjudication_report=adjudication_source,
+        note=note,
+    )
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(utility_baseline_json(baseline), encoding="utf-8")
+    typer.echo(f"utility 基线已冻结: {out}")
+    typer.echo(f"总体 {baseline.aggregate}/{baseline.task_runs}，下限 {baseline.aggregate_floor}")
+    typer.echo(f"context fingerprint: {baseline.context_fingerprint}")
+    typer.echo(f"来源产物 sha256: {baseline.source_report_sha256}")
 
 
 @app.command(name="controls-adjudication-template")

@@ -147,15 +147,49 @@ class AmbiguousSideEffectError(SeriousExecutionError):
     """请求可能已执行且无法确定副作用,禁止普通重试。"""
 
 
+_SECRET_KEY_NAMES = (
+    r"api[_-]?key",
+    r"access[_-]?token",
+    r"refresh[_-]?token",
+    r"id[_-]?token",
+    r"client[_-]?secret",
+    r"secret[_-]?key",
+    r"private[_-]?key",
+    r"password",
+    r"passwd",
+    r"authorization",
+    r"session[_-]?token",
+    r"x[_-]api[_-]key",
+)
+"""会携带凭据的键名。
+
+刻意用**键名**驱动而不是只匹配值的形状:`sk-…` 那类前缀只覆盖一家厂商,
+而 Provider 在信任边界之外,回包里键名叫什么、值长什么样都由对方决定。
+"""
+
+_KEY_PATTERN = "|".join(_SECRET_KEY_NAMES)
+
 _SECRET_PATTERNS = (
     re.compile(r"(?i)(authorization:\s*bearer\s+)\S+"),
     re.compile(r"\bsk-[A-Za-z0-9_-]{12,}\b"),
-    re.compile(r"(?i)(api[_-]?key\s*[=:]\s*)\S+"),
+    # JSON 形态:"api_key": "值" / 'access_token' : '值'
+    re.compile(rf"(?i)([\"']?(?:{_KEY_PATTERN})[\"']?\s*:\s*)[\"'][^\"']*[\"']"),
+    # 查询串 / 环境变量形态:api_key=值
+    re.compile(rf"(?i)([\"']?(?:{_KEY_PATTERN})[\"']?\s*=\s*)\S+"),
 )
 
 
 def safe_error_message(exc: Exception) -> str:
-    """限制长度并清理常见凭据形态,供持久化错误摘要使用。"""
+    """限制长度并清理常见凭据形态,供持久化错误摘要使用。
+
+    ⚠️ **这是持久化路径上的最后一道遮蔽。** 异常消息会落进 `FailureRecord`、
+    SQLite、报告与 CLI 输出;而它的内容可能直接来自 Provider 的响应体 ——
+    那是信任边界之外的数据,可能回显我们发过去的凭据。
+
+    2026-08-11 修补:原先只认 `api_key=值` 这类无引号写法,
+    `{"api_key":"secret"}` 这种最常见的 JSON 回包**原样穿过**。
+    现在按键名匹配,并同时覆盖 `:` 与 `=` 两种分隔形态。
+    """
     message = str(exc)[:1000]
     for pattern in _SECRET_PATTERNS:
         if pattern.groups:

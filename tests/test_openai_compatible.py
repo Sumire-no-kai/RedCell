@@ -142,6 +142,16 @@ async def test_extra_body_defaults_to_empty_and_stays_out_of_the_payload() -> No
     assert "thinking" not in seen
 
 
+def test_extra_body_rejects_unknown_or_secret_fields() -> None:
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        _provider(extra_body={"api_key": "do-not-store"})
+
+
+async def test_usage_coverage_is_an_explicit_capability() -> None:
+    assert not _provider().usage_covers_billed_tokens
+    assert _provider(usage_covers_billed_tokens=True).usage_covers_billed_tokens
+
+
 async def test_uses_server_reported_model_as_drift_evidence() -> None:
     """服务端回传的 model 串与请求串不一致时,必须留下前者——那是模型漂移的唯一证据。"""
     body = {**_OK_BODY, "model": "glm-4.7-flash-0301"}
@@ -462,3 +472,27 @@ async def test_unlimited_concurrency_by_default() -> None:
     await asyncio.gather(*(provider.complete(_user(str(i))) for i in range(4)))
 
     assert peak == 4
+
+
+# ── 畸形用量(2026-08-11 安全审查)───────────────────────────────────────
+
+
+def test_boolean_token_counts_are_not_accepted_as_known_usage() -> None:
+    """⭐ Python 里 `isinstance(True, int)` 为真。
+
+    于是 `{"prompt_tokens": true}` 会被当成"已知用量、值为 1" —— 一次完全没有
+    记账的调用就此冒充成记账正确的调用。而 `usage_known` 正是 Token 预算与
+    Phase 0.5 Gate 证据赖以成立的那个标志位;Provider 在信任边界之外,
+    畸形回包必须当作未知,不能当作 1。
+    """
+    from redcell.llm.openai_compatible import _as_int, _is_token_count
+
+    assert _is_token_count(5)
+    assert _is_token_count(0)
+    assert not _is_token_count(True)
+    assert not _is_token_count(False)
+    assert not _is_token_count(-1)
+    assert not _is_token_count("7")
+    assert not _is_token_count(1.5)
+    assert _as_int(True) == 0
+    assert _as_int(7) == 7

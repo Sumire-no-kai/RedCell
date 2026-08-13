@@ -192,7 +192,7 @@ def test_gate_plan_generates_primary_and_disabled_reserve_cells_without_running(
 
 
 def test_golden_cli_writes_the_frozen_deterministic_report(workspace) -> None:
-    fixtures = Path(__file__).parent / "fixtures" / "level1-golden-v1.json"
+    fixtures = Path(__file__).parent / "fixtures" / "level1-golden-v2.json"
 
     result = runner.invoke(
         app,
@@ -202,7 +202,7 @@ def test_golden_cli_writes_the_frozen_deterministic_report(workspace) -> None:
     assert result.exit_code == ExitCode.CLEAN, result.output
     payload = json.loads((workspace / "golden.json").read_text(encoding="utf-8"))
     assert payload["positive_passed"] == payload["positive_total"] == 10
-    assert payload["negative_passed"] == payload["negative_total"] == 10
+    assert payload["negative_passed"] == payload["negative_total"] == 11
 
 
 def test_validation_rejects_an_incomplete_matrix_before_loading_target(
