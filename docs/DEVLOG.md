@@ -129,6 +129,19 @@
 
 - **剩余状态:** IN PROGRESS — 推送、PR、合并和远端主干回查待完成。
 
+### 2026-08-13 23:40 AEST · Step 76 · PR #28 已合并，远端主干已回查
+
+- **进度:** `fix/security-review-batch-1` 已推送；PR #28
+  (`Fix: harden Phase 0.5 Gate evidence`) 已于 2026-08-13 12:36:57 UTC 合并到 `master`，
+  merge commit 为 `78c7fc66544ebe7ba952879fdb4723813eb9ce8e`。远端 `origin/master` 历史包含
+  本次提交 `4453f30`；远端状态为 `MERGED`。
+
+- **验证边界:** 合并前的最终证据仍为 673 passed、Ruff/Ruff format/Black/diff 四道门全过；
+  本步骤只读取远端 Git/PR 状态，没有调用 Provider，也没有宣称正式 Gate 已运行。
+
+- **剩余状态:** DONE — 本轮代码与 PR 集成完成。工作区保留未提交的本地 utility baseline
+  证据和不属于本步骤的 related-work 草稿，均未外发。
+
 ---
 
 ## 2026-08-13 · 补上相关工作:原论题失效,定位需要移位
