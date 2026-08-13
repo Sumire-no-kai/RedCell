@@ -63,6 +63,22 @@
 - **剩余状态:** IN PROGRESS — 代码、测试、Runbook、CONCEPTS 与 DEVLOG 已同步；待最终 diff/status
   复核后提交、推送、提 PR 并按作者既有授权合并。正式 Phase 0.5 Gate 状态没有被工程测试改变。
 
+### 2026-08-14 00:01 AEST · Step 83 · PR #32 已合并，深度审阅修复进入主干
+
+- **Git 结果:** 修复提交 `9d02fa2`（`fix: harden gate evidence and recovery`）已推送；PR #32
+  `Fix Gate evidence and matrix recovery invariants` 在 `CLEAN / MERGEABLE`、无待运行远端 checks 的状态下
+  以 merge commit `b150b2672ad5014025107ecbfd32673bde0fcfdc` 合并到 `master`。本地与
+  `origin/master` 均已回查指向该 merge commit。
+
+- **证据边界:** 合并内容只包含 10 个目标代码/测试/公开文档文件；本地忽略的
+  `docs/PHASE0_5_UTILITY_BASELINE.json` 与未跟踪 `docs/RELATED_WORK.md` 未暂存、未推送。合并前最终证据为
+  **688 passed in 52.87s**，Ruff check、Ruff format、Black、diff check 四门全过；没有 Provider 调用、
+  controls 重跑、reserve 启用或正式 matrix 数据。
+
+- **剩余状态:** DONE — 本轮 code review、修复与主干集成完成。项目可以继续准备 billing evidence 和
+  零成本 preflight；正式 Phase 0.5 研究状态仍为 `GATE-PREFLIGHT PENDING`，不得从本次工程回归推导
+  `SUPPORTED` / `NOT_SUPPORTED`。
+
 ---
 
 ## 2026-08-13 · Phase 0.5 最终裁决与 Gate 可审计性加固
