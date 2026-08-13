@@ -15,11 +15,15 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
+from typing import BinaryIO
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
@@ -51,6 +55,64 @@ EXIT_VERIFICATION_FAILED = 90
 """
 
 
+class StateLockUnavailableError(RuntimeError):
+    """Another matrix runner already owns this state file."""
+
+
+@contextmanager
+def _exclusive_state_lock(state_path: Path) -> Iterator[None]:
+    """Hold one OS-released lock for the full runner lifetime, including Provider calls."""
+    lock_path = state_path.with_name(f"{state_path.name}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        handle = lock_path.open("a+b")
+    except OSError as exc:
+        raise StateLockUnavailableError(f"无法打开 matrix state 锁 {lock_path}:{exc}") from exc
+    try:
+        _lock_handle(handle)
+    except OSError as exc:
+        handle.close()
+        raise StateLockUnavailableError(
+            f"无法取得 state {state_path} 的独占锁；另一个 matrix runner 可能正在运行，"
+            "禁止并发启动第二个 runner"
+        ) from exc
+    try:
+        yield
+    finally:
+        try:
+            _unlock_handle(handle)
+        finally:
+            handle.close()
+
+
+def _lock_handle(handle: BinaryIO) -> None:
+    handle.seek(0, os.SEEK_END)
+    if handle.tell() == 0:
+        handle.write(b"\0")
+        handle.flush()
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_handle(handle: BinaryIO) -> None:
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def _load_state(path: Path, plan: GatePlan) -> MatrixState:
     if not path.exists():
         return initial_state(plan)
@@ -60,8 +122,17 @@ def _load_state(path: Path, plan: GatePlan) -> MatrixState:
 
 
 def _save(path: Path, state: MatrixState) -> None:
+    """Atomically replace state so a crash cannot leave a truncated recovery record."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(state.model_dump_json(indent=2), encoding="utf-8")
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(state.model_dump_json(indent=2))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _command_for(cell, run_id: str | None = None) -> list[str]:
@@ -104,8 +175,6 @@ def _run_cell(cell, log_dir: Path, run_id: str) -> tuple[int, str]:
 
 
 def _inherited_env() -> dict[str, str]:
-    import os
-
     return dict(os.environ)
 
 
@@ -135,6 +204,15 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    try:
+        with _exclusive_state_lock(args.state):
+            return _run_matrix(args)
+    except StateLockUnavailableError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+
+def _run_matrix(args: argparse.Namespace) -> int:
     if args.concurrency < 1:
         print("并发数必须至少为 1", file=sys.stderr)
         return 2

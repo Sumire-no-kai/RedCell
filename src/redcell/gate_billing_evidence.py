@@ -11,11 +11,23 @@ import hashlib
 import json
 from datetime import date
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import Field, model_validator
 
 from redcell.protocols.common import RedCellModel
 from redcell.protocols.run import ProviderRunConfiguration
+
+BILLING_EVIDENCE_VERSION = "billing-usage-evidence-v1"
+_SHA256_PATTERN = r"^[0-9a-f]{64}$"
+
+
+def _completed_text(value: str | None) -> bool:
+    """A draft placeholder is not independently reviewed evidence."""
+    if value is None:
+        return False
+    cleaned = value.strip()
+    return bool(cleaned) and not cleaned.casefold().startswith("to_fill")
 
 
 class BillingRole(StrEnum):
@@ -40,27 +52,40 @@ class ProviderBillingEvidence(RedCellModel):
     """One human-reviewed, non-secret attestation for a concrete Gate model role."""
 
     role: BillingRole
-    subject_fingerprint: str = Field(min_length=64, max_length=64)
-    provider: str
-    model: str
-    service_tier: str = Field(min_length=1)
-    checked_on: date
-    source_reference: str = Field(min_length=1)
+    subject_fingerprint: str = Field(pattern=_SHA256_PATTERN)
+    provider: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    service_tier: str | None = None
+    checked_on: date | None = None
+    source_reference: str | None = None
     """Official documentation URL/title or an internal billing-export reference; never a secret."""
 
-    source_summary: str = Field(min_length=1)
+    source_summary: str | None = None
     """Safe summary explaining coverage, including thinking/reasoning when applicable."""
 
     usage_covers_billed_tokens: bool = False
     reasoning_tokens_covered: bool = False
 
     @property
+    def metadata_complete(self) -> bool:
+        return (
+            _completed_text(self.service_tier)
+            and self.checked_on is not None
+            and _completed_text(self.source_reference)
+            and _completed_text(self.source_summary)
+        )
+
+    @property
     def passed(self) -> bool:
-        return self.usage_covers_billed_tokens and self.reasoning_tokens_covered
+        return (
+            self.metadata_complete
+            and self.usage_covers_billed_tokens
+            and self.reasoning_tokens_covered
+        )
 
 
 class BillingEvidenceBundle(RedCellModel):
-    version: str = "billing-usage-evidence-v1"
+    version: Literal["billing-usage-evidence-v1"] = BILLING_EVIDENCE_VERSION
     records: list[ProviderBillingEvidence] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -71,8 +96,10 @@ class BillingEvidenceBundle(RedCellModel):
         return self
 
     def digest(self) -> str:
-        payload = self.model_dump_json(exclude_none=True, by_alias=True)
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        payload = self.model_dump(mode="json", exclude_none=True, by_alias=True)
+        payload["records"] = sorted(payload["records"], key=lambda record: record["role"])
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
 
 def billing_evidence_failures(
@@ -111,10 +138,10 @@ def billing_evidence_template(
                 subject_fingerprint=billing_subject_fingerprint(configuration),
                 provider=configuration.provider,
                 model=configuration.model,
-                service_tier="TO_FILL",
-                checked_on=date.today(),
-                source_reference="TO_FILL: official documentation URL or billing-export reference",
-                source_summary="TO_FILL: explain coverage of every billed token class",
+                service_tier=None,
+                checked_on=None,
+                source_reference=None,
+                source_summary=None,
                 usage_covers_billed_tokens=False,
                 reasoning_tokens_covered=False,
             )

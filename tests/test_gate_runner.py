@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from scripts.run_gate_matrix import _command_for
+from scripts.run_gate_matrix import _command_for, _exclusive_state_lock, _save
 
 from redcell.gate_analysis import GateCondition, SeedPlan
 from redcell.gate_plan import SeedRole, build_gate_plan
@@ -57,6 +57,15 @@ def _complete_block(state: MatrixState, seed: int) -> MatrixState:
     return state
 
 
+def _fail_block(state: MatrixState, seed: int) -> MatrixState:
+    return record_outcome(
+        state,
+        seed=seed,
+        condition=GateCondition.STATIC_OFF,
+        exit_code=3,
+    )
+
+
 def test_initial_state_covers_every_planned_cell() -> None:
     plan = _plan()
     state = initial_state(plan)
@@ -84,6 +93,14 @@ def test_only_primary_cells_are_dispatched_before_a_reserve_is_enabled() -> None
 
     assert len(ready) == 72
     assert {cell.seed_role for cell in ready} == {SeedRole.PRIMARY}
+
+
+def test_disabled_reserve_cannot_be_dispatched_through_the_low_level_interface() -> None:
+    plan = _plan()
+    reserve = next(cell for cell in plan.cells if cell.seed_role is SeedRole.RESERVE)
+
+    with pytest.raises(ValueError, match="当前未启用"):
+        record_dispatch(initial_state(plan), seed=reserve.seed, condition=reserve.condition)
 
 
 def test_cells_are_dispatched_in_frozen_plan_order() -> None:
@@ -162,9 +179,29 @@ def test_crash_after_dispatch_invalidates_the_whole_block() -> None:
     assert recovered.block(cell.seed).skipped == 5
 
 
+def test_crash_recovery_resolves_every_dispatched_cell_in_the_batch() -> None:
+    plan = _plan()
+    batch = plan.cells[:3]
+    state = initial_state(plan)
+    for index, cell in enumerate(batch):
+        state = record_dispatch(
+            state,
+            seed=cell.seed,
+            condition=cell.condition,
+            run_id=f"preassigned-run-{index}",
+        )
+
+    recovered = invalidate_unknown_delivery(state)
+
+    assert not any(cell.status is CellStatus.DISPATCHED for cell in recovered.cells)
+    assert recovered.block(batch[0].seed).failed == 3
+    assert recovered.block(batch[0].seed).skipped == 3
+
+
 def test_reserve_activation_records_reason_and_prior_state_digest() -> None:
     plan = _plan()
-    state = initial_state(plan)
+    primary_seed = next(cell.seed for cell in plan.cells if cell.seed_role is SeedRole.PRIMARY)
+    state = _fail_block(initial_state(plan), primary_seed)
     reserve_seed = next(cell.seed for cell in plan.cells if cell.seed_role is SeedRole.RESERVE)
     before = state.state_digest()
 
@@ -208,8 +245,9 @@ def test_a_cell_cannot_have_its_outcome_overwritten() -> None:
 def test_enabling_a_reserve_block_puts_exactly_that_block_in_play() -> None:
     plan = _plan()
     reserve_seed = next(c.seed for c in plan.cells if c.seed_role is SeedRole.RESERVE)
+    primary_seed = next(c.seed for c in plan.cells if c.seed_role is SeedRole.PRIMARY)
     state = enable_reserve_block(
-        initial_state(plan),
+        _fail_block(initial_state(plan), primary_seed),
         reserve_seed,
         reason=ReserveInvalidationReason.INFRASTRUCTURE,
         summary="infrastructure failure",
@@ -219,7 +257,20 @@ def test_enabling_a_reserve_block_puts_exactly_that_block_in_play() -> None:
     reserve_ready = {cell.seed for cell in ready if cell.seed_role is SeedRole.RESERVE}
 
     assert reserve_ready == {reserve_seed}
-    assert len(ready) == 78
+    assert len(ready) == 72
+
+
+def test_reserve_cannot_be_enabled_without_an_uncompensated_invalid_block() -> None:
+    plan = _plan()
+    reserve_seed = next(c.seed for c in plan.cells if c.seed_role is SeedRole.RESERVE)
+
+    with pytest.raises(ValueError, match="没有尚未补位"):
+        enable_reserve_block(
+            initial_state(plan),
+            reserve_seed,
+            reason=ReserveInvalidationReason.INFRASTRUCTURE,
+            summary="infrastructure failure",
+        )
 
 
 def test_a_primary_seed_cannot_be_enabled_as_reserve() -> None:
@@ -240,7 +291,11 @@ def test_reserve_blocks_must_be_enabled_in_the_frozen_order() -> None:
     reserve_seeds = list(
         dict.fromkeys(cell.seed for cell in plan.cells if cell.seed_role is SeedRole.RESERVE)
     )
-    state = initial_state(plan)
+    primary_seeds = list(
+        dict.fromkeys(cell.seed for cell in plan.cells if cell.seed_role is SeedRole.PRIMARY)
+    )
+    state = _fail_block(initial_state(plan), primary_seeds[0])
+    state = _fail_block(state, primary_seeds[1])
 
     with pytest.raises(ValueError, match=f"备用 seed {reserve_seeds[0]}"):
         enable_reserve_block(
@@ -265,6 +320,54 @@ def test_reserve_blocks_must_be_enabled_in_the_frozen_order() -> None:
     assert state.enabled_reserve_seeds == reserve_seeds[:2]
 
 
+def test_matrix_state_rejects_reserve_without_activation_provenance() -> None:
+    plan = _plan()
+    primary_seed = next(c.seed for c in plan.cells if c.seed_role is SeedRole.PRIMARY)
+    reserve_seed = next(c.seed for c in plan.cells if c.seed_role is SeedRole.RESERVE)
+    state = _fail_block(initial_state(plan), primary_seed)
+    payload = state.model_dump(mode="python")
+    payload["enabled_reserve_seeds"] = [reserve_seed]
+
+    with pytest.raises(ValueError, match="activation 证据"):
+        MatrixState.model_validate(payload)
+
+
+def test_matrix_state_save_round_trips(tmp_path) -> None:
+    state = initial_state(_plan())
+    path = tmp_path / "matrix-state.json"
+
+    _save(path, state)
+
+    assert MatrixState.model_validate_json(path.read_text(encoding="utf-8")) == state
+
+
+def test_failed_atomic_replace_preserves_the_previous_state(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "matrix-state.json"
+    path.write_text("previous complete state", encoding="utf-8")
+
+    def fail_replace(_source, _destination) -> None:
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr("scripts.run_gate_matrix.os.replace", fail_replace)
+
+    with pytest.raises(OSError, match="simulated"):
+        _save(path, initial_state(_plan()))
+
+    assert path.read_text(encoding="utf-8") == "previous complete state"
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_only_one_matrix_runner_can_own_a_state_file(tmp_path) -> None:
+    state_path = tmp_path / "matrix-state.json"
+
+    with (
+        _exclusive_state_lock(state_path),
+        pytest.raises(RuntimeError, match="独占锁"),
+        _exclusive_state_lock(state_path),
+    ):
+        pytest.fail("second runner unexpectedly acquired the same state")
+
+
 def test_state_from_a_different_plan_is_refused() -> None:
     """续跑时把上一版计划的进度当成这一版,会得到一批混了两套条件的数据。"""
     plan = _plan()
@@ -274,6 +377,22 @@ def test_state_from_a_different_plan_is_refused() -> None:
     require_matching_state(plan, state)
     with pytest.raises(ValueError, match="数据库不一致"):
         require_matching_state(other, state)
+
+
+def test_state_with_tampered_seed_role_is_refused() -> None:
+    plan = _plan()
+    state = initial_state(plan)
+    tampered = state.model_copy(
+        update={
+            "cells": [
+                state.cells[0].model_copy(update={"seed_role": SeedRole.RESERVE}),
+                *state.cells[1:],
+            ]
+        }
+    )
+
+    with pytest.raises(ValueError, match="primary/reserve"):
+        require_matching_state(plan, tampered)
 
 
 def test_duplicate_cells_are_rejected_by_the_schema() -> None:

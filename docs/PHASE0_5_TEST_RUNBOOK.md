@@ -80,6 +80,9 @@ coverage 字段改为 `true`：
   --out runs/billing-evidence.json
 ```
 
+模板命令拒绝覆盖已有文件，避免误操作把已填写/复核的 evidence 重置为空草稿；需要重新生成时应使用
+新的输出路径，并保留旧文件作为审计记录。
+
 ```powershell
 .venv\Scripts\python.exe -m redcell.cli gate-preflight `
   --seed-plan-json docs/PHASE0_5_SEED_PLAN.json `
@@ -174,7 +177,8 @@ utility 可比性。价格、`positive_repeats` 与 billing coverage declaration
 ## 5. 执行与实时检查
 
 用矩阵执行器跑，不要手工循环 —— 它把本节的三条调度规则实现在可测模块
-`redcell.gate_runner` 里，脚本只负责调用：
+`redcell.gate_runner` 里，脚本只负责调用。执行器会在整个进程生命周期持有对应 state 文件的
+OS 锁；第二个 runner 若指向同一 state 会在任何 Provider 调用前被拒绝，避免重复派发：
 
 ```powershell
 # 先空跑，确认将要执行什么（不产生任何外部调用）
