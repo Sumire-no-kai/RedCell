@@ -214,6 +214,19 @@
 - **剩余状态:** IN PROGRESS — 仅剩 Git 提交、推送、PR 与合并；完成后才可生成 billing template、
   填写外部证据并执行零成本 preflight。正式 Gate 的研究结论仍不存在。
 
+### 2026-08-14 00:45 AEST · Step 80 · PR #30 已合并，Gate 前设计/实现已集成
+
+- **进度:** PR #30（`Feat: add auditable Gate billing evidence`）已合并到 `master`；远端 merge commit
+  为 `20131b7ffd593f8aa1c94405732918561cb6436b`。远端 `origin/master` 已回查包含该 commit。合并内容为
+  billing evidence 深模块、preflight/report 双重核验、reserve 枚举审计、utility projection 边界、
+  Runbook 与概念说明；内部 PRD、本地 controls/adjudication/utility baseline 和相关工作草稿未外发。
+
+- **验证边界:** 合并前证据为 676 passed、Ruff/Ruff format/Black/diff 四道门通过；合并后只回查
+  GitHub PR/远端 Git 状态，未调用 Provider、未启动 controls 或正式 Gate matrix。
+
+- **剩余状态:** DONE — Gate 前设计与离线实现已集成。下一步是按 Runbook 生成默认拒绝的 billing
+  evidence 模板、以外部证据填充并进行零成本 preflight；只有它通过后才进入付费 controls。
+
 ---
 
 ## 2026-08-13 · 补上相关工作:原论题失效,定位需要移位
