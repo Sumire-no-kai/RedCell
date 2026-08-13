@@ -37,6 +37,11 @@ from redcell.gate_analysis import (
     seed_plan_digest,
     token_prefixes_from_events,
 )
+from redcell.gate_billing_evidence import (
+    BillingEvidenceBundle,
+    BillingRole,
+    billing_evidence_failures,
+)
 from redcell.gate_evidence import (
     LEVEL1_GOLDEN_FIXTURE_DIGEST,
     LEVEL1_GOLDEN_FIXTURE_IDS,
@@ -48,6 +53,7 @@ from redcell.protocols.common import RedCellModel
 from redcell.protocols.run import (
     ControllerRunConfiguration,
     ExperimentConditions,
+    ProviderRunConfiguration,
     Run,
     RunEventType,
 )
@@ -91,6 +97,22 @@ _MISSING_EVIDENCE_FAILURES = {
     "missing_primary_seed",
     "missing_seed_plan",
     "missing_validation",
+    "missing_billing_evidence",
+    "billing_evidence_missing:target",
+    "billing_evidence_missing:attacker",
+    "billing_evidence_missing:controller",
+    "billing_evidence_subject_mismatch:target",
+    "billing_evidence_subject_mismatch:attacker",
+    "billing_evidence_subject_mismatch:controller",
+    "billing_evidence_identity_mismatch:target",
+    "billing_evidence_identity_mismatch:attacker",
+    "billing_evidence_identity_mismatch:controller",
+    "billing_evidence_coverage_unconfirmed:target",
+    "billing_evidence_coverage_unconfirmed:attacker",
+    "billing_evidence_coverage_unconfirmed:controller",
+    "billing_usage_coverage_missing:target",
+    "billing_usage_coverage_missing:attacker",
+    "billing_usage_coverage_missing:controller",
     "no_phase_0_5_prefixes",
 }
 _NOT_SUPPORTED_FAILURES = {
@@ -160,6 +182,8 @@ class GateReport(RedCellModel):
     validation: ValidationReport | None = None
     seed_plan: SeedPlan | None = None
     matrix_state: MatrixState | None = None
+    billing_evidence: BillingEvidenceBundle | None = None
+    billing_evidence_digest: str | None = None
     matrix_state_digest: str | None = None
     metrics: GateProtectionMetrics = Field(default_factory=GateProtectionMetrics)
     protection_failures: list[str] = Field(default_factory=list)
@@ -222,6 +246,7 @@ def build_gate_report(
     validation: ValidationReport | None = None,
     seed_plan: SeedPlan | None = None,
     matrix_state: MatrixState | None = None,
+    billing_evidence: BillingEvidenceBundle | None = None,
 ) -> GateReport:
     prefixes: list[TokenPrefix] = []
     contexts: set[str] = set()
@@ -283,7 +308,7 @@ def build_gate_report(
         not run.experiment_conditions.online for run in selected_runs if run.experiment_conditions
     ):
         failures.append("formal_run_not_online")
-    failures.extend(_usage_coverage_failures(selected_runs))
+    failures.extend(_billing_evidence_failures(selected_runs, billing_evidence))
     failures.extend(_run_reliability_failures(store, selected_runs, selected_320))
 
     failures.extend(_golden_failures(golden, reference))
@@ -353,6 +378,8 @@ def build_gate_report(
         seed_plan=seed_plan,
         matrix_state=matrix_state,
         matrix_state_digest=matrix_state.state_digest() if matrix_state is not None else None,
+        billing_evidence=billing_evidence,
+        billing_evidence_digest=billing_evidence.digest() if billing_evidence is not None else None,
         metrics=GateProtectionMetrics(
             controls=controls_assessment,
             asr_drift=asr,
@@ -399,23 +426,35 @@ def _matrix_state_failures(
     return failures
 
 
-def _usage_coverage_failures(selected_runs: list[Run]) -> list[str]:
-    """Repeat the preflight declaration check on persisted evidence, not live environment."""
-    failures: list[str] = []
+def _billing_evidence_failures(
+    selected_runs: list[Run], evidence: BillingEvidenceBundle | None
+) -> list[str]:
+    """Recheck the signed billing subject against persisted Run conditions.
+
+    Preflight inspects the live environment. The final report must instead inspect
+    the configuration that actually produced the selected prefixes, otherwise a
+    later `.env` edit could make an old Run appear better documented than it was.
+    """
+    configurations: dict[BillingRole, ProviderRunConfiguration] = {}
     for run in selected_runs:
         conditions = run.experiment_conditions
         if conditions is None:
             continue
-        roles = [("target", conditions.target), ("attacker", conditions.attacker)]
+        configurations[BillingRole.TARGET] = conditions.target
+        configurations[BillingRole.ATTACKER] = conditions.attacker
         if conditions.search is not None and conditions.search.selector.value == "llm":
             if conditions.controller is None:
-                failures.append("billing_usage_coverage_missing:controller")
-            else:
-                roles.append(("controller", conditions.controller.provider))
-        for role, configuration in roles:
-            if configuration.usage_covers_billed_tokens is not True:
-                failures.append(f"billing_usage_coverage_missing:{role}")
-    return failures
+                return ["billing_usage_coverage_missing:controller"]
+            configurations[BillingRole.CONTROLLER] = conditions.controller.provider
+    if not configurations:
+        return []
+    # The formal six-condition matrix always uses all three roles. Requiring all
+    # here also prevents a partial/incorrectly filtered result set from evading
+    # the Controller evidence requirement.
+    missing_roles = set(BillingRole) - set(configurations)
+    if missing_roles:
+        return [f"billing_evidence_missing:{role.value}" for role in sorted(missing_roles)]
+    return billing_evidence_failures(configurations, evidence)
 
 
 def _is_phase_0_5_run(run: Run) -> bool:

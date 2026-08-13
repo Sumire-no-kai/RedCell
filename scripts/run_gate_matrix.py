@@ -27,6 +27,7 @@ from redcell.gate_plan import GatePlan
 from redcell.gate_runner import (
     NORMAL_RUN_EXIT_CODES,
     MatrixState,
+    ReserveInvalidationReason,
     enable_reserve_block,
     initial_state,
     invalidate_unknown_delivery,
@@ -124,8 +125,13 @@ def main() -> int:
     )
     parser.add_argument(
         "--reserve-reason",
+        choices=[reason.value for reason in ReserveInvalidationReason],
+        help="启用备用 block 的预注册失效类别",
+    )
+    parser.add_argument(
+        "--reserve-summary",
         default="",
-        help="启用备用 block 的人工理由；必须说明允许补位的失效类型",
+        help="启用备用 block 的人工复核摘要；不得以 Finding 结果作为理由",
     )
     args = parser.parse_args()
 
@@ -136,10 +142,17 @@ def main() -> int:
     try:
         plan = GatePlan.model_validate_json(args.plan.read_text(encoding="utf-8"))
         state = _load_state(args.state, plan)
-        if args.enable_reserve and not args.reserve_reason.strip():
-            raise ValueError("--enable-reserve 必须同时提供 --reserve-reason")
+        if args.enable_reserve and (
+            args.reserve_reason is None or not args.reserve_summary.strip()
+        ):
+            raise ValueError("--enable-reserve 必须同时提供 --reserve-reason 与 --reserve-summary")
         for seed in args.enable_reserve:
-            state = enable_reserve_block(state, seed, reason=args.reserve_reason)
+            state = enable_reserve_block(
+                state,
+                seed,
+                reason=ReserveInvalidationReason(args.reserve_reason),
+                summary=args.reserve_summary,
+            )
             print(f"已启用备用 block: seed {seed}")
     except (OSError, ValueError) as exc:
         # 调度前的配置错误不该以 traceback 出现:操作者要的是"哪里不对",

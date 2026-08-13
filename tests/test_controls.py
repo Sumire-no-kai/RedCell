@@ -274,6 +274,7 @@ def test_utility_context_ignores_operational_metadata_and_positive_controls() ->
             input_usd_per_mtok=1.0,
             output_usd_per_mtok=2.0,
             cached_input_usd_per_mtok=0.01,
+            usage_covers_billed_tokens=True,
         ),
         positive_repeats=20,
     )

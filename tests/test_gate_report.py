@@ -33,6 +33,12 @@ from redcell.controls import (
     controls_conditions,
 )
 from redcell.gate_analysis import GateCondition, SeedPlan, TokenPrefix, token_prefixes_from_events
+from redcell.gate_billing_evidence import (
+    BillingEvidenceBundle,
+    BillingRole,
+    ProviderBillingEvidence,
+    billing_subject_fingerprint,
+)
 from redcell.gate_report import GateVerdict, build_gate_report
 from redcell.gate_runner import CellRecord, CellStatus, MatrixState
 from redcell.golden import evaluate_golden
@@ -87,6 +93,33 @@ def _controller_configuration() -> ControllerRunConfiguration:
         prompt_version="controller-prompt-v1",
         evidence_policy_version="controller-evidence-v1",
         thinking_disabled=True,
+    )
+
+
+def _billing_evidence(
+    reference: ExperimentConditions, controller: ControllerRunConfiguration
+) -> BillingEvidenceBundle:
+    configurations = {
+        BillingRole.TARGET: reference.target,
+        BillingRole.ATTACKER: reference.attacker,
+        BillingRole.CONTROLLER: controller.provider,
+    }
+    return BillingEvidenceBundle(
+        records=[
+            ProviderBillingEvidence(
+                role=role,
+                subject_fingerprint=billing_subject_fingerprint(configuration),
+                provider=configuration.provider,
+                model=configuration.model,
+                service_tier="test",
+                checked_on="2026-08-13",
+                source_reference="test evidence",
+                source_summary="test usage covers all billed categories",
+                usage_covers_billed_tokens=True,
+                reasoning_tokens_covered=True,
+            )
+            for role, configuration in configurations.items()
+        ]
     )
 
 
@@ -559,6 +592,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
 
     golden = evaluate_golden(Path(__file__).parent / "fixtures" / "level1-golden-v2.json")
     seed_plan = FROZEN_PLAN
+    billing_evidence = _billing_evidence(reference, controller)
     matrix_state = MatrixState(
         seed_plan_digest="c421f3137d75f5ba956da12bcfdf824fc89222da23ccfd7bad9f1c42c792e3bc",
         database_url="sqlite:///formal.db",
@@ -583,6 +617,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
         validation=validation,
         seed_plan=seed_plan,
         matrix_state=matrix_state,
+        billing_evidence=billing_evidence,
     )
 
     assert report.analysis.valid_seeds == FROZEN_PLAN.primary
@@ -603,6 +638,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
         validation=validation,
         seed_plan=seed_plan,
         matrix_state=matrix_state,
+        billing_evidence=billing_evidence,
     )
     assert "controls_utility_context_missing" in missing_utility_context.protection_failures
     assert missing_utility_context.verdict is GateVerdict.INCOMPLETE
@@ -617,6 +653,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
         validation=validation,
         seed_plan=seed_plan,
         matrix_state=matrix_state,
+        billing_evidence=billing_evidence,
     )
     assert "utility_baseline_context_mismatch" in changed_utility_context.protection_failures
     assert changed_utility_context.verdict is GateVerdict.EXPERIMENT_INVALID
@@ -652,6 +689,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
         validation=validation,
         seed_plan=seed_plan,
         matrix_state=matrix_state,
+        billing_evidence=billing_evidence,
     )
     assert "controls_adjudication_missing" in missing_adjudication_report.protection_failures
     assert missing_adjudication_report.verdict is GateVerdict.INCOMPLETE
@@ -666,6 +704,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
         validation=validation,
         seed_plan=seed_plan,
         matrix_state=matrix_state,
+        billing_evidence=billing_evidence,
     )
     assert "controls_adjudication_unresolved" in unresolved_report.protection_failures
     assert unresolved_report.verdict is GateVerdict.INCOMPLETE
@@ -682,6 +721,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
         validation=validation,
         seed_plan=seed_plan,
         matrix_state=matrix_state,
+        billing_evidence=billing_evidence,
     )
     assert "controls_adjudication_mismatch" in mismatched_adjudication_report.protection_failures
     assert mismatched_adjudication_report.verdict is GateVerdict.EXPERIMENT_INVALID
@@ -704,6 +744,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
         validation=validation,
         seed_plan=seed_plan,
         matrix_state=matrix_state,
+        billing_evidence=billing_evidence,
     )
     assert target_report.metrics.controls is not None
     assert target_report.metrics.controls.target_spontaneous_violations == 1
@@ -723,6 +764,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
         validation=validation,
         seed_plan=seed_plan,
         matrix_state=matrix_state,
+        billing_evidence=billing_evidence,
     )
     assert "controls_detector_false_positive" in false_positive_report.protection_failures
     assert false_positive_report.verdict is GateVerdict.EXPERIMENT_INVALID
@@ -737,6 +779,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
         validation=mismatched_validation,
         seed_plan=seed_plan,
         matrix_state=matrix_state,
+        billing_evidence=billing_evidence,
     )
     assert "validation_environment_mismatch" in mismatched.protection_failures
     assert mismatched.verdict is GateVerdict.EXPERIMENT_INVALID
@@ -750,6 +793,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
         validation=validation,
         seed_plan=seed_plan,
         matrix_state=matrix_state,
+        billing_evidence=billing_evidence,
     )
     assert "level1_golden_outcomes_shape_invalid" in missing_golden_outcomes.protection_failures
 
