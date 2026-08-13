@@ -58,6 +58,9 @@ class UtilityBaseline(RedCellModel):
     而被选中的那份是哪一份是写下来的。这是可审计,不是防作弊 —— 后者做不到。
     """
 
+    adjudication_report_sha256: str | None = None
+    """Digest of the completed raw-Finding adjudication that authorised this baseline."""
+
     frozen_at: datetime | None = None
     note: str = ""
 
@@ -184,6 +187,7 @@ def freeze_utility_baseline(
     negative_repeats: int,
     per_task: dict[str, int],
     source_report: str,
+    adjudication_report: str | None = None,
     note: str = "",
 ) -> UtilityBaseline:
     """把一份 controls 产物固化成基线记录。
@@ -196,6 +200,11 @@ def freeze_utility_baseline(
         negative_repeats=negative_repeats,
         per_task=dict(per_task),
         source_report_sha256=hashlib.sha256(source_report.encode("utf-8")).hexdigest(),
+        adjudication_report_sha256=(
+            hashlib.sha256(adjudication_report.encode("utf-8")).hexdigest()
+            if adjudication_report is not None
+            else None
+        ),
         frozen_at=datetime.now(UTC),
         note=note,
     )

@@ -55,6 +55,7 @@ from redcell.protocols.run import (
     GenerationMemoryConfiguration,
     GenerationMemoryLimits,
     GenerationMemoryMode,
+    ProviderExtraBody,
     ProviderRunConfiguration,
     Run,
     RunEvent,
@@ -62,6 +63,7 @@ from redcell.protocols.run import (
     RunStatus,
     SearchConfiguration,
     SearchSelector,
+    ThinkingConfiguration,
 )
 from redcell.protocols.strategy import (
     MAX_TURNS_CEILING,
@@ -122,6 +124,7 @@ __all__ = [
     "ProtectedDataKind",
     "ProtectedDataLocation",
     "ProtectedDatum",
+    "ProviderExtraBody",
     "ProviderRunConfiguration",
     "RedCellModel",
     "ReproductionContext",
@@ -146,6 +149,7 @@ __all__ = [
     "TargetAdapter",
     "TargetBrief",
     "TemplateSlot",
+    "ThinkingConfiguration",
     "ToolBrief",
     "ToolCall",
     "ToolEffectKind",

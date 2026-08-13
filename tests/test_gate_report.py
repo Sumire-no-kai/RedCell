@@ -34,6 +34,7 @@ from redcell.controls import (
 )
 from redcell.gate_analysis import GateCondition, SeedPlan, TokenPrefix, token_prefixes_from_events
 from redcell.gate_report import GateVerdict, build_gate_report
+from redcell.gate_runner import CellRecord, CellStatus, MatrixState
 from redcell.golden import evaluate_golden
 from redcell.protocols import (
     ArenaRunConfiguration,
@@ -74,6 +75,7 @@ def _provider(name: str) -> ProviderRunConfiguration:
         max_concurrency=1,
         input_usd_per_mtok=0,
         output_usd_per_mtok=0,
+        usage_covers_billed_tokens=True,
     )
 
 
@@ -228,6 +230,22 @@ def _formal_prefixes(run: Run, checkpoints: Iterable[int]) -> list[TokenPrefix]:
         )
         for checkpoint in checkpoints
     ]
+
+
+def _condition_for_run(run: Run) -> GateCondition:
+    assert run.experiment_conditions is not None
+    assert run.experiment_conditions.search is not None
+    assert run.experiment_conditions.generation_memory is not None
+    return next(
+        item
+        for item in GateCondition
+        if _treatment(item)
+        == (
+            run.experiment_conditions.search.selector,
+            run.experiment_conditions.generation_memory.mode
+            is GenerationMemoryMode.BOUNDED_RELEVANT_V1,
+        )
+    )
 
 
 class _FormalStore:
@@ -541,6 +559,21 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
 
     golden = evaluate_golden(Path(__file__).parent / "fixtures" / "level1-golden-v2.json")
     seed_plan = FROZEN_PLAN
+    matrix_state = MatrixState(
+        seed_plan_digest="c421f3137d75f5ba956da12bcfdf824fc89222da23ccfd7bad9f1c42c792e3bc",
+        database_url="sqlite:///formal.db",
+        gate_context_fingerprint=runs[0].gate_context_fingerprint(),
+        cells=[
+            CellRecord(
+                seed=run.seed,
+                condition=_condition_for_run(run),
+                seed_role="primary",
+                status=CellStatus.COMPLETED,
+                run_id=run.id,
+            )
+            for run in runs
+        ],
+    )
     report = build_gate_report(  # type: ignore[arg-type]
         store,
         controls=controls,
@@ -549,6 +582,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
         controller_controls=controller_controls,
         validation=validation,
         seed_plan=seed_plan,
+        matrix_state=matrix_state,
     )
 
     assert report.analysis.valid_seeds == FROZEN_PLAN.primary
@@ -568,6 +602,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
         controller_controls=controller_controls,
         validation=validation,
         seed_plan=seed_plan,
+        matrix_state=matrix_state,
     )
     assert "controls_utility_context_missing" in missing_utility_context.protection_failures
     assert missing_utility_context.verdict is GateVerdict.INCOMPLETE
@@ -581,6 +616,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
         controller_controls=controller_controls,
         validation=validation,
         seed_plan=seed_plan,
+        matrix_state=matrix_state,
     )
     assert "utility_baseline_context_mismatch" in changed_utility_context.protection_failures
     assert changed_utility_context.verdict is GateVerdict.EXPERIMENT_INVALID
@@ -615,6 +651,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
         controller_controls=controller_controls,
         validation=validation,
         seed_plan=seed_plan,
+        matrix_state=matrix_state,
     )
     assert "controls_adjudication_missing" in missing_adjudication_report.protection_failures
     assert missing_adjudication_report.verdict is GateVerdict.INCOMPLETE
@@ -628,6 +665,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
         controller_controls=controller_controls,
         validation=validation,
         seed_plan=seed_plan,
+        matrix_state=matrix_state,
     )
     assert "controls_adjudication_unresolved" in unresolved_report.protection_failures
     assert unresolved_report.verdict is GateVerdict.INCOMPLETE
@@ -643,6 +681,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
         controller_controls=controller_controls,
         validation=validation,
         seed_plan=seed_plan,
+        matrix_state=matrix_state,
     )
     assert "controls_adjudication_mismatch" in mismatched_adjudication_report.protection_failures
     assert mismatched_adjudication_report.verdict is GateVerdict.EXPERIMENT_INVALID
@@ -664,6 +703,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
         controller_controls=controller_controls,
         validation=validation,
         seed_plan=seed_plan,
+        matrix_state=matrix_state,
     )
     assert target_report.metrics.controls is not None
     assert target_report.metrics.controls.target_spontaneous_violations == 1
@@ -682,6 +722,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
         controller_controls=controller_controls,
         validation=validation,
         seed_plan=seed_plan,
+        matrix_state=matrix_state,
     )
     assert "controls_detector_false_positive" in false_positive_report.protection_failures
     assert false_positive_report.verdict is GateVerdict.EXPERIMENT_INVALID
@@ -695,6 +736,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
         controller_controls=controller_controls,
         validation=mismatched_validation,
         seed_plan=seed_plan,
+        matrix_state=matrix_state,
     )
     assert "validation_environment_mismatch" in mismatched.protection_failures
     assert mismatched.verdict is GateVerdict.EXPERIMENT_INVALID
@@ -707,6 +749,7 @@ def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
         controller_controls=controller_controls,
         validation=validation,
         seed_plan=seed_plan,
+        matrix_state=matrix_state,
     )
     assert "level1_golden_outcomes_shape_invalid" in missing_golden_outcomes.protection_failures
 

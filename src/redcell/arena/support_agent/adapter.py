@@ -100,6 +100,7 @@ class ArenaAdapter(TargetAdapter):
             # 同一个靶场接 ScriptedProvider 时成本恒为 0(真实且无意义),
             # 接真实 API 时才有可用的成本数字。
             reports_cost=self._provider.reports_cost,
+            usage_covers_billed_tokens=self._provider.usage_covers_billed_tokens,
         )
 
     @property

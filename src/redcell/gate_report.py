@@ -34,6 +34,7 @@ from redcell.gate_analysis import (
     TokenPrefix,
     analyse_phase_0_5,
     require_frozen_seed_plan,
+    seed_plan_digest,
     token_prefixes_from_events,
 )
 from redcell.gate_evidence import (
@@ -42,6 +43,7 @@ from redcell.gate_evidence import (
     LEVEL1_GOLDEN_FIXTURE_VERSION,
     GoldenReport,
 )
+from redcell.gate_runner import CellStatus, MatrixState
 from redcell.protocols.common import RedCellModel
 from redcell.protocols.run import (
     ControllerRunConfiguration,
@@ -85,6 +87,7 @@ _MISSING_EVIDENCE_FAILURES = {
     "missing_controller_controls",
     "missing_controls",
     "missing_level1_golden",
+    "missing_matrix_state",
     "missing_primary_seed",
     "missing_seed_plan",
     "missing_validation",
@@ -156,6 +159,8 @@ class GateReport(RedCellModel):
     controller_controls: ControllerContractReport | None = None
     validation: ValidationReport | None = None
     seed_plan: SeedPlan | None = None
+    matrix_state: MatrixState | None = None
+    matrix_state_digest: str | None = None
     metrics: GateProtectionMetrics = Field(default_factory=GateProtectionMetrics)
     protection_failures: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(
@@ -216,6 +221,7 @@ def build_gate_report(
     controller_controls: ControllerContractReport | None = None,
     validation: ValidationReport | None = None,
     seed_plan: SeedPlan | None = None,
+    matrix_state: MatrixState | None = None,
 ) -> GateReport:
     prefixes: list[TokenPrefix] = []
     contexts: set[str] = set()
@@ -277,6 +283,7 @@ def build_gate_report(
         not run.experiment_conditions.online for run in selected_runs if run.experiment_conditions
     ):
         failures.append("formal_run_not_online")
+    failures.extend(_usage_coverage_failures(selected_runs))
     failures.extend(_run_reliability_failures(store, selected_runs, selected_320))
 
     failures.extend(_golden_failures(golden, reference))
@@ -293,6 +300,7 @@ def build_gate_report(
             require_frozen_seed_plan(seed_plan)
         except ValueError:
             failures.append("seed_plan_digest_mismatch")
+    failures.extend(_matrix_state_failures(matrix_state, seed_plan, selected_runs))
 
     asr = _asr_drift(selected_320)
     if selected_main and (asr is None or not asr.passed):
@@ -343,6 +351,8 @@ def build_gate_report(
         controller_controls=controller_controls,
         validation=validation,
         seed_plan=seed_plan,
+        matrix_state=matrix_state,
+        matrix_state_digest=matrix_state.state_digest() if matrix_state is not None else None,
         metrics=GateProtectionMetrics(
             controls=controls_assessment,
             asr_drift=asr,
@@ -354,6 +364,58 @@ def build_gate_report(
         ),
         protection_failures=sorted(set(failures)),
     )
+
+
+def _matrix_state_failures(
+    state: MatrixState | None, seed_plan: SeedPlan | None, selected_runs: list[Run]
+) -> list[str]:
+    """Require durable dispatch/binding evidence for every run used by the Gate."""
+    if not selected_runs:
+        return []
+    if state is None:
+        return ["missing_matrix_state"]
+    failures: list[str] = []
+    if seed_plan is None or state.seed_plan_digest != seed_plan_digest(seed_plan):
+        failures.append("matrix_state_plan_mismatch")
+    if any(cell.status is CellStatus.DISPATCHED for cell in state.cells):
+        failures.append("matrix_state_unresolved_dispatch")
+    if len(state.reserve_activations) != len(state.enabled_reserve_seeds):
+        failures.append("matrix_reserve_provenance_missing")
+    if state.enabled_reserve_seeds != [item.seed for item in state.reserve_activations]:
+        failures.append("matrix_reserve_provenance_mismatch")
+    records = {(cell.seed, cell.condition): cell for cell in state.cells}
+    for run in selected_runs:
+        conditions = run.experiment_conditions
+        if conditions is None or conditions.search is None or conditions.generation_memory is None:
+            failures.append("matrix_state_run_binding_mismatch")
+            continue
+        suffix = "off" if conditions.generation_memory.mode.value == "off" else "memory"
+        condition = GateCondition(f"{conditions.search.selector.value}-{suffix}")
+        cell = records.get((run.seed, condition))
+        if cell is None or cell.status is not CellStatus.COMPLETED or cell.run_id != run.id:
+            failures.append("matrix_state_run_binding_mismatch")
+        if state.gate_context_fingerprint != run.gate_context_fingerprint():
+            failures.append("matrix_state_context_mismatch")
+    return failures
+
+
+def _usage_coverage_failures(selected_runs: list[Run]) -> list[str]:
+    """Repeat the preflight declaration check on persisted evidence, not live environment."""
+    failures: list[str] = []
+    for run in selected_runs:
+        conditions = run.experiment_conditions
+        if conditions is None:
+            continue
+        roles = [("target", conditions.target), ("attacker", conditions.attacker)]
+        if conditions.search is not None and conditions.search.selector.value == "llm":
+            if conditions.controller is None:
+                failures.append("billing_usage_coverage_missing:controller")
+            else:
+                roles.append(("controller", conditions.controller.provider))
+        for role, configuration in roles:
+            if configuration.usage_covers_billed_tokens is not True:
+                failures.append(f"billing_usage_coverage_missing:{role}")
+    return failures
 
 
 def _is_phase_0_5_run(run: Run) -> bool:

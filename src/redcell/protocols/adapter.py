@@ -65,6 +65,8 @@ class AdapterCapabilities(RedCellModel):
     那是一个假的安全网,比没有安全网更危险。Orchestrator 在 preflight 据此拒绝配置。
     """
 
+    usage_covers_billed_tokens: bool = False
+
 
 class ToolCall(RedCellModel):
     """目标 agent 生成的一次工具调用。

@@ -19,6 +19,7 @@ CI 里都要用,而「什么算配置齐了」必须只有一份定义。
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from pydantic import Field
@@ -32,6 +33,7 @@ from redcell.config import (
 from redcell.gate_analysis import SeedPlan, require_frozen_seed_plan
 from redcell.golden import evaluate_golden
 from redcell.protocols.common import RedCellModel
+from redcell.shared_rate_limit import SQLiteRateLimiter
 from redcell.storage import RunStore
 
 PREFLIGHT_VERSION = "phase-0.5-preflight-v1"
@@ -127,6 +129,48 @@ def _pricing_check(name: str, settings: ProviderSettings) -> PreflightCheck:
     )
 
 
+def _usage_coverage_check(name: str, settings: ProviderSettings) -> PreflightCheck:
+    if settings.usage_covers_billed_tokens:
+        return PreflightCheck(
+            name=f"{name}.usage_coverage",
+            passed=True,
+            detail="声明 Provider usage 覆盖全部计费 Token",
+        )
+    return PreflightCheck(
+        name=f"{name}.usage_coverage",
+        passed=False,
+        detail=(
+            f"REDCELL_{name.upper()}_USAGE_COVERS_BILLED_TOKENS 未确认；"
+            "部分 usage（例如遗漏 thinking/reasoning）不得进入正式 Gate"
+        ),
+    )
+
+
+def _shared_rate_limit_check(database_url: str | None, formal_database_url: str) -> PreflightCheck:
+    if not database_url:
+        return PreflightCheck(
+            name="shared_rate_limit",
+            passed=False,
+            detail="缺少 REDCELL_SHARED_RATE_LIMIT_DB；多子进程矩阵不能只依赖本地 semaphore",
+        )
+    if database_url == formal_database_url:
+        return PreflightCheck(
+            name="shared_rate_limit",
+            passed=False,
+            detail="共享限流 SQLite 必须与正式矩阵数据库分离",
+        )
+    try:
+        SQLiteRateLimiter(
+            database_url,
+            provider_key="preflight-probe",
+            min_interval_seconds=0.0,
+            max_concurrency=1,
+        )
+    except Exception as exc:
+        return PreflightCheck(name="shared_rate_limit", passed=False, detail=f"无法初始化:{exc}")
+    return PreflightCheck(name="shared_rate_limit", passed=True, detail=f"{database_url} 可用")
+
+
 def _seed_plan_check(seed_plan_json: Path) -> PreflightCheck:
     try:
         seed_plan = SeedPlan.model_validate_json(seed_plan_json.read_text(encoding="utf-8"))
@@ -197,6 +241,7 @@ def run_preflight(
     database_url: str,
     golden_fixtures: Path,
     roles: list[tuple[str, ProviderSettings]] | None = None,
+    shared_rate_limit_db: str | None = None,
 ) -> PreflightReport:
     """跑完全部零成本检查;任何一项失败都不应进入付费步骤。
 
@@ -209,7 +254,18 @@ def run_preflight(
     for name, settings in roles:
         checks.append(_connection_check(name, settings))
         checks.append(_pricing_check(name, settings))
+        checks.append(_usage_coverage_check(name, settings))
     checks.append(_seed_plan_check(seed_plan_json))
     checks.append(_golden_check(golden_fixtures))
     checks.append(_database_check(database_url))
+    checks.append(
+        _shared_rate_limit_check(
+            (
+                os.getenv("REDCELL_SHARED_RATE_LIMIT_DB", "")
+                if shared_rate_limit_db is None
+                else shared_rate_limit_db
+            ),
+            database_url,
+        )
+    )
     return PreflightReport(checks=checks)

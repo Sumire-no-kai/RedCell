@@ -142,6 +142,16 @@ async def test_extra_body_defaults_to_empty_and_stays_out_of_the_payload() -> No
     assert "thinking" not in seen
 
 
+def test_extra_body_rejects_unknown_or_secret_fields() -> None:
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        _provider(extra_body={"api_key": "do-not-store"})
+
+
+async def test_usage_coverage_is_an_explicit_capability() -> None:
+    assert not _provider().usage_covers_billed_tokens
+    assert _provider(usage_covers_billed_tokens=True).usage_covers_billed_tokens
+
+
 async def test_uses_server_reported_model_as_drift_evidence() -> None:
     """服务端回传的 model 串与请求串不一致时,必须留下前者——那是模型漂移的唯一证据。"""
     body = {**_OK_BODY, "model": "glm-4.7-flash-0301"}

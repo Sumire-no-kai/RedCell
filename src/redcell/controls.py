@@ -350,6 +350,7 @@ class ControlsConditions(RedCellModel):
         tasks = _registered_tasks(self.negative_task_ids)
         target = self.target.model_dump(
             mode="json",
+            exclude_none=True,
             exclude={
                 "rpm",
                 "max_concurrency",

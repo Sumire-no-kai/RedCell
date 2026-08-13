@@ -23,6 +23,8 @@ from pydantic import Field
 
 from redcell.llm.base import LLMMessage, LLMProvider, LLMResponse
 from redcell.protocols.common import RedCellModel
+from redcell.protocols.run import ProviderExtraBody
+from redcell.shared_rate_limit import SQLiteRateLimiter
 
 _log = structlog.get_logger(__name__)
 
@@ -138,7 +140,9 @@ class OpenAICompatibleProvider(LLMProvider):
         timeout_seconds: float = 60.0,
         min_interval_seconds: float = 0.0,
         max_concurrency: int = 0,
-        extra_body: dict[str, Any] | None = None,
+        extra_body: ProviderExtraBody | dict[str, Any] | None = None,
+        usage_covers_billed_tokens: bool = False,
+        shared_limiter: SQLiteRateLimiter | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         """
@@ -178,7 +182,11 @@ class OpenAICompatibleProvider(LLMProvider):
         self._pricing = pricing
         self._timeout = timeout_seconds
         self._min_interval = min_interval_seconds
-        self._extra_body = extra_body or {}
+        self._extra_body = ProviderExtraBody.model_validate(extra_body or {}).model_dump(
+            exclude_none=True
+        )
+        self._usage_covers_billed_tokens = usage_covers_billed_tokens
+        self._shared_limiter = shared_limiter
         self._client = client
         self._owns_client = client is None
         self._throttle = asyncio.Lock()
@@ -204,6 +212,10 @@ class OpenAICompatibleProvider(LLMProvider):
         """
         return self._pricing is not None
 
+    @property
+    def usage_covers_billed_tokens(self) -> bool:
+        return self._usage_covers_billed_tokens
+
     async def complete(
         self,
         messages: list[LLMMessage],
@@ -224,11 +236,17 @@ class OpenAICompatibleProvider(LLMProvider):
         payload.update(self._extra_body)
 
         if self._slots is None:
-            return await self._timed_post(payload)
+            if self._shared_limiter is None:
+                return await self._timed_post(payload)
+            async with self._shared_limiter.hold():
+                return await self._timed_post(payload)
         # 并发闸在节流之前:先占到位子再算间隔,否则一批协程会同时通过间隔检查,
         # 然后一起冲进去把并发上限撞穿。
         async with self._slots:
-            return await self._timed_post(payload)
+            if self._shared_limiter is None:
+                return await self._timed_post(payload)
+            async with self._shared_limiter.hold():
+                return await self._timed_post(payload)
 
     async def _timed_post(self, payload: dict[str, Any]) -> LLMResponse:
         await self._await_throttle()
