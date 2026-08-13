@@ -59,6 +59,15 @@ class CellStatus(StrEnum):
     """
 
 
+class ReserveInvalidationReason(StrEnum):
+    """The only pre-registered grounds on which a reserve block may be activated."""
+
+    INFRASTRUCTURE = "infrastructure"
+    UNKNOWN_TOKEN = "unknown_token"
+    RELIABILITY = "reliability"
+    INTEGRITY = "integrity"
+
+
 class CellRecord(RedCellModel):
     seed: int
     condition: GateCondition
@@ -75,7 +84,8 @@ class CellRecord(RedCellModel):
 
 class ReserveActivation(RedCellModel):
     seed: int
-    reason: str
+    reason: ReserveInvalidationReason
+    summary: str = Field(min_length=1)
     state_digest_before: str
 
 
@@ -361,7 +371,13 @@ def verify_cell_run(
     return None
 
 
-def enable_reserve_block(state: MatrixState, seed: int, *, reason: str) -> MatrixState:
+def enable_reserve_block(
+    state: MatrixState,
+    seed: int,
+    *,
+    reason: ReserveInvalidationReason,
+    summary: str,
+) -> MatrixState:
     """显式启用一个备用 block。
 
     ⚠️ 刻意要求调用方点名 seed,而不是"自动取下一个":哪一块失效、是不是属于
@@ -379,15 +395,18 @@ def enable_reserve_block(state: MatrixState, seed: int, *, reason: str) -> Matri
     next_seed = reserve_order[len(state.enabled_reserve_seeds)]
     if seed != next_seed:
         raise ValueError(f"必须先按冻结顺序启用备用 seed {next_seed}")
-    if not reason.strip():
-        raise ValueError("启用备用 seed 必须记录人工确认的失效理由")
+    if not summary.strip():
+        raise ValueError("启用备用 seed 必须记录人工复核摘要")
     return state.model_copy(
         update={
             "enabled_reserve_seeds": [*state.enabled_reserve_seeds, seed],
             "reserve_activations": [
                 *state.reserve_activations,
                 ReserveActivation(
-                    seed=seed, reason=reason.strip(), state_digest_before=state.state_digest()
+                    seed=seed,
+                    reason=reason,
+                    summary=summary.strip(),
+                    state_digest_before=state.state_digest(),
                 ),
             ],
         }

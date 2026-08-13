@@ -142,6 +142,78 @@
 - **剩余状态:** DONE — 本轮代码与 PR 集成完成。工作区保留未提交的本地 utility baseline
   证据和不属于本步骤的 related-work 草稿，均未外发。
 
+### 2026-08-13 23:55 AEST · Step 77 · 原理文档补记与正式 Gate 设计审计
+
+- **进度:** 在独立文档分支补充 `docs/CONCEPTS.md`：将 v2 utility baseline（158/200、
+  下限 138/200、两条 raw target-spontaneous-violation）、typed provider `extra_body`、
+  Token budget 与 billing coverage 的区别、精确 matrix dispatch/recovery、跨进程 SQLite
+  limiter lease、related-work 对定位的影响，以及 preflight → controls → matrix → validation
+  的正确顺序写成可学习的原理说明。历史 37/50 与旧的 2026-08-01 状态快照保留为追溯，
+  另加当前状态，未静默改写历史。
+
+- **审计发现:** 现有 `usage_covers_billed_tokens` 已能被 preflight/Gate report fail-closed
+  检查，但当前是一个操作者填写的布尔声明，尚没有不含凭据、可复核的 Provider/model/tier/
+  reasoning-coverage 证据产物。因此它尚未完全实现作者的既定规则“任一角色不能证明 usage
+  覆盖计费 Token 就禁止进入正式 Gate”。该差距是证据接口不足，不是 Provider 测试失败；
+  不应以手工填 `true` 代替证明。
+
+- **设计推论:** v2 baseline 的 controls snapshot 缺少后来加入的 coverage declaration；而
+  `gate-report` 对 controls 环境做完整条件比较。正式配置冻结后应重新跑 controls（作为对
+  v2 baseline 的新观测，**不是**重冻 baseline）；同时把 billing declaration 从 utility 行为投影
+  中排除，以免纯记账证据变化伪装成 Target 正常行为变化。该方案须作者确认后才改 runtime code，
+  因为它改变的是正式 Gate 前的审计接口与 controls 比较边界。
+
+- **验证边界:** 本步骤只读 PRD、DEVLOG、CONCEPTS、相关工作草稿与 Gate 实现；未调用
+  Provider、未运行 controls/正式 matrix、未修改 runtime code，也未因此声称 Gate 状态改变。
+
+- **剩余状态:** OPEN — 需先由作者一次性冻结 billing evidence、正式 controls、限流/调度和
+  费用授权等运行配置；随后再实现对应代码、做离线验证并进入付费测试。
+
+### 2026-08-14 00:15 AEST · Step 78 · 作者确认全部 Gate 前设计建议，证据接口实施中
+
+- **作者确认的裁决:** ① `usage_covers_billed_tokens` 从单一布尔声明升级为绑定
+  Provider/base URL/model/thinking 的非凭据 billing evidence；② 保留 codec-v2 的 158/200
+  utility baseline，最终 controls 重跑作新观测但不重冻，并把 billing declaration 排除出 utility
+  行为投影；③ RPM/并发按可核对 Provider 额度的 80% 安全余量冻结、matrix worker 最多 3；
+  ④ reserve 只允许 infrastructure/unknown-token/reliability/integrity 四类原因，记录类别、人工摘要
+  与启用前 state digest；⑤ 全部 8 个 reserve 预授权但每次仍须人工按顺序启用；⑥ 六篇相关工作
+  依优先级读全文，不阻塞 Gate，且阅读不得改写本阶段冻结条件。
+
+- **长期协作裁决:** 今后凡影响实验条件、协议语义、安全边界、外部成本或不可逆数据的设计，先向作者
+  列出可行方案、推荐方案、理由、代价与所需证据；作者未确认时保留 `OPEN`，不让代码默认值代替产品裁决。
+  普通可逆实现细节仍可按现有约定直接处理，避免把每个格式或样板选择都升级为审批。
+
+- **实现范围:** 新增 `gate_billing_evidence` 深模块，用一个小接口集中验证三角色 billing subject；
+  preflight 检查 live 环境，Gate report 再核对实际落盘 Run 条件，防止后来的 `.env` 改动替历史 Run
+  补证。reserve 的自由文本原因改为版本化枚举加摘要；shared SQLite limiter 仍只负责执行额度，
+  billing evidence 只负责证明主预算分母，两者不混用。
+
+- **顺带更正:** 审计发现 PRD/CLI 仍把 golden 写成 `v1` / 10 正 10 负，而实际冻结 fixture、
+  `gate_evidence.py` 与 Step 59 已是 `level1-golden-v2` / 10 正 11 负；新增阴性锁住“确认结转后
+  再问一次”的合法路径。已更正文案，未改动 fixture、digest 或 Gate 判据。
+
+- **验证边界:** 正在运行离线单元/集成测试；未调用 Provider、未重跑 controls、未创建正式数据库、未
+  启用 reserve。正式 Gate 仍为 `GATE-PREFLIGHT PENDING`。
+
+- **剩余状态:** IN PROGRESS — 补齐 CLI/runbook、全量质量门、Git 提交/PR/合并后，才进入作者已预授权的
+  零成本 preflight 与付费 controls 阶段。
+
+### 2026-08-14 00:35 AEST · Step 79 · Gate 前证据接口与离线验证完成
+
+- **进度:** 已落地 `BillingEvidenceBundle`：为 target/attacker/controller 分别保存 non-secret
+  billing subject digest、Provider/model/tier、检查日期、依据和 reasoning coverage。新增
+  `billing-evidence-template` 只读配置模板命令；模板默认 coverage=false，不能被误读为已证明。
+  `gate-preflight` 检查现场配置与 evidence，`gate-report` 复核实际 Run snapshot 并保存 evidence
+  digest，避免之后修改 `.env` 为历史 Run 补证。utility projection 明确排除 billing declaration；
+  reserve activation 改为四类枚举 + summary + state digest。
+
+- **验证证据:** 定向 Gate/controls 集 **81 passed**；全量 **676 passed in 54.46s**；
+  `ruff check .`、`ruff format --check .`、`black --check src tests` 与 `git diff --check`
+  均通过。验证中无 Provider 调用、无 controls 重跑、无正式数据库写入。
+
+- **剩余状态:** IN PROGRESS — 仅剩 Git 提交、推送、PR 与合并；完成后才可生成 billing template、
+  填写外部证据并执行零成本 preflight。正式 Gate 的研究结论仍不存在。
+
 ---
 
 ## 2026-08-13 · 补上相关工作:原论题失效,定位需要移位

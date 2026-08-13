@@ -20,7 +20,17 @@
       **[2026-08-10]** Target=`glm-4.7-flashx`；Generator=`gemini-3.1-flash-lite` @1.0；
       Controller=`gemini-3.1-flash-lite` @0（作者定案的唯一提名候选，仍须 controls 通过才冻结）。
       九项单价已按官网核对填入，来源与日期见 PRD 的 Controller Provider 一节。
+- [x] **作者确认的 Gate 证据/运行方法：**每角色必须有非凭据 billing-evidence（Provider/model/
+      tier、核验日期、依据摘要、thinking/reasoning 是否被 usage 覆盖），不是只填一个布尔值；
+      utility v2 基线保持 158/200，不因这份记账证据重冻，最终 controls 作为新观测重跑；
+      reserve 只能选 `infrastructure` / `unknown_token` / `reliability` / `integrity` 四类原因，
+      同时记录人工摘要和启用前 matrix-state digest；全部 8 个 reserve 已预授权，但每次启用仍须
+      人工记录，绝不按 Finding 结果替换。
 - [ ] 使用全新的、仅服务本次矩阵的 SQLite 数据库；不得混用 `redcell.db` 或开发/试跑数据库。
+- [ ] 填写并独立复核三个角色的 `billing-evidence.json`。只有 Provider 官方资料或可审计的
+      账单/usage 导出能证明使用量覆盖全部计费 token（含 reasoning/thinking）时，才把相应字段标为 true。
+- [ ] 按各 Provider 当前、可核对的额度冻结 RPM 与全局并发；默认采用可用额度的 **80% 安全余量**。
+      matrix worker 进程数最多 3，实际生效值仍取共享 endpoint/model 的最严格上限。
 
 > 上面两项的完成情况由 §2.1 的 `gate-preflight` 机器核对，不靠人工回忆勾选。
 > 2026-08-10 实跑该自检为 **9/9 PASS**（数据库项使用一次性临时库验证，正式库仍待创建）。
@@ -61,16 +71,27 @@ reserve block 若被启用，时间与成本按 6 cell 为单位递增。
 四道门只证明代码正确，不证明**这台机器配好了**。下面这条命令不调用任何 Provider，
 用来在第一次付费调用之前把配置类失败全部暴露：
 
+先从当前三角色的非凭据配置生成一份**默认拒绝**的 evidence 模板；它不证明任何东西，
+只避免人工把 Provider/model/thinking 抄错。必须补入独立依据并由人工复核后，才可以把两个
+coverage 字段改为 `true`：
+
+```powershell
+.venv\Scripts\python.exe -m redcell.cli billing-evidence-template `
+  --out runs/billing-evidence.json
+```
+
 ```powershell
 .venv\Scripts\python.exe -m redcell.cli gate-preflight `
   --seed-plan-json docs/PHASE0_5_SEED_PLAN.json `
   --db sqlite:///runs/phase-0-5.db `
+  --billing-evidence-json runs/billing-evidence.json `
   --out runs/preflight.json
 ```
 
 它检查三个模型位是否都已建立独立连接、九项单价是否都**显式**冻结（留空是「未知」，
 免费必须写 `0`）、seed plan 是否与冻结 digest 一致、Level-1 golden 是否满分、
-正式数据库是否为空且不是 `redcell.db`。任一项失败即退出码 `4`，不要进入第 4 节。
+正式数据库是否为空且不是 `redcell.db`，以及 billing evidence 是否逐角色绑定当前的
+Provider/base URL/model/thinking 配置。任一项失败即退出码 `4`，不要进入第 4 节。
 
 ⚠️ **全绿只说明可以开始跑对照，不说明这套装置具备发现漏洞的能力**——
 后者必须由 `controller-controls` / `controls` / `attacker-control` 真实花钱去证明。
@@ -88,7 +109,7 @@ reserve block 若被启用，时间与成本按 6 cell 为单位递增。
   --out runs/gate-plan.json
 ```
 
-该命令只输出 72 个 primary cell 和 24 个默认禁用的 reserve cell，不打开数据库、不读取
+该命令只输出 72 个 primary cell 和 48 个默认禁用的 reserve cell，不打开数据库、不读取
 `.env`、不调用 Provider。每个 cell 都固定 `max_total_tokens=320000`，并把 argv 作为数组保存，
 避免 shell quoting 改写参数。生成后人工复核六种条件各出现一次：
 
@@ -145,9 +166,10 @@ reserve block 若被启用，时间与成本按 6 cell 为单位递增。
 ⚠️ 摘要**刻意不含参数值**：既能回答"是不是同一个动作"，又不把金额、客户 ID 带进报告。
 若某条 occurrence 的 `turn_tool_calls` 为空或不足以支持上述三项，仍为 `unresolved`。
 
-完整 controls 指纹负责整份产物审计；`utility_context_fingerprint` 只负责 37/50 历史 utility
-可比性。价格或 `positive_repeats` 变化不能触发重冻；如果 utility 专用指纹不匹配，停止并
-调查行为字段，不能直接用本轮观测覆盖历史基线。
+完整 controls 指纹负责整份产物审计；`utility_context_fingerprint` 只负责 **v2 的 158/200**
+utility 可比性。价格、`positive_repeats` 与 billing coverage declaration 不进入 utility 投影，
+不能触发重冻；最终 controls 只是对既有 v2 尺子的一次新观测。若 utility 专用指纹不匹配，
+停止并调查行为字段，不能直接用本轮观测覆盖历史基线。
 
 ## 5. 执行与实时检查
 
@@ -170,7 +192,8 @@ reserve block 若被启用，时间与成本按 6 cell 为单位递增。
    记为 `skipped_block_invalid`（与 `failed` 分开，以便回答"这个 block 消耗了多少调用"）。
    **不得只重跑失败那一格** —— 那会让 block 内各条件的运行时刻不再可配对。
 2. **备用 seed 不会自动上场。** 需人工判断失效属于允许补位的类型后，用
-   `--enable-reserve <seed>` 点名启用整块。⚠️ 不得因 Finding 结果不好看而换 seed。
+   `--enable-reserve <seed> --reserve-reason <四类之一> --reserve-summary <人工摘要>` 点名启用整块。
+   ⚠️ 不得因 Finding 结果不好看而换 seed。
 3. **已完成的格子永不重跑**，否则产生重复单元格而 Gate 拒绝重复。
 
 状态每批落盘，崩溃最多丢一批。`--plan` 与 `--state` 不匹配（seed plan digest、数据库、
@@ -216,6 +239,7 @@ exit 0/1,却到不了 320k 前缀。
   --controls-adjudication-json runs/controls/adjudication.json `
   --attacker-control-json runs/attacker-control-seed<NON_GATE_SEED>.json `
   --controller-controls-json runs/controller-controls.json `
+  --billing-evidence-json runs/billing-evidence.json `
   --validation-json runs/validation.json `
   --out runs/gate-report.json
 ```

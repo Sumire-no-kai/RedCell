@@ -55,9 +55,14 @@ from redcell.controls import (
 from redcell.executor import ConversationExecutor
 from redcell.failures import FailureStage
 from redcell.gate_analysis import SeedPlan
+from redcell.gate_billing_evidence import (
+    BillingEvidenceBundle,
+    BillingRole,
+    billing_evidence_template,
+)
 from redcell.gate_evidence import GoldenReport
 from redcell.gate_plan import GatePlan, build_gate_plan
-from redcell.gate_preflight import run_preflight
+from redcell.gate_preflight import load_role_settings, run_preflight
 from redcell.gate_report import build_gate_report
 from redcell.gate_runner import MatrixState
 from redcell.gate_validation import select_validation_evidence
@@ -711,6 +716,10 @@ def gate_report(
         Path | None,
         typer.Option(help="正式矩阵的持久化派发状态；缺失时有正式前缀的报告保持 INCOMPLETE"),
     ] = None,
+    billing_evidence_json: Annotated[
+        Path | None,
+        typer.Option(help="三角色计费 Token coverage 的非凭据证据 JSON；缺失时报告保持 INCOMPLETE"),
+    ] = None,
 ) -> None:
     """从已落盘的 Run/Event/Finding 重建冻结的 Phase 0.5 Gate 分析。"""
     controls_result = (
@@ -757,6 +766,11 @@ def gate_report(
         if matrix_state_json is not None
         else None
     )
+    billing_evidence = (
+        BillingEvidenceBundle.model_validate_json(billing_evidence_json.read_text(encoding="utf-8"))
+        if billing_evidence_json is not None
+        else None
+    )
     with RunStore(db) as store:
         result = build_gate_report(
             store,
@@ -768,6 +782,7 @@ def gate_report(
             validation=validation_result,
             seed_plan=seed_plan,
             matrix_state=matrix_state,
+            billing_evidence=billing_evidence,
         )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(result.model_dump_json(indent=2), encoding="utf-8")
@@ -781,14 +796,14 @@ def gate_plan(
         int,
         typer.Option(help="正式 Run 的安全 attempt 上限；必须在开跑前显式冻结，不能沿用默认 20"),
     ],
-    seed_plan_json: Annotated[Path, typer.Option(help="冻结的 12+4 seed plan JSON")],
+    seed_plan_json: Annotated[Path, typer.Option(help="冻结的 12+8 seed plan JSON")],
     db: Annotated[str, typer.Option(help="正式矩阵专用 SQLite 连接串；不得混用开发数据库")],
     run_out: Annotated[Path, typer.Option(help="每个正式 Run 的报告目录")] = Path("runs/phase-0-5"),
     out: Annotated[Path, typer.Option(help="只读执行清单 JSON 输出路径")] = Path(
         "runs/gate-plan.json"
     ),
 ) -> None:
-    """生成 72 个主单元 + 24 个备用单元的命令清单，但绝不执行它们。"""
+    """生成 72 个主单元 + 48 个备用单元的命令清单，但绝不执行它们。"""
     try:
         seed_plan = SeedPlan.model_validate_json(seed_plan_json.read_text(encoding="utf-8"))
         plan: GatePlan = build_gate_plan(
@@ -809,11 +824,15 @@ def gate_plan(
 
 @app.command(name="gate-preflight")
 def gate_preflight(
-    seed_plan_json: Annotated[Path, typer.Option(help="冻结的 12+4 seed plan JSON")],
+    seed_plan_json: Annotated[Path, typer.Option(help="冻结的 12+8 seed plan JSON")],
     db: Annotated[str, typer.Option(help="正式矩阵专用 SQLite 连接串;必须为空且不得混用开发库")],
     golden_fixtures: Annotated[Path, typer.Option(help="冻结 Level-1 fixture JSON")] = Path(
         "tests/fixtures/level1-golden-v2.json"
     ),
+    billing_evidence_json: Annotated[
+        Path | None,
+        typer.Option(help="三角色计费 Token coverage 的非凭据证据 JSON；缺失即拒绝正式 Gate"),
+    ] = None,
     out: Annotated[Path | None, typer.Option(help="自检报告 JSON 输出路径")] = None,
 ) -> None:
     """开跑前的零成本环境自检 —— **不调用任何 Provider**。
@@ -825,11 +844,23 @@ def gate_preflight(
     后者要 `controller-controls` / `controls` / `attacker-control` 真的花钱去证明。
     阶段结论仍然只看 `gate-report.json` 的 verdict。
     """
-    report = run_preflight(
-        seed_plan_json=seed_plan_json,
-        database_url=db,
-        golden_fixtures=golden_fixtures,
-    )
+    try:
+        billing_evidence = (
+            BillingEvidenceBundle.model_validate_json(
+                billing_evidence_json.read_text(encoding="utf-8")
+            )
+            if billing_evidence_json is not None
+            else None
+        )
+        report = run_preflight(
+            seed_plan_json=seed_plan_json,
+            database_url=db,
+            golden_fixtures=golden_fixtures,
+            billing_evidence=billing_evidence,
+        )
+    except (OSError, ValueError) as exc:
+        typer.secho(f"Gate preflight 配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG) from exc
     typer.echo(report.summary())
     if out is not None:
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -837,6 +868,25 @@ def gate_preflight(
         typer.echo(f"明细    {out}")
     if not report.passed:
         raise typer.Exit(ExitCode.BAD_CONFIG)
+
+
+@app.command(name="billing-evidence-template")
+def billing_evidence_template_command(
+    out: Annotated[
+        Path,
+        typer.Option(
+            help="不含凭据的 billing evidence 模板；填写并独立复核后再交给 gate-preflight"
+        ),
+    ] = Path("runs/billing-evidence.json"),
+) -> None:
+    """从当前三角色配置生成**不完整** billing evidence 模板；不调用 Provider。"""
+    roles = load_role_settings()
+    configurations = {BillingRole(name): settings.run_configuration() for name, settings in roles}
+    template = billing_evidence_template(configurations)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(template.model_dump_json(indent=2), encoding="utf-8")
+    typer.echo(f"Billing evidence template: {out}")
+    typer.echo("模板默认 coverage=false；必须填入独立依据后才可能通过 gate-preflight。")
 
 
 @app.command(name="golden")
@@ -848,7 +898,7 @@ def golden(
         "runs/golden.json"
     ),
 ) -> None:
-    """执行版本化的 10 正/10 负确定性 Scorer golden；不调用 Provider。"""
+    """执行版本化的 10 正/11 负确定性 Scorer golden；不调用 Provider。"""
     try:
         report = evaluate_golden(fixtures)
     except (OSError, ValueError) as exc:

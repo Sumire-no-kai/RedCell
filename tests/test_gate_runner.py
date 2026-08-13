@@ -10,6 +10,7 @@ from redcell.gate_plan import SeedRole, build_gate_plan
 from redcell.gate_runner import (
     CellStatus,
     MatrixState,
+    ReserveInvalidationReason,
     enable_reserve_block,
     initial_state,
     invalidate_unknown_delivery,
@@ -167,9 +168,15 @@ def test_reserve_activation_records_reason_and_prior_state_digest() -> None:
     reserve_seed = next(cell.seed for cell in plan.cells if cell.seed_role is SeedRole.RESERVE)
     before = state.state_digest()
 
-    activated = enable_reserve_block(state, reserve_seed, reason="provider outage reviewed")
+    activated = enable_reserve_block(
+        state,
+        reserve_seed,
+        reason=ReserveInvalidationReason.INFRASTRUCTURE,
+        summary="provider outage reviewed",
+    )
 
-    assert activated.reserve_activations[0].reason == "provider outage reviewed"
+    assert activated.reserve_activations[0].reason is ReserveInvalidationReason.INFRASTRUCTURE
+    assert activated.reserve_activations[0].summary == "provider outage reviewed"
     assert activated.reserve_activations[0].state_digest_before == before
 
 
@@ -201,7 +208,12 @@ def test_a_cell_cannot_have_its_outcome_overwritten() -> None:
 def test_enabling_a_reserve_block_puts_exactly_that_block_in_play() -> None:
     plan = _plan()
     reserve_seed = next(c.seed for c in plan.cells if c.seed_role is SeedRole.RESERVE)
-    state = enable_reserve_block(initial_state(plan), reserve_seed, reason="infrastructure failure")
+    state = enable_reserve_block(
+        initial_state(plan),
+        reserve_seed,
+        reason=ReserveInvalidationReason.INFRASTRUCTURE,
+        summary="infrastructure failure",
+    )
 
     ready = pending_cells(plan, state, limit=96)
     reserve_ready = {cell.seed for cell in ready if cell.seed_role is SeedRole.RESERVE}
@@ -215,7 +227,12 @@ def test_a_primary_seed_cannot_be_enabled_as_reserve() -> None:
     primary_seed = plan.cells[0].seed
 
     with pytest.raises(ValueError, match="不是备用 seed"):
-        enable_reserve_block(initial_state(plan), primary_seed, reason="infrastructure failure")
+        enable_reserve_block(
+            initial_state(plan),
+            primary_seed,
+            reason=ReserveInvalidationReason.INFRASTRUCTURE,
+            summary="infrastructure failure",
+        )
 
 
 def test_reserve_blocks_must_be_enabled_in_the_frozen_order() -> None:
@@ -226,10 +243,25 @@ def test_reserve_blocks_must_be_enabled_in_the_frozen_order() -> None:
     state = initial_state(plan)
 
     with pytest.raises(ValueError, match=f"备用 seed {reserve_seeds[0]}"):
-        enable_reserve_block(state, reserve_seeds[1], reason="infrastructure failure")
+        enable_reserve_block(
+            state,
+            reserve_seeds[1],
+            reason=ReserveInvalidationReason.INFRASTRUCTURE,
+            summary="infrastructure failure",
+        )
 
-    state = enable_reserve_block(state, reserve_seeds[0], reason="infrastructure failure")
-    state = enable_reserve_block(state, reserve_seeds[1], reason="infrastructure failure")
+    state = enable_reserve_block(
+        state,
+        reserve_seeds[0],
+        reason=ReserveInvalidationReason.INFRASTRUCTURE,
+        summary="infrastructure failure",
+    )
+    state = enable_reserve_block(
+        state,
+        reserve_seeds[1],
+        reason=ReserveInvalidationReason.INFRASTRUCTURE,
+        summary="infrastructure failure",
+    )
     assert state.enabled_reserve_seeds == reserve_seeds[:2]
 
 

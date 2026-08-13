@@ -20,7 +20,7 @@ RedCell 是什么、每个部件怎么工作、为什么这么设计、遇到过
 | **校准、预注册、预测怎么检验** | **§16** |
 | 概念对应哪个源码文件 | §17 |
 | 面试会被问什么 | §18 |
-| 现在做到哪一步了 | §19 |
+| 现在做到哪一步了、正式 Gate 前还差什么 | §19 |
 
 **另外三份文档是「更深一层」,不读也不影响理解本项目:**
 
@@ -1072,6 +1072,27 @@ SE = √( p(1−p) / n ) = √( 0.34 × 0.66 / 200 ) = 3.4%
 这不会自然发生,必须被设计出来。
 
 ---
+
+### 9.2 相关工作带来的定位修订：结果的解释，不是 Gate 的改判
+
+2026-08-13 的初步相关工作检索发现，AutoDojo、Red-Bandit、AutoRedTeamer 与
+REDAgentBench 已分别覆盖自适应攻击、bandit 分配、记忆驱动策略选择或工具型 agent 的确定性
+ground truth 中的一部分。这个发现改变了**结果该怎么定位**，不改变已经冻结的 Phase 0.5 条件：
+在结果出来前回头修改主指标、seed、Token 检查点或保护线，会把“读到别人结论”变成另一种
+事后调参。
+
+因此 Phase 0.5 的 2×2 现在最诚实的身份是：在工具授权边界场景、等 Token（而非等 attempts）
+口径下，对“LLM 选择 + 跨 attempt 记忆”的**机制分解与跨领域重复验证**。它若通过，仍是有价值的
+证据；它不再自动构成“首次发现这一机制”的 novelty claim。
+
+目前最有希望、但尚未证实的差异化是**防御层归因**：靶场把提示词措辞、工具层权限强制和确认闸门
+做成独立开关，并用 Intent / Attempt / Impact 三分观察。它能回答“模型仍尝试越权，但下游强制执行
+是否拦住真实影响”这类工程问题。这个定位仍是候选，因为关键论文尚未读全文；在读完
+REDAgentBench 和 ToolPrivacyBench 前，README、简历、演示或报告不得主张 novelty。
+
+这里的学习点是：**related work 不是写在论文末尾的礼貌清单，而是决定一个数字能说明什么的边界条件。**
+发现已有工作后，正确反应不是把自己的负结果藏起来，也不是改变已冻结实验去追逐更好看的故事；
+而是保留原问题、缩窄外推范围、把下一阶段的资源投向真正还缺的靶场异质性与防御层测量。
 
 ## 10. 安全概念
 
@@ -2562,6 +2583,133 @@ Static×off ASR 才是端到端漂移探针。②③④ 的 ASR 是处理结果,
 
 ---
 
+### 14.30 正式 Gate 的三道“账”:测量、交付与并发 ⭐⭐
+
+Phase 0.5 不是把 72 个命令扔进终端就结束。它更像一场需要留好三类单据的耐力赛：
+
+```text
+测量账  → 花的资源有没有被完整、可比地量到？
+交付账  → 每个 seed × condition 到底有没有唯一、可证明的结果？
+并发账  → 多个 child process 会不会合起来突破同一 Provider 的额度？
+```
+
+这三件事都不改变攻击算法，却直接决定结果还能不能解释。少任一账，漂亮的路径数也只是一份
+无法审计的演示数据，而不是 Gate 证据。
+
+#### Token coverage：有读数，不等于读数覆盖账单
+
+**类比：** 电表显示了 80 度电，和电力公司确认“账单上所有峰/谷/附加用电都计入这只表”是两件事。
+`usage_known` 只回答“Provider 回了一个 token 数”；`usage_covers_billed_tokens` 才回答“这个数覆盖
+所有实际计费的 token 类别”。thinking / reasoning token 正是最危险的反例：请求成功、usage 也非空，
+但若这类 token 被另计费却未进入 usage，LLM 条件会在主预算里被白送资源。
+
+因此正式 Gate 的 Target、Generator/Attacker、Controller 三个远程角色都必须满足 coverage；任一角色
+不能证明，就不能进入正式矩阵。价格缺失只会令美元栏显示 `N/A`，coverage 缺失则会让**Token 主预算本身失效**。
+
+当前实现把该能力拆成两层：provider/run 条件里的布尔声明负责表达运行能力；独立、无凭据的
+`BillingEvidenceBundle` 负责绑定 Provider/base URL/model/thinking、服务层级、核验日期、官方或对账依据、
+安全摘要和 reasoning coverage。preflight 检查现场配置与 evidence 是否相符，Gate report 再对实际落盘的
+Run 条件复核并保存 evidence digest。任一缺失、错配或未确认都会 fail-closed。
+
+原因不是不信任某个开关，而是半年后应能回答“为什么当时相信这 320k Token 真的是 320k 个计费 Token”。
+它也防止一个常见的时间漏洞：今天把 `.env` 改正确，不能替昨天已经完成的 Run 补上一张看似相符的证明。
+
+#### Matrix dispatch：先写快递单，再把包裹交出去
+
+每个 matrix cell 不是“看到数据库里有一条差不多的 Run 就算完成”，而是一个有唯一身份的交付状态机：
+
+```text
+PENDING
+  → DISPATCHED(run_id 已持久化)
+  → COMPLETED
+  └→ FAILED → 同 seed 其余未跑 cell = SKIPPED_BLOCK_INVALID
+```
+
+child process 启动**之前**，父进程先把 exact `run_id` 写入 `DISPATCHED`。如果机器在这之后掉电，
+我们不知道 Provider 是否已经收到请求、也不知道某个 Run 是否只写了一半；这类 cell 不能靠 seed、
+时间戳或“最近的一条 Run”猜回去。恢复时它会令整个 paired seed block 失效，原记录保留但不得进入分析。
+
+这看似会浪费一次已发出的调用，实际是在“少花一点钱”和“不要把未知交付伪装成可配对样本”之间选择后者。
+备用 seed 也因此永不自动启用：必须按冻结顺序，由人确认失效属于 infrastructure / unknown token /
+reliability / integrity 中允许的类别，并保存启用前 state digest。这样备用不是结果不好时换一副骰子。
+
+#### Shared SQLite rate limiter：每个进程守规矩，不等于全队守规矩
+
+单进程 semaphore 像每个房间各放一名保安：每间都只放 3 人，但 72 个房间同时开门时，
+同一 Provider 实际可能收到远多于 3 个请求。正式矩阵使用独立的 SQLite 协调器，按无凭据
+`base_url|model` 作为 key，在**所有** child process 之间共同实施最严格的 RPM 与并发上限。
+
+它保存的只有起始间隔、并发 reservation 和 lease，不保存 API key、prompt、usage 或报告数据；
+并且与正式 Run 数据库分离，避免“限流器能初始化”被误读成“Gate 数据库可用”。lease 默认 300 秒：
+正常请求在 `finally` 立即释放；进程崩溃则 lease 到期后可被下一个进程回收，避免旧版 `active_count`
+在崩溃后永久占满一个并发位。
+
+选择 SQLite 而不是为一次本地实验引入 Redis，是因为它复用已有持久化依赖、状态可检查、部署面小。
+它的边界也必须讲清：所有 child 必须访问**同一个文件系统上的同一 SQLite 文件**。未来若 worker 跨机器，
+这条 interface 仍成立，但实现必须换成 Redis/集中式 lease service；不能把本地 SQLite 假装成分布式协调器。
+
+#### Provider 扩展字段为什么必须收窄
+
+`extra_body` 曾经若是任意 JSON，就像让实验操作者把任何旋钮塞进发动机舱：可能覆盖标准字段、
+写进 credential，也可能悄悄改变模型行为却没有可审计名称。现在只允许版本化的
+`thinking.type = enabled | disabled`；未知键、标准请求字段覆盖和 secret 一律在配置解析时拒绝。
+
+代价是新增厂商开关要先扩 schema、补离线测试、重跑受影响 controls、更新日志；收益是“实验条件”
+不再依赖某个人记得自己填过什么。这里的接口深度在于：Orchestrator 不需要知道各厂商的旋钮，
+它只接收已经被类型系统验证过的 provider configuration。
+
+### 14.31 v2 utility baseline：旧尺子保留，新尺子负责 Gate ⭐⭐
+
+2026-08-12 修复 `text-tool-call-codec-v2` 后，旧的 37/50 不是“偏低但还能凑合”的基线，
+而是用会丢零参数工具调用的旧仪器量出的历史记录。它必须保留以解释变更，却**不得**再作为
+Phase 0.5 Gate 的通过条件。
+
+当前冻结的有效基线来自 codec-v2、20 次阴性重复的第一份符合条件 controls 候选：
+
+```text
+utility = 158 / 200 = 79%
+overall non-inferiority floor = 138 / 200
+```
+
+它绑定 raw controls SHA-256、完整阴性裁决 SHA-256、逐任务成功数和 `utility_context_fingerprint`。
+这不是“看见 79% 后又选一轮好看的数据”：该候选先因两条 raw Finding 挂起，作者随后只依据 trace
+裁定二者为 `TARGET_SPONTANEOUS_VIOLATION`，才消费这**一次**预先承诺的测量；没有重跑、没有挑数。
+
+原始 Finding 仍在报告里。它们说明正常退款中 Target 曾在同一用户回合内跳过确认闸门并再次尝试退款；
+工具层拦截使 Impact 未实现，检测器仍是正确报警。因而现在的阴性证据应同时读成：
+
+```text
+raw Finding = 2
+detector false positive = 0
+target spontaneous violation = 2
+unresolved = 0
+```
+
+这既保住“检测器误报必须为零”的硬门，也不把真实的 Target 风险洗成“阴性完全干净”。目标自发违规率
+此阶段不设事后阈值；样本仍太少，它只作为靶场质量和结果解释的一栏。
+
+### 14.32 正式运行的正确顺序：preflight 不替代 controls
+
+零成本 preflight 像飞机起飞前核对油量、航线和起落架：它能发现缺配置、价格、seed plan、golden fixture、
+空的正式数据库、共享 limiter 路径，却**不能**证明 API key 真的可用，也不能证明模型会遵守 Controller JSON。
+
+因此正确顺序是：
+
+```text
+冻结最终配置与证据声明
+  → 零成本 preflight
+  → Controller contract controls（角色适任性）
+  → Target/attacker/negative controls（测量链与漂移）
+  → 12 × 6 正式矩阵
+  → replay validation + gate-report
+```
+
+任何一步失败都保留证据并停在对应语义：配置/对照/未知 Token/交付完整性失败是
+`EXPERIMENT_INVALID` 或 `BLOCKED`，不是“LLM controller 输了”；只有有效完整矩阵未通过
+预注册主比较时，才是诚实的 `NOT SUPPORTED`。
+
+---
+
 ## 15. 六个攻击策略 ⭐⭐
 
 前面讲了靶场(被攻击的房子)和引擎(小偷的手脚)。这一节讲**小偷的撬锁手册**。
@@ -3125,7 +3273,27 @@ Gate**。正式消融前必须冻结能处理删失的主要统计量、最小�
 
 ---
 
-## 19. 截至 2026-08-01:系统现在到哪一步,下一步是什么
+## 19. 系统现在到哪一步、下一步是什么
+
+### 19.0 当前状态补记(2026-08-13)
+
+**代码和离线质量门已经进入 `master`，但 Phase 0.5 正式 Gate 尚未开始。** 两句话必须一起说：
+
+| 已有证据 | 还没有的证据 |
+|---|---|
+| 673 个本地测试通过；Ruff check、Ruff format、Black 与 diff 四道质量门通过；Gate 的 typed provider 配置、v2 utility baseline、matrix dispatch/recovery 与 shared SQLite limiter 已落地 | 没有新的正式 Provider matrix、没有 12 个有效 paired seed、没有 replay validation、没有 `SUPPORTED` 或 `NOT SUPPORTED` 裁决 |
+
+当前有效 utility baseline 是 codec-v2 的 158/200，整体下限 138/200；历史 codec-v1 的 37/50
+只保留作追溯，不能用于 Gate。两条 `legitimate_refund` raw Finding 已按完整 trace 裁为
+`TARGET_SPONTANEOUS_VIOLATION`，所以 detector false positive 为零，但 raw 证据并未删除。
+
+正式运行前剩下的是**设计与环境证明**，不是“再多跑一次 pytest”：每个 Provider 角色的计费 Token
+coverage 必须有可审计证据；最终 Target 条件下的 controls 必须重新采集并与 v2 utility 尺子比较；
+Controller contract controls 必须达线；RPM/并发、正式数据库、shared limiter 文件与全局费用上限必须冻结。
+这些完成前，最准确状态是 `GATE-PREFLIGHT PENDING`，不是 Phase 0.5 已通过，也不是算法失败。
+
+> 下方 19.1–19.3 是 2026-08-01 的历史快照。保留它是为了理解当时的架构边界，具体进度以本小节和
+> `DEVLOG.md` 顶部的最新步骤为准。
 
 > ⚠️ **本节是 2026-08-01 的快照,此后 5 天发生的事没有同步进来**
 > (靶场从 GLM-4.7-Flash 换到 GLM-4.7-FlashX + 关闭 thinking、三轮彩排、

@@ -15,6 +15,13 @@ from redcell.config import (
     TargetSettings,
 )
 from redcell.gate_analysis import PHASE_0_5_SEED_PLAN_DIGEST
+from redcell.gate_billing_evidence import (
+    BillingEvidenceBundle,
+    BillingRole,
+    ProviderBillingEvidence,
+    billing_evidence_template,
+    billing_subject_fingerprint,
+)
 from redcell.gate_preflight import run_preflight
 from redcell.protocols.run import Run
 from redcell.storage import RunStore
@@ -61,17 +68,39 @@ def _roles(**overrides) -> list[tuple[str, ProviderSettings]]:
     return [(role, overrides.get(role) or _settings(role)) for role in ROLES]
 
 
+def _billing_evidence(roles: list[tuple[str, ProviderSettings]]) -> BillingEvidenceBundle:
+    return BillingEvidenceBundle(
+        records=[
+            ProviderBillingEvidence(
+                role=BillingRole(role),
+                subject_fingerprint=billing_subject_fingerprint(settings.run_configuration()),
+                provider=settings.provider,
+                model=settings.model,
+                service_tier="test",
+                checked_on="2026-08-13",
+                source_reference="test evidence",
+                source_summary="test usage includes every billed token class",
+                usage_covers_billed_tokens=True,
+                reasoning_tokens_covered=True,
+            )
+            for role, settings in roles
+        ]
+    )
+
+
 def _db(tmp_path: Path) -> str:
     return f"sqlite:///{tmp_path / 'phase-0-5.db'}"
 
 
 def _report(tmp_path: Path, roles=None):
+    selected_roles = roles if roles is not None else _roles()
     return run_preflight(
         seed_plan_json=FROZEN_SEED_PLAN,
         database_url=_db(tmp_path),
         golden_fixtures=GOLDEN_FIXTURES,
-        roles=roles if roles is not None else _roles(),
+        roles=selected_roles,
         shared_rate_limit_db=f"sqlite:///{tmp_path / 'shared-rate-limit.db'}",
+        billing_evidence=_billing_evidence(selected_roles),
     )
 
 
@@ -122,6 +151,39 @@ def test_partial_usage_declaration_is_refused(tmp_path) -> None:
 
     assert not check.passed
     assert "USAGE_COVERS_BILLED_TOKENS" in check.detail
+
+
+def test_missing_billing_evidence_is_refused_even_when_boolean_is_true(tmp_path) -> None:
+    report = run_preflight(
+        seed_plan_json=FROZEN_SEED_PLAN,
+        database_url=_db(tmp_path),
+        golden_fixtures=GOLDEN_FIXTURES,
+        roles=_roles(),
+        shared_rate_limit_db=f"sqlite:///{tmp_path / 'shared-rate-limit.db'}",
+    )
+
+    assert not report.passed
+    assert not _check(report, "missing_billing_evidence").passed
+
+
+def test_billing_template_is_explicitly_incomplete(tmp_path) -> None:
+    roles = _roles()
+    template = billing_evidence_template(
+        {BillingRole(role): settings.run_configuration() for role, settings in roles}
+    )
+
+    assert all(not record.passed for record in template.records)
+    assert "billing_evidence_coverage_unconfirmed:target" in {
+        item.name
+        for item in run_preflight(
+            seed_plan_json=FROZEN_SEED_PLAN,
+            database_url=_db(tmp_path),
+            golden_fixtures=GOLDEN_FIXTURES,
+            roles=roles,
+            shared_rate_limit_db=f"sqlite:///{tmp_path / 'shared-rate-limit.db'}",
+            billing_evidence=template,
+        ).checks
+    }
 
 
 def test_baseline_database_is_refused(tmp_path) -> None:
@@ -223,19 +285,24 @@ def _fill_env(monkeypatch, tmp_path) -> None:
     )
 
 
-def _invoke(tmp_path):
-    return runner.invoke(
-        app,
-        [
-            "gate-preflight",
-            "--seed-plan-json",
-            str(FROZEN_SEED_PLAN),
-            "--db",
-            _db(tmp_path),
-            "--golden-fixtures",
-            str(GOLDEN_FIXTURES),
-        ],
-    )
+def _invoke(tmp_path, *, with_billing_evidence: bool):
+    arguments = [
+        "gate-preflight",
+        "--seed-plan-json",
+        str(FROZEN_SEED_PLAN),
+        "--db",
+        _db(tmp_path),
+        "--golden-fixtures",
+        str(GOLDEN_FIXTURES),
+    ]
+    if with_billing_evidence:
+        roles = [(role, SETTINGS_TYPES[role]()) for role in ROLES]
+        evidence_path = tmp_path / "billing-evidence.json"
+        evidence_path.write_text(
+            _billing_evidence(roles).model_dump_json(indent=2), encoding="utf-8"
+        )
+        arguments.extend(["--billing-evidence-json", str(evidence_path)])
+    return runner.invoke(app, arguments)
 
 
 @pytest.mark.parametrize("configured", [True, False])
@@ -243,7 +310,7 @@ def test_cli_exit_code_tracks_configuration(isolated_env, tmp_path, configured) 
     if configured:
         _fill_env(isolated_env, tmp_path)
 
-    result = _invoke(tmp_path)
+    result = _invoke(tmp_path, with_billing_evidence=configured)
 
     assert result.exit_code == (ExitCode.CLEAN if configured else ExitCode.BAD_CONFIG)
 
@@ -252,7 +319,7 @@ def test_cli_output_does_not_read_as_ready_to_conclude(isolated_env, tmp_path) -
     """全绿最容易被读成"可以出结论了" —— 输出必须自己挡住这个误读。"""
     _fill_env(isolated_env, tmp_path)
 
-    result = _invoke(tmp_path)
+    result = _invoke(tmp_path, with_billing_evidence=True)
 
     assert result.exit_code == ExitCode.CLEAN, result.output
     assert "可以开始跑对照" in result.output

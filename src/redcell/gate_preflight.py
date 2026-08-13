@@ -31,6 +31,11 @@ from redcell.config import (
     TargetSettings,
 )
 from redcell.gate_analysis import SeedPlan, require_frozen_seed_plan
+from redcell.gate_billing_evidence import (
+    BillingEvidenceBundle,
+    BillingRole,
+    billing_evidence_failures,
+)
 from redcell.golden import evaluate_golden
 from redcell.protocols.common import RedCellModel
 from redcell.shared_rate_limit import SQLiteRateLimiter
@@ -242,6 +247,7 @@ def run_preflight(
     golden_fixtures: Path,
     roles: list[tuple[str, ProviderSettings]] | None = None,
     shared_rate_limit_db: str | None = None,
+    billing_evidence: BillingEvidenceBundle | None = None,
 ) -> PreflightReport:
     """跑完全部零成本检查;任何一项失败都不应进入付费步骤。
 
@@ -255,6 +261,26 @@ def run_preflight(
         checks.append(_connection_check(name, settings))
         checks.append(_pricing_check(name, settings))
         checks.append(_usage_coverage_check(name, settings))
+    configurations = {BillingRole(name): settings.run_configuration() for name, settings in roles}
+    billing_failures = billing_evidence_failures(configurations, billing_evidence)
+    for failure in billing_failures:
+        checks.append(
+            PreflightCheck(
+                name=failure,
+                passed=False,
+                detail="正式 Gate 需要与当前非凭据 Provider 配置绑定的 billing evidence",
+            )
+        )
+    if not billing_failures:
+        checks.append(
+            PreflightCheck(
+                name="billing_evidence",
+                passed=True,
+                detail=(
+                    f"三个角色的 billing evidence 已绑定(digest={billing_evidence.digest()[:12]})"
+                ),
+            )
+        )
     checks.append(_seed_plan_check(seed_plan_json))
     checks.append(_golden_check(golden_fixtures))
     checks.append(_database_check(database_url))
