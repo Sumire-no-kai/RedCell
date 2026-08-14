@@ -90,6 +90,12 @@ CARGO_BUILD_JOBS=2 CARGO_PROFILE_RELEASE_LTO=off \
 若 pip 报告没有 Android wheel，保留版本约束并从该版本的官方 sdist 原生构建，不能悄悄升级为另一个版本。
 这里关闭的是 Rust 链接时优化，不改变 Ruff 的规则或版本；参考设备使用官方 fat-LTO 时会耗尽 2.2 GiB swap，
 所以把并发限制为 2 并关闭 LTO 是设备稳定性要求，不是放宽格式门。
+
+参考 Termux 环境中的 Ruff 是从官方 sdist 编译并安装的独立可执行文件，不提供可供
+`python -m ruff` 导入的 Python 模块；手机四道门必须使用 `.venv/bin/ruff check .` 与
+`.venv/bin/ruff format --check .`。Windows 冻结环境继续使用 `.venv\Scripts\python.exe -m ruff`。
+两种入口都必须自报同一个冻结版本 `ruff 0.16.1`，不能因为调用方式不同而放宽规则。
+
 长跑使用 `tmux` 托管单一 runner，并在启动前执行 `termux-wake-lock`；结束后执行
 `termux-wake-unlock`。关屏可以，Termux 仍须处于系统电池优化白名单，手机须持续供电、保持 Wi-Fi 与
 DNS 可用，并预留足够空间给 SQLite、trace 和报告。API key 只写入 Termux 私有目录、权限设为 `0600`，

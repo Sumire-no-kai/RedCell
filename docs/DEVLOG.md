@@ -364,6 +364,31 @@
   48.44s**、Ruff check、Ruff format（131 files）、Black（119 files）与 `git diff --check`。
 - **剩余状态:** MERGED / TERMUX REVALIDATION REQUIRED / FORMAL MATRIX NOT RUN。
 
+### 2026-08-14 22:09 AEST · Step 102 · 手机同步 97e34ca 与修复后零成本重验
+
+- **同步与凭据边界:** 手机仓库原 `origin` 指向已经清理的临时 Git bundle；先用匿名
+  `git ls-remote` 验证 GitHub `master=97e34ca`，再把手机本地 origin 改为公开 HTTPS 并
+  fast-forward 到 `97e34ca`。仓库保持 `master...origin/master` 干净；`.env` 仍为 `0600`，
+  仅检查 Target/Attacker/Controller 三个 key 均为非空，没有读取或打印值，也没有经 Git 传输。
+- **可见执行:** 建立 `phase05-verify` tmux 会话，命令输出同时写入
+  `runs/phase0-5-prep-2026-08-14/revalidation-97e34ca.log`。操作者可用
+  `tmux attach -t phase05-verify` 查看完整 CLI 历史；本步结束后会话保留但无运行任务，wake lock
+  已释放并由 Android `Wake Locks: size=0` 复核。
+- **遇到的问题:** 首轮在 pytest 后沿用 Windows 的 `python -m ruff`，手机返回
+  `No module named ruff` 并以 1 退出。原因不是 Ruff 缺失，而是 Termux 的冻结 Ruff 0.16.1
+  来自原生 Rust 二进制，不提供 Python 模块入口。失败发生在任何 preflight/Provider 调用之前，
+  wake lock 正常释放；随后在同一日志续跑 `.venv/bin/ruff`，并把宿主差异写回 Runbook。
+- **验证证据:** `pip check` 通过；手机全量 **708 passed in 120.65s**；Ruff check 通过，
+  Ruff format 为 **130 files already formatted**；Black 为 **119 files unchanged**；
+  `git diff --check` 通过。修复后 preflight 再次 **14/14 PASS**，billing digest 前缀仍为
+  `393185f3d8ee`；新 plan 为 72 primary + 48 disabled reserve，新 state 为 **0/72 completed、
+  0 invalid**。新证据文件均以 `97e34ca` 后缀与修复前产物区分。文档收尾时再次确认
+  Windows/Termux 均为 `ruff 0.16.1`；桌面全量 **708 passed in 48.02s**，四道门与
+  `git diff --check` 全部通过。
+- **剩余状态:** `GATE-PREFLIGHT READY ON TERMUX / FORMAL MATRIX NOT RUN`。工程、Provider 前置、
+  手机宿主与新代码提交已重新对齐；正式开跑仍需墙充、稳定 Wi-Fi、wake lock 和单一 tmux runner，
+  且是需要单独确认的付费动作。
+
 ---
 
 ## 2026-08-13 · Phase 0.5 Gate 合并后深度代码审阅
