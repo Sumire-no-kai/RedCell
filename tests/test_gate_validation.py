@@ -23,6 +23,7 @@ from redcell.protocols import (
     StrategyCatalogue,
 )
 from redcell.strategies import PHASE_0_STRATEGIES
+from redcell.versions import EXPERIMENT_CONDITIONS_SCHEMA_VERSION
 
 FROZEN_PLAN = SeedPlan.model_validate_json(
     (Path(__file__).parents[1] / "docs" / "PHASE0_5_SEED_PLAN.json").read_text(encoding="utf-8")
@@ -95,6 +96,8 @@ def _run(seed: int, condition: GateCondition) -> Run:
         search=SearchConfiguration(selector=selector),
         generation_memory=memory,
         controller=controller,
+        # Gate 只采信摘要可重算证实的 Run;正式 Run 一律由 CLI 带上 schema 版本。
+        conditions_schema_version=EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
     )
     return Run(
         id=f"run-{seed}-{condition.value}",

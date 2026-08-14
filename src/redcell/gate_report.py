@@ -458,12 +458,19 @@ def _billing_evidence_failures(
 
 
 def _is_phase_0_5_run(run: Run) -> bool:
+    """这条 Run 能不能进正式 Gate。
+
+    要求摘要**在今天仍能被重算证实**:一条只留了摘要、却已无法核对的 Run 可以被读取
+    和分析,但不该支撑一份正式结论。Phase 0.5 的 Run 全部自带 schema 版本,
+    所以这一条对本次矩阵是恒真的 —— 它挡的是把 Phase 0 旧记录混进来。
+    """
     conditions = run.experiment_conditions
     return (
         conditions is not None
         and conditions.search is not None
         and conditions.generation_memory is not None
         and conditions.strategy_catalogue is not None
+        and run.conditions_fingerprint_verified
     )
 
 

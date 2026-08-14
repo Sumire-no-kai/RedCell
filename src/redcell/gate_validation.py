@@ -91,10 +91,12 @@ def select_validation_evidence(store: RunStore, seed_plan: SeedPlan) -> Validati
 
 
 def _is_phase_0_5_run(run: Run) -> bool:
+    """与 `gate_report` 同一条判据 —— 两处必须一致,否则报告和复核会看到不同的 Run 集。"""
     conditions = run.experiment_conditions
     return (
         conditions is not None
         and conditions.search is not None
         and conditions.generation_memory is not None
         and conditions.strategy_catalogue is not None
+        and run.conditions_fingerprint_verified
     )
