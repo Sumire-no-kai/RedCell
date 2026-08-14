@@ -183,6 +183,73 @@
 - **剩余状态:** READY — 除正式 72-cell 矩阵及其下游 replay/report 外没有已知工程前置阻塞；本条通过独立文档
   收尾分支提交，确保主分支日志与远端合并事实一致。
 
+### 2026-08-14 18:20 AEST · Step 95 · 原生 Termux 执行宿主审计与环境配置
+
+- **作者决定与范围:** 采用手机上的原生 Termux 作为长跑候选，不使用付费远端，也不叠加 proot/Ubuntu；本步只配置、
+  验证与记录执行宿主，明确不启动正式 72-cell 矩阵。选择原生方案是因为 Android 已提供 Linux 内核，Termux 可以直接
+  承载 Python/tmux/SQLite/网络进程；同时必须承认其用户态为 Android/Bionic 而非 GNU/glibc，所以缺少 Android wheel
+  的原生扩展仍需源码编译，不能把“同为 Linux 内核”误写成二进制 ABI 完全相同。
+- **设备与运行条件:** 实机为 Android 9 ARM64、8 核、约 3.8 GiB RAM，Termux 0.118.3；`sshd` 监听 8022，`tmux`、
+  `termux-wake-lock`、Git、Clang/CMake/Make/pkg-config 可用，Termux 已处于 device-idle 白名单。Wi-Fi 最初断开且 DNS
+  解析失败，故当时不可能运行 Provider；作者恢复网络后，设备获得局域网地址且 `apt update` 成功。唤醒锁实测进入
+  `PARTIAL_WAKE_LOCK termux:service-wakelock`，证明关屏不等于进程必停，但正式长跑仍须墙充、稳定 Wi-Fi 与后台白名单。
+- **部署与版本:** 用 Git bundle 把 `master` 精确提交 `7e4982f6547cf1ffca68e9f396b70fa6bb8cea0d` 克隆到 Termux
+  私有目录，仓库干净；建立原生 `.venv`。手机 Python 是 3.14.6，Windows 冻结环境是 3.12.13，因此只能做到依赖版本
+  对齐而不是宿主逐字节一致。Pydantic 2.13.4、pydantic-core 2.46.4、pydantic-settings 2.15.0、Typer 0.27.1、
+  Structlog 26.1.0、SQLAlchemy 2.0.51、Jinja2 3.1.6 与 HTTPX 0.28.1 已按 Windows 版本安装，`pip check` 通过。
+- **原生构建问题与解决:** PyPI 没有适配该 Android/Python 组合的 `pydantic-core` 与 Ruff wheel。先按 Termux 官方包
+  校验值安装 Rust 1.97.1，再从官方 sdist 与锁定 vendor 依赖离线构建；`pydantic-core` 原生编译约 4 分 20 秒并通过
+  Pydantic 模型转换实测。Ruff 0.16.1 的发布 sdist 含完整 workspace 锁文件，Cargo vendor 会剔除发布包中不存在的
+  workspace 成员；保留原锁文件作对照后使用发布源码实际成员生成离线 vendor，当前正在手机编译精确版本二进制。
+- **意外环境漂移与纠正:** 一次临时 `uv run` 误把 Windows `.venv` 的 SQLAlchemy、greenlet 与 typing-inspection
+  升级，并生成未跟踪 `uv.lock`；立即把三项恢复为 2.0.51/3.5.4/0.4.2，只删除本步生成的 `uv.lock`。随后用
+  `importlib.metadata` 核对 Windows 冻结包版本全部恢复；作者既有两份未跟踪文档未修改、未暂存。
+- **可复现性改进:** 新增 `constraints/phase0-5.txt` 固定当前运行时与四道工程门的完整 Python 包版本；Runbook 增加
+  原生 Termux 部署、宿主差异、唤醒锁、私有凭据与单宿主 state 规则。手机产生的正式 DB/state 不得与 Windows
+  交替写入，迁移后必须在手机重跑四道门、preflight 与 dry-run。
+- **剩余状态:** IN PROGRESS — 等待 Ruff 原生链接完成，随后在手机运行 701 项全量测试、Ruff check/format、Black、
+  `git diff --check`、零成本环境自检与清理；正式矩阵仍未启动。
+
+### 2026-08-14 19:09 AEST · Step 96 · Termux 全量验证、正式 preflight 与临时构建清理
+
+- **Ruff 构建取舍:** Ruff 0.16.1 官方 release profile 的 fat-LTO 在参考手机上持续占用约一个核心，最终把
+  2.2 GiB swap 用满；为避免 Android OOM 杀死整个 Termux，主动停止的仅是本次编译会话，保留已完成 crate。
+  随后用同一官方 sdist/版本/规则，设置 `CARGO_BUILD_JOBS=2`、`CARGO_PROFILE_RELEASE_LTO=off` 重建。关闭的是
+  链接时优化而非 lint/format 语义，稳定构建耗时 27 分 11 秒，二进制自报 `ruff 0.16.1`。Runbook 固化该参数，
+  避免下次在同级设备重复撞满 swap。
+- **手机工程门:** `pip check` 通过；冻结 constraints 逐包核对通过；全量测试 **701 passed in 147.41s**；
+  Black **118 files unchanged**；`git diff --check` 通过。Ruff 首轮扫描失败定位为仓库根下本次临时
+  `.offline-build/`/`.offline-sdists/` 中的上游源码，不是 RedCell Finding；将已验证二进制安装进 `.venv` 后，
+  删除精确临时目录再重跑，`ruff check .` 全绿、`ruff format --check .` 为 **129 files already formatted**。
+  手机与 Windows 均有 121 个受 Git 跟踪的 `.py/.pyi`，文件数显示差异不来自缺失项目源码。
+- **CLI 缺口与修复:** 最初用 `.pth` 只满足 import/pytest，没有生成 plan argv 所需的 `redcell` console script。
+  通过 `pip install --no-deps -e .` 安装项目自身入口，不重新解析或升级依赖；删除临时 `.pth` 后，`redcell --help`、
+  `pip check` 与仓库导入均通过，手机 Git 工作树保持 `master...origin/master` 干净。
+- **正式零成本证据:** 仅把 `.env` 中 `REDCELL_*` 配置经 ADB stdin 写入 Termux 私有目录，权限 `0600`；未经过
+  Android 共享存储、未打印值，也没有复制旧的 `DEEPSEEK_API_KEY`。复制的 billing/controls 产物不含凭据且权限仅
+  owner 可读。手机重跑 Gate preflight 为 **14/14 PASS**，billing digest 前缀仍为 `393185f3d8ee`；随后按 POSIX
+  路径重新生成 72 primary + 48 disabled reserve plan 并 dry-run，状态为 **0/72 completed、0 invalid**，没有调用
+  Provider 或执行正式 Run。无凭据 DNS/TCP/TLS 探测确认 Z.AI 与 Google 端点均可用 TLS 1.3 到达。
+- **清理与电源:** 删除电脑/手机间本次传输的 `/data/local/tmp` 文件，并删除手机内 2.6 GiB build、14 MiB sdist 与
+  临时验证脚本；只保留 `~/RedCell`、可运行 `.venv`、私有配置和正式准备证据。电脑侧先核对绝对目标严格等于
+  `E:\RedCell\runs\termux-transfer`，再删除本步创建的 32,491 个临时文件、758,663,885 bytes；其他 `runs/` 未动。
+  手机可用空间恢复至约 9.1 GiB。
+  唤醒锁已实测可获取；验证结束后已释放并确认 `Wake Locks: size=0`，不留下后台 tmux 会话。
+- **剩余状态:** `GATE-PREFLIGHT READY ON TERMUX / FORMAL MATRIX NOT RUN` — 手机已具备原生执行正式矩阵的工程、
+  配置、网络、preflight 和 dry-run 证据；Python 3.14.6/Android-Bionic 与 Windows Python 3.12.13 仍是明确记录的
+  宿主差异。正式开跑时须墙充、重新获取 wake lock、在单一 tmux runner 中使用手机专属 state，不能与 Windows
+  state 交替写入。
+
+### 2026-08-14 19:13 AEST · Step 97 · 桌面最终工程门与提交范围冻结
+
+- **最终工程门:** 当前分支全量 `pytest -p no:cacheprovider` 为 **701 passed in 52.47s**；`ruff check .`、
+  `ruff format --check .`（130 files）、`black --check src tests`（118 files）与 `git diff --check` 全部通过。
+  这组桌面证据与 Step 96 的手机原生证据分别记录，不用一台机器的通过替代另一台。
+- **提交范围:** 仅包含 `constraints/phase0-5.txt`、Termux Runbook 和本次 DEVLOG；不包含 `.env`、API key、
+  手机/桌面 `runs/` 产物或任何临时安装包。作者既有未跟踪 `docs/PHASE0_5_UTILITY_BASELINE.json` 与
+  `docs/RELATED_WORK.md` 保持未修改、未暂存。
+- **剩余状态:** VERIFIED — 按分支工作流提交、推送、创建 ready PR 并合并；正式 72-cell 矩阵继续保持未启动。
+
 ---
 
 ## 2026-08-13 · Phase 0.5 Gate 合并后深度代码审阅

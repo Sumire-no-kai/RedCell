@@ -64,6 +64,37 @@ Windows 正式 runner 必须接通交流电，并在启动前用 `powercfg /quer
 尚未确认交付的 cell 按 fail-closed 处理，因此断点续跑不能把主动睡眠变成无损暂停机制。修改电源策略
 前记录原值，矩阵结束后恢复；不要依赖电池模式完成长跑。
 
+### 1.2 原生 Termux runner（不使用 proot/Ubuntu）
+
+Android 使用 Linux 内核，但 Termux 的用户态 ABI 是 Android/Bionic，不是常见服务器的 GNU/glibc；因此
+“能在 Linux 跑”不自动等于 PyPI 的 Linux 二进制 wheel 能直接安装。这里不再套一层 Ubuntu，而是在
+Termux 原生安装编译链，并把没有 Android wheel 的 `pydantic-core`、Ruff 等扩展从官方源码编译为 ARM64。
+这保留了 Android 原生进程、电源与网络模型，也避免 proot 的额外文件系统和进程开销。
+
+2026-08-14 的已验证参考设备是 Android 9 ARM64、Termux 0.118.3、Python 3.14.6；Windows 冻结环境是
+Python 3.12.13。Pydantic、SQLAlchemy、HTTPX、pytest、Black 与 Ruff 等项目依赖版本保持一致，但 Python
+minor、操作系统和 C 运行库并不相同，必须把它记录为**执行宿主变更**，不能声称两个环境逐字节等价。
+正式运行前必须在手机重新执行本节四道工程门、`gate-preflight` 和 matrix `--dry-run`；手机产生的正式
+数据库、state 与输出必须使用同一宿主继续/恢复，不得与 Windows 正在执行的 state 交替写入。
+
+原生准备的最小工具链如下；具体依赖版本仍以项目冻结环境与 `pyproject.toml` 为准：
+
+```bash
+pkg update
+pkg install python git clang cmake make pkg-config rust tmux
+python -m venv .venv
+CARGO_BUILD_JOBS=2 CARGO_PROFILE_RELEASE_LTO=off \
+  .venv/bin/python -m pip install -c constraints/phase0-5.txt -e '.[dev]'
+```
+
+若 pip 报告没有 Android wheel，保留版本约束并从该版本的官方 sdist 原生构建，不能悄悄升级为另一个版本。
+这里关闭的是 Rust 链接时优化，不改变 Ruff 的规则或版本；参考设备使用官方 fat-LTO 时会耗尽 2.2 GiB swap，
+所以把并发限制为 2 并关闭 LTO 是设备稳定性要求，不是放宽格式门。
+长跑使用 `tmux` 托管单一 runner，并在启动前执行 `termux-wake-lock`；结束后执行
+`termux-wake-unlock`。关屏可以，Termux 仍须处于系统电池优化白名单，手机须持续供电、保持 Wi-Fi 与
+DNS 可用，并预留足够空间给 SQLite、trace 和报告。API key 只写入 Termux 私有目录、权限设为 `0600`，
+不得经过共享存储、命令输出或 Git；传输完成后删除临时副本。
+
 ## 2. 零成本工程门
 
 以下命令不调用 Provider：
