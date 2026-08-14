@@ -357,6 +357,7 @@ class ControlsConditions(RedCellModel):
                 "input_usd_per_mtok",
                 "output_usd_per_mtok",
                 "cached_input_usd_per_mtok",
+                "usage_accounting_mode",
                 "usage_covers_billed_tokens",
             },
         )

@@ -18,6 +18,7 @@ from redcell.protocols import (
     SearchConfiguration,
     SearchSelector,
     StrategyCatalogue,
+    UsageAccountingMode,
 )
 from redcell.strategies.library import PHASE_0_STRATEGIES
 
@@ -33,6 +34,7 @@ def _provider() -> ProviderRunConfiguration:
         max_concurrency=1,
         input_usd_per_mtok=0,
         output_usd_per_mtok=0,
+        usage_accounting_mode=UsageAccountingMode.PROMPT_COMPLETION_V1,
     )
 
 
@@ -64,6 +66,16 @@ def test_phase_0_5_requires_new_treatment_fields_and_catalogue() -> None:
         conditions.require_phase_0_5()
 
 
+def test_phase_0_5_requires_explicit_usage_accounting_modes() -> None:
+    conditions = _conditions(strategy_catalogue=_catalogue())
+    incomplete = conditions.model_copy(
+        update={"attacker": conditions.attacker.model_copy(update={"usage_accounting_mode": None})}
+    )
+
+    with pytest.raises(ValueError, match="usage_accounting_mode"):
+        incomplete.require_phase_0_5()
+
+
 def test_llm_search_requires_controller_but_static_forbids_it() -> None:
     controller = ControllerRunConfiguration(
         provider=_provider(),
@@ -71,7 +83,7 @@ def test_llm_search_requires_controller_but_static_forbids_it() -> None:
         connection_fingerprint="sha256:abc",
         prompt_version="controller-prompt-v1",
         evidence_policy_version="controller-evidence-v1",
-        thinking_disabled=True,
+        thinking_disabled=False,
     )
     static = _conditions(controller=controller, strategy_catalogue=_catalogue())
     with pytest.raises(ValueError, match="非 LLM"):
@@ -82,6 +94,18 @@ def test_llm_search_requires_controller_but_static_forbids_it() -> None:
     )
     with pytest.raises(ValueError, match="Controller"):
         llm.require_phase_0_5()
+
+
+def test_controller_thinking_snapshot_must_match_provider_payload() -> None:
+    with pytest.raises(ValueError, match="thinking_disabled"):
+        ControllerRunConfiguration(
+            provider=_provider(),
+            connection_id="controller-test",
+            connection_fingerprint="sha256:abc",
+            prompt_version="controller-prompt-v1",
+            evidence_policy_version="controller-evidence-v1",
+            thinking_disabled=True,
+        )
 
 
 def test_memory_configuration_binds_limits_to_enabled_mode() -> None:
@@ -111,16 +135,42 @@ def test_regression_context_ignores_treatment_but_complete_fingerprint_does_not(
             limits=GenerationMemoryLimits(),
         ),
         controller=ControllerRunConfiguration(
-            provider=_provider(),
+            provider=_provider().model_copy(
+                update={"usage_accounting_mode": UsageAccountingMode.TOTAL_MINUS_PROMPT_V1}
+            ),
             connection_id="controller-test",
             connection_fingerprint="sha256:abc",
             prompt_version="controller-prompt-v1",
             evidence_policy_version="controller-evidence-v1",
-            thinking_disabled=True,
+            thinking_disabled=False,
         ),
     )
     assert static.fingerprint() != llm.fingerprint()
     assert static.regression_context_fingerprint() == llm.regression_context_fingerprint()
+
+
+def test_regression_context_omits_optional_legacy_provider_fields() -> None:
+    legacy_provider = _provider().model_copy(update={"usage_accounting_mode": None})
+    conditions = _conditions(target=legacy_provider, attacker=legacy_provider)
+    payload = {
+        "version": "regression-context-v1",
+        "online": conditions.online,
+        "actor": conditions.actor,
+        "target": conditions.target.model_dump(mode="json", exclude_none=True),
+        "attacker": conditions.attacker.model_dump(mode="json", exclude_none=True),
+        "arena": conditions.arena.model_dump(mode="json"),
+        "strategy_catalogue": None,
+        "scorer_version": conditions.scorer_version,
+        "finding_signature_version": conditions.finding_signature_version,
+        "attack_path_signature_version": conditions.attack_path_signature_version,
+    }
+    expected = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+
+    assert conditions.regression_context_fingerprint() == expected
 
 
 def test_experiment_fingerprint_binds_scorer_and_identity_versions() -> None:

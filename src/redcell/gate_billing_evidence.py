@@ -16,9 +16,9 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from redcell.protocols.common import RedCellModel
-from redcell.protocols.run import ProviderRunConfiguration
+from redcell.protocols.run import ProviderRunConfiguration, UsageAccountingMode
 
-BILLING_EVIDENCE_VERSION = "billing-usage-evidence-v1"
+BILLING_EVIDENCE_VERSION = "billing-usage-evidence-v2"
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
 
@@ -43,6 +43,7 @@ def billing_subject_fingerprint(configuration: ProviderRunConfiguration) -> str:
         "base_url": configuration.base_url,
         "model": configuration.model,
         "extra_body": configuration.extra_body.model_dump(mode="json", exclude_none=True),
+        "usage_accounting_mode": configuration.usage_accounting_mode,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
@@ -55,6 +56,7 @@ class ProviderBillingEvidence(RedCellModel):
     subject_fingerprint: str = Field(pattern=_SHA256_PATTERN)
     provider: str = Field(min_length=1)
     model: str = Field(min_length=1)
+    usage_accounting_mode: UsageAccountingMode
     service_tier: str | None = None
     checked_on: date | None = None
     source_reference: str | None = None
@@ -62,6 +64,10 @@ class ProviderBillingEvidence(RedCellModel):
 
     source_summary: str | None = None
     """Safe summary explaining coverage, including thinking/reasoning when applicable."""
+
+    approved_runtime_rpm: float | None = Field(default=None, ge=0.0)
+    approved_runtime_max_concurrency: int | None = Field(default=None, gt=0)
+    """Reviewed runtime caps; RPM=0 means no RPM throttle, with the reason kept in evidence."""
 
     usage_covers_billed_tokens: bool = False
     reasoning_tokens_covered: bool = False
@@ -73,6 +79,8 @@ class ProviderBillingEvidence(RedCellModel):
             and self.checked_on is not None
             and _completed_text(self.source_reference)
             and _completed_text(self.source_summary)
+            and self.approved_runtime_rpm is not None
+            and self.approved_runtime_max_concurrency is not None
         )
 
     @property
@@ -85,7 +93,7 @@ class ProviderBillingEvidence(RedCellModel):
 
 
 class BillingEvidenceBundle(RedCellModel):
-    version: Literal["billing-usage-evidence-v1"] = BILLING_EVIDENCE_VERSION
+    version: Literal["billing-usage-evidence-v2"] = BILLING_EVIDENCE_VERSION
     records: list[ProviderBillingEvidence] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -120,6 +128,13 @@ def billing_evidence_failures(
             failures.append(f"billing_evidence_subject_mismatch:{role.value}")
         if record.provider != configuration.provider or record.model != configuration.model:
             failures.append(f"billing_evidence_identity_mismatch:{role.value}")
+        if record.usage_accounting_mode != configuration.usage_accounting_mode:
+            failures.append(f"billing_evidence_accounting_mismatch:{role.value}")
+        if (
+            record.approved_runtime_rpm != configuration.rpm
+            or record.approved_runtime_max_concurrency != configuration.max_concurrency
+        ):
+            failures.append(f"billing_evidence_rate_limit_mismatch:{role.value}")
         if not record.passed:
             failures.append(f"billing_evidence_coverage_unconfirmed:{role.value}")
         if configuration.usage_covers_billed_tokens is not True:
@@ -138,10 +153,13 @@ def billing_evidence_template(
                 subject_fingerprint=billing_subject_fingerprint(configuration),
                 provider=configuration.provider,
                 model=configuration.model,
+                usage_accounting_mode=configuration.usage_accounting_mode,
                 service_tier=None,
                 checked_on=None,
                 source_reference=None,
                 source_summary=None,
+                approved_runtime_rpm=None,
+                approved_runtime_max_concurrency=None,
                 usage_covers_billed_tokens=False,
                 reasoning_tokens_covered=False,
             )

@@ -78,6 +78,17 @@ class ProviderExtraBody(RedCellModel):
 
     thinking: ThinkingConfiguration | None = None
 
+    @property
+    def thinking_disabled(self) -> bool:
+        return self.thinking is not None and self.thinking.type == "disabled"
+
+
+class UsageAccountingMode(StrEnum):
+    """Versioned mapping from Provider usage fields to RedCell's billed-token ledger."""
+
+    PROMPT_COMPLETION_V1 = "prompt-completion-v1"
+    TOTAL_MINUS_PROMPT_V1 = "total-minus-prompt-v1"
+
 
 class ProviderRunConfiguration(RedCellModel):
     """不含凭据、但足以复核模型行为与节流条件的 provider 快照。"""
@@ -94,6 +105,8 @@ class ProviderRunConfiguration(RedCellModel):
     cached_input_usd_per_mtok: float | None = Field(default=None, ge=0.0)
     """`None` 表示价格未知；只有显式 0 才表示确认免费。"""
     extra_body: ProviderExtraBody = Field(default_factory=ProviderExtraBody)
+    usage_accounting_mode: UsageAccountingMode | None = None
+    """`None` preserves historical snapshots; new runtime settings always select a version."""
     usage_covers_billed_tokens: bool | None = None
     """`None` preserves historical snapshots; only explicit `True` permits a formal Gate."""
 
@@ -166,6 +179,10 @@ class ControllerRunConfiguration(RedCellModel):
     def _require_nonempty_identity(self) -> ControllerRunConfiguration:
         if not self.connection_id.strip() or not self.connection_fingerprint.strip():
             raise ValueError("Controller connection identity/fingerprint 不能为空")
+        if self.thinking_disabled is not self.provider.extra_body.thinking_disabled:
+            raise ValueError(
+                "Controller thinking_disabled 必须与 Provider extra_body.thinking 一致"
+            )
         return self
 
 
@@ -214,8 +231,8 @@ class ExperimentConditions(RedCellModel):
             "version": "regression-context-v1",
             "online": self.online,
             "actor": self.actor,
-            "target": self.target.model_dump(mode="json"),
-            "attacker": self.attacker.model_dump(mode="json"),
+            "target": self.target.model_dump(mode="json", exclude_none=True),
+            "attacker": self.attacker.model_dump(mode="json", exclude_none=True),
             "arena": self.arena.model_dump(mode="json"),
             "strategy_catalogue": (
                 self.strategy_catalogue.model_dump(mode="json")
@@ -241,8 +258,12 @@ class ExperimentConditions(RedCellModel):
             raise ValueError("Phase 0.5 Run 必须提供 strategy_catalogue")
         if self.search is None or self.generation_memory is None:
             raise ValueError("Phase 0.5 Run 必须提供 search 与 generation_memory")
+        if self.target.usage_accounting_mode is None or self.attacker.usage_accounting_mode is None:
+            raise ValueError("Phase 0.5 Run 的 Target/Attacker 必须冻结 usage_accounting_mode")
         if self.search.selector is SearchSelector.LLM and self.controller is None:
             raise ValueError("search=llm 必须提供独立的 Controller 配置")
+        if self.controller is not None and self.controller.provider.usage_accounting_mode is None:
+            raise ValueError("Phase 0.5 Controller 必须冻结 usage_accounting_mode")
         if self.search.selector is not SearchSelector.LLM and self.controller is not None:
             raise ValueError("非 LLM search 不得携带 Controller 配置")
 

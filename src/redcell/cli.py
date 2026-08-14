@@ -11,7 +11,6 @@ Controller / Store / Orchestrator),然后把结果交给用户。
 from __future__ import annotations
 
 import asyncio
-import sys
 from enum import IntEnum
 from pathlib import Path
 from typing import Annotated
@@ -37,6 +36,7 @@ from redcell.config import (
     load_providers,
     load_target,
 )
+from redcell.console import ensure_utf8_output
 from redcell.controller import LLMControllerAdapter
 from redcell.controller_controls import (
     ControllerContractReport,
@@ -89,6 +89,7 @@ from redcell.protocols.run import (
     RunStatus,
     SearchConfiguration,
     SearchSelector,
+    UsageAccountingMode,
 )
 from redcell.protocols.strategy import StrategyCatalogue, select_applicable
 from redcell.randomness import controller_seed_for
@@ -240,6 +241,7 @@ def _experiment_conditions(
             input_usd_per_mtok=0.0,
             output_usd_per_mtok=0.0,
             cached_input_usd_per_mtok=0.0,
+            usage_accounting_mode=UsageAccountingMode.PROMPT_COMPLETION_V1,
         )
         attacker = ProviderRunConfiguration(
             provider="template",
@@ -252,6 +254,7 @@ def _experiment_conditions(
             input_usd_per_mtok=0.0,
             output_usd_per_mtok=0.0,
             cached_input_usd_per_mtok=0.0,
+            usage_accounting_mode=UsageAccountingMode.PROMPT_COMPLETION_V1,
         )
     else:
         target = providers.target_configuration
@@ -410,7 +413,7 @@ def run(
                     connection_fingerprint=controller_configuration.base_url,
                     prompt_version="controller-prompt-v1",
                     evidence_policy_version="controller-evidence-v1",
-                    thinking_disabled=True,
+                    thinking_disabled=controller_configuration.extra_body.thinking_disabled,
                 )
                 if controller_configuration is not None
                 else None
@@ -576,7 +579,7 @@ def resume(
                         evidence_policy_version=conditions.controller.evidence_policy_version,
                         output_schema_version=conditions.controller.output_schema_version,
                         budget_view_policy_version=conditions.controller.budget_view_policy_version,
-                        thinking_disabled=conditions.controller.thinking_disabled,
+                        thinking_disabled=controller_configuration.extra_body.thinking_disabled,
                     )
                     if controller_configuration is not None
                     else None
@@ -1030,7 +1033,7 @@ def controller_controls(
         connection_fingerprint=configuration.base_url,
         prompt_version="controller-prompt-v1",
         evidence_policy_version="controller-evidence-v1",
-        thinking_disabled=True,
+        thinking_disabled=configuration.extra_body.thinking_disabled,
     )
 
     async def _run_and_close():
@@ -1247,6 +1250,7 @@ def attacker_control(
             input_usd_per_mtok=0,
             output_usd_per_mtok=0,
             cached_input_usd_per_mtok=0,
+            usage_accounting_mode=UsageAccountingMode.PROMPT_COMPLETION_V1,
         ),
     )
     generator = LLMMutationGenerator(
@@ -1324,22 +1328,8 @@ def _summarise(run_record: Run, findings: list, paths: dict[str, Path]) -> None:
 
 
 def main() -> None:
-    _ensure_cli_output_encoding()
+    ensure_utf8_output()
     app()
-
-
-def _ensure_cli_output_encoding() -> None:
-    """在旧 Windows code page 下也保证 Typer/Rich help 不因 Unicode 崩溃。"""
-    probe = "RedCell —— 授权测试"
-    for stream in (sys.stdout, sys.stderr):
-        encoding = getattr(stream, "encoding", None)
-        reconfigure = getattr(stream, "reconfigure", None)
-        if not encoding or reconfigure is None:
-            continue
-        try:
-            probe.encode(encoding)
-        except (LookupError, UnicodeEncodeError):
-            reconfigure(encoding="utf-8", errors="replace")
 
 
 if __name__ == "__main__":

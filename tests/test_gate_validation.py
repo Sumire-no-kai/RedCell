@@ -74,7 +74,7 @@ def _run(seed: int, condition: GateCondition) -> Run:
             connection_fingerprint="https://controller.example.invalid/v1",
             prompt_version="controller-prompt-v1",
             evidence_policy_version="controller-evidence-v1",
-            thinking_disabled=True,
+            thinking_disabled=False,
         )
         if selector is SearchSelector.LLM
         else None

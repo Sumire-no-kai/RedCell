@@ -23,7 +23,7 @@ from redcell.gate_billing_evidence import (
     billing_subject_fingerprint,
 )
 from redcell.gate_preflight import run_preflight
-from redcell.protocols.run import Run
+from redcell.protocols.run import Run, UsageAccountingMode
 from redcell.storage import RunStore
 
 runner = CliRunner()
@@ -57,6 +57,8 @@ def _settings(
         base_url="https://example.invalid/v1" if connected else "",
         api_key="not-a-real-key" if connected else "",
         model="test-model" if connected else "",
+        rpm=60,
+        max_concurrency=1,
         input_usd_per_mtok=0.07 if prices else None,
         output_usd_per_mtok=0.4 if prices else None,
         cached_input_usd_per_mtok=0.0 if prices else None,
@@ -76,10 +78,13 @@ def _billing_evidence(roles: list[tuple[str, ProviderSettings]]) -> BillingEvide
                 subject_fingerprint=billing_subject_fingerprint(settings.run_configuration()),
                 provider=settings.provider,
                 model=settings.model,
+                usage_accounting_mode=settings.usage_accounting_mode,
                 service_tier="test",
                 checked_on="2026-08-13",
                 source_reference="test evidence",
                 source_summary="test usage includes every billed token class",
+                approved_runtime_rpm=settings.rpm,
+                approved_runtime_max_concurrency=settings.max_concurrency,
                 usage_covers_billed_tokens=True,
                 reasoning_tokens_covered=True,
             )
@@ -256,6 +261,35 @@ def test_billing_digest_is_independent_of_record_order() -> None:
     assert reordered.digest() == evidence.digest()
 
 
+def test_billing_subject_binds_usage_accounting_mode() -> None:
+    settings = _settings("attacker")
+    legacy = settings.run_configuration()
+    total_based = legacy.model_copy(
+        update={"usage_accounting_mode": UsageAccountingMode.TOTAL_MINUS_PROMPT_V1}
+    )
+
+    assert billing_subject_fingerprint(legacy) != billing_subject_fingerprint(total_based)
+
+
+def test_billing_evidence_binds_reviewed_runtime_limits(tmp_path) -> None:
+    roles = _roles()
+    evidence = _billing_evidence(roles)
+    changed = list(roles)
+    attacker_index = next(index for index, item in enumerate(changed) if item[0] == "attacker")
+    name, settings = changed[attacker_index]
+    changed[attacker_index] = (name, settings.model_copy(update={"rpm": settings.rpm / 2}))
+    report = run_preflight(
+        seed_plan_json=FROZEN_SEED_PLAN,
+        database_url=_db(tmp_path),
+        golden_fixtures=GOLDEN_FIXTURES,
+        roles=changed,
+        shared_rate_limit_db=f"sqlite:///{tmp_path / 'shared-rate-limit.db'}",
+        billing_evidence=evidence,
+    )
+
+    assert not _check(report, "billing_evidence_rate_limit_mismatch:attacker").passed
+
+
 def test_baseline_database_is_refused(tmp_path) -> None:
     """冻结基线的 1080 场 attempt 就在 redcell.db 里,正式矩阵不得写进去。"""
     report = run_preflight(
@@ -332,6 +366,8 @@ def isolated_env(tmp_path, monkeypatch):
             "INPUT_USD_PER_MTOK",
             "OUTPUT_USD_PER_MTOK",
             "CACHED_INPUT_USD_PER_MTOK",
+            "RPM",
+            "MAX_CONCURRENCY",
             "USAGE_COVERS_BILLED_TOKENS",
         ):
             monkeypatch.delenv(f"REDCELL_{role.upper()}_{suffix}", raising=False)
@@ -349,6 +385,8 @@ def _fill_env(monkeypatch, tmp_path) -> None:
         monkeypatch.setenv(f"{prefix}INPUT_USD_PER_MTOK", "0.07")
         monkeypatch.setenv(f"{prefix}OUTPUT_USD_PER_MTOK", "0.4")
         monkeypatch.setenv(f"{prefix}CACHED_INPUT_USD_PER_MTOK", "0")
+        monkeypatch.setenv(f"{prefix}RPM", "60")
+        monkeypatch.setenv(f"{prefix}MAX_CONCURRENCY", "1")
         monkeypatch.setenv(f"{prefix}USAGE_COVERS_BILLED_TOKENS", "true")
     monkeypatch.setenv(
         "REDCELL_SHARED_RATE_LIMIT_DB", f"sqlite:///{tmp_path / 'shared-rate-limit.db'}"

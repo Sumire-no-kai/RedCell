@@ -2614,6 +2614,78 @@ Run 条件复核并保存 evidence digest。任一缺失、错配或未确认都
 原因不是不信任某个开关，而是半年后应能回答“为什么当时相信这 320k Token 真的是 320k 个计费 Token”。
 它也防止一个常见的时间漏洞：今天把 `.env` 改正确，不能替昨天已经完成的 Run 补上一张看似相符的证明。
 
+#### 为什么 Gemini 要用 `total - prompt`，而不是只看 `completion`
+
+**先用水表类比。** 一次请求像总水表显示 175 升，其中进水 15 升、肉眼看到的出水 18 升；中间还有
+142 升被机器内部处理消耗。账单按全部 160 升“输出侧用水”收费时，只抄 18 就会让这台机器在等预算
+比较中白拿 142。Gemini 3 的 thinking 不能关闭，官方价格又把 thinking 算进 output，因此 RedCell
+不能继续把兼容端点的 `completion_tokens` 当成完整 output。
+
+正式方案把记账算法本身变成版本化条件：
+
+```text
+prompt-completion-v1:
+  billed output = completion_tokens
+
+total-minus-prompt-v1:
+  billed output = total_tokens - prompt_tokens
+                = visible completion + hidden thinking/reasoning
+```
+
+第二种不是“估算 thinking”，而是把 Provider 总账扣掉输入账，剩余全部归入按 output 单价计费的一侧。
+若 `total`、`prompt`、`completion` 任一缺失，或 `total < prompt + completion`，说明兼容协议已经漂移，
+调用直接失败；不能用 `max(...)` 把矛盾数据悄悄抹平。原始三项、推导出的隐藏 Token、算法版本和价格
+仍一起落盘，便于与控制台导出对账。
+
+**为什么不在最终报告里一次性补差额？** 因为 Phase 0.5 的 320k 是运行中停止闸，不是事后图表。
+少记 thinking 会让 LLM 条件实际多跑；跑完再修报告已经无法收回多得到的尝试。故归一化必须发生在
+Provider response 进入 `LLMResponse` 的边界，后面的 Budget Manager、三角色汇总和美元成本自然共用
+同一数字。
+
+**为什么不用原生 Gemini Adapter？** 原生 API 的 `thoughtsTokenCount` 证据更直接，但会改请求协议、
+消息映射与潜在模型行为，扩大 Phase 0.5 开跑前的变化面。当前先保留已通过适任性测试的兼容端点，
+用总账守恒做最小修复；若账户 usage/billing 导出不能证明兼容端点 `total_tokens` 与账单守恒，再升级
+原生 Adapter，而不是把 coverage 布尔值硬翻为 true。
+
+**在 RedCell 的角色：** Target 关闭 GLM thinking，继续使用 `prompt-completion-v1`；Gemini Generator
+和 Controller 使用 `total-minus-prompt-v1`。模式进入完整实验与 billing subject 指纹，防止同一模型
+换了记账口径仍被误当成同条件；Target/Attacker 的模式进入跨处理组回归上下文，Controller 本身是处理组
+变量，所以它的模式只留在完整条件与账单证据中。它不改变 Target 正常行为，因此从 utility 行为投影排除。
+
+**面试追问：为什么不直接永远使用 total？** 因为“total 包含什么、各部分按哪档价格收费”是 Provider
+契约，不是 OpenAI-compatible 字段名天然保证的真理。显式模式让不同端点各自承担证据责任，也保留旧
+数据语义。局限是它仍依赖兼容端点总账真实覆盖 thinking，所以开跑前必须做一次账户侧对账。
+
+#### 账户限额也是实验条件，不是运维备注
+
+**类比：** 体育馆写着“最多 3 人同时进门”，队伍自己承诺只进 2 人；如果证据只保存前一句、程序却
+仍把闸门设成无限，所谓 80% 安全余量只是文案。RedCell 因而让 billing evidence v2 同时记录人工批准的
+runtime RPM 与并发，并由 preflight 和 `.env` 精确比对。它记录的是**实际采用的闸值**，source summary
+再解释上游额度和取整理由。
+
+2026-08-14 的账户侧证据给出两种不同限流维度：Z.AI 对 `GLM-4.7-FlashX` 只展示并发 3，因此正式
+并发取 `floor(3 × 0.8)=2`，RPM=0 只表示该端点没有账户侧 RPM 数字可施加；Google Tier 1 对
+`gemini-3.1-flash-lite` 展示 4,000 RPM / 4M TPM / 150K RPD，因此两角色共用 3,200 RPM 的
+endpoint/model 总闸，并另加本地并发 3 防止单机瞬时洪峰。不同 Provider 不必硬套同一种限流单位，
+关键是每个真实存在的约束都被同一个跨进程账本执行。
+
+这也修正了工期估计：先前约 21 小时建立在 Target 并发 3 上；正式自限为 2 后，吞吐上界降为原来的
+三分之二，主矩阵应按约 32 小时以上准备，而不是为了守住旧工期把安全余量偷偷取消。
+
+#### “thinking 已关闭”必须来自请求本身
+
+Controller 快照曾把 `thinking_disabled=true` 写死，但 Gemini 3 的真实请求 `extra_body` 为空，官方又
+说明 thinking 不能关闭。这好比行车记录写“安全气囊已关闭”，实际仪表盘没有这个开关：哈希再稳定也只是在
+稳定地记录错误事实。现在 `ControllerRunConfiguration` 会从 Provider 的 allowlisted
+`extra_body.thinking.type` 核对该布尔值，矛盾 payload 在落盘前直接被 schema 拒绝；新建与恢复路径都
+按现场配置重新推导，旧快照若与当前请求不一致就不能 resume。
+
+三次最小 Gemini 协议探针只输出计数，不保存提示或回答，均观察到 `total = prompt + completion`，
+因此证明当前兼容端点提供了完整且守恒的三个字段；它们没有出现非零 hidden output，所以**不能**拿来证明
+“thinking 恒为零”。覆盖理由仍来自官方契约：Gemini 3 thinking 不能关闭，计费 output 包含 thinking，
+总 Token 包含 prompt、candidate 与 thoughts。探针验证传输形状，官方说明定义字段语义，两类证据各答
+一个问题。
+
 #### Matrix dispatch：先写快递单，再把包裹交出去
 
 每个 matrix cell 不是“看到数据库里有一条差不多的 Run 就算完成”，而是一个有唯一身份的交付状态机：
