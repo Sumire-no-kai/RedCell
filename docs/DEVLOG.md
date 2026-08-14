@@ -165,6 +165,24 @@
   `docs/PHASE0_5_UTILITY_BASELINE.json`、`docs/RELATED_WORK.md` 保持未暂存、未修改。
 - **剩余状态:** VERIFIED — 按分支工作流提交、推送、创建 PR 并合并；合并后补写 Git 结果。
 
+### 2026-08-14 17:04 AEST · Step 94 · PR #36 合并与 Phase 0.5 正式矩阵前最终状态冻结
+
+- **Git 结果:** 修复提交 `c32b01e`（`fix: account for Gemini billed tokens`）已推送；ready PR
+  [#36](https://github.com/Sumire-no-kai/RedCell/pull/36) 在确认无冲突、可自动合并后，以 merge commit
+  `c55e791` 合入 `master`。GitHub 显示 `Checks (0)`，因此只记录“远端未配置 checks”，不把它写成 CI 通过；
+  合并依据是 Step 93 记录的本地 701 项测试与四道工程门。
+- **提交边界:** PR 共 22 个文件、`+573/-54`；未提交 `.env`、API key、`runs/` 下 billing/preflight/controls/
+  dry-run 产物，也未暂存作者既有的 `docs/PHASE0_5_UTILITY_BASELINE.json` 与 `docs/RELATED_WORK.md`。
+- **收尾验证:** 文档收尾分支从合并后的 `master` 创建；首次直接调用系统 `python` 因当前 PowerShell 未配置
+  Python PATH 而在收集测试前失败，随后改用项目固定的 `.venv/Scripts/python.exe`。全量测试为
+  **701 passed in 53.39s**，`ruff check .`、`ruff format --check .`（130 files）与
+  `black --check src tests`（118 files）全部通过；该环境启动器差异不改变测试内容或代码结论。
+- **最终状态:** `GATE-PREFLIGHT READY / FORMAL MATRIX NOT RUN`。Provider 账户限额、usage accounting、14/14
+  preflight、Controller/Attacker/Target controls 与 72-cell 零调用 dry-run 均已完成；按作者本轮明确边界，正式矩阵、
+  后续路径 replay 和 Gate report 尚未执行，因此 Phase 0.5 研究结论仍不得标记为 `SUPPORTED`。
+- **剩余状态:** READY — 除正式 72-cell 矩阵及其下游 replay/report 外没有已知工程前置阻塞；本条通过独立文档
+  收尾分支提交，确保主分支日志与远端合并事实一致。
+
 ---
 
 ## 2026-08-13 · Phase 0.5 Gate 合并后深度代码审阅
