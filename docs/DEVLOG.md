@@ -50,6 +50,20 @@
   Token 的可审计记账路径，再用账户 tier/配额和账单或 usage 导出完成 evidence；不得越过
   preflight 运行付费 controls。正式 72-cell 矩阵保持未启动。
 
+### 2026-08-14 16:08 AEST · Step 86 · PR #34 合并与正式测试边界确认
+
+- **Git 结果:** 修复提交 `af4df75`（`fix: load shared limiter config from dotenv`）已推送；ready PR
+  [#34](https://github.com/Sumire-no-kai/RedCell/pull/34) 在 head 精确匹配、文件范围为预期 5 项且
+  `CLEAN / MERGEABLE` 后，以 merge commit `f82e1b3` 合入 `master`。远端没有配置 status checks，
+  因此只记录“无 checks”，不把它写成 CI 通过。本地与 `origin/master` 已同步到该 merge commit。
+- **范围边界:** PR 未提交 `.env`、API key、billing/controls/trace 或正式矩阵产物；两份作者既有的
+  未跟踪文档仍未暂存。零成本 Gate plan、golden、preflight 与 dry-run 继续位于被忽略的 `runs/`。
+- **当前结论:** 本地工程与矩阵调度准备完成，公开价格已核验；但 Gemini OpenAI-compatible usage
+  尚不能证明覆盖不可关闭的 thinking Token，账户 tier/RPM/并发也没有账户侧证据。因此状态仍为
+  `GATE-PREFLIGHT PENDING / PAID CONTROLS BLOCKED`，本轮没有执行任何 Provider 调用。
+- **剩余状态:** MERGED / WAITING FOR AUTHOR DECISION — 下一步必须先按核心协议规则决定 Gemini
+  记账路径并取得账户证据；随后重跑全绿 preflight，才能运行 controller/target/attacker controls。
+
 ---
 
 ## 2026-08-13 · Phase 0.5 Gate 合并后深度代码审阅
