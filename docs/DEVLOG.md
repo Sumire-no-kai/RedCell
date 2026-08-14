@@ -250,6 +250,18 @@
   `docs/RELATED_WORK.md` 保持未修改、未暂存。
 - **剩余状态:** VERIFIED — 按分支工作流提交、推送、创建 ready PR 并合并；正式 72-cell 矩阵继续保持未启动。
 
+### 2026-08-14 19:15 AEST · Step 98 · PR #38 合并与 Termux 候选宿主冻结
+
+- **Git 结果:** 提交 `ad911dc`（`docs: add native Termux gate runner setup`）已推送；ready PR
+  [#38](https://github.com/Sumire-no-kai/RedCell/pull/38) 在确认只含 constraints、Runbook、DEVLOG 三项且
+  `CLEAN / MERGEABLE` 后，以 merge commit `fb4ee29` 合入 `master`。远端 `Checks (0)`，所以合并依据仍是
+  Step 96/97 的手机与桌面本地证据，不把“无 checks”描述为 CI 通过。
+- **同步与边界:** 本地 `master`、`origin/master` 与 PR merge commit 已精确一致；`.env`、手机私有配置、
+  preflight/plan/state/controls、API key 和临时安装包均未进入 Git。作者既有两份未跟踪文档继续保持未暂存。
+- **最终状态:** `GATE-PREFLIGHT READY ON TERMUX / FORMAL MATRIX NOT RUN`。手机是已验证候选执行宿主，正式开跑
+  仍是单独动作：接墙充、确认 Wi-Fi、获取 wake lock、启动单一 tmux runner；在此之前研究结论仍不能标记为
+  `SUPPORTED`。
+
 ---
 
 ## 2026-08-13 · Phase 0.5 Gate 合并后深度代码审阅
