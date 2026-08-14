@@ -345,6 +345,25 @@
 - **剩余状态:** VERIFIED — 独立复审发现的问题已修复，进入提交、push、PR 与合并收尾；
   合并后仍须同步手机并重跑宿主侧工程门/preflight/plan/dry-run，正式矩阵保持未启动。
 
+### 2026-08-14 21:59 AEST · Step 101 · PR #40 合并与手机重验边界
+
+- **Git 结果:** 原始兼容修复 `699ec0d` 与独立复审补丁 `5cd53e1` 已推送；ready PR
+  [#40](https://github.com/Sumire-no-kai/RedCell/pull/40) 的远端 head 精确为 `5cd53e1`，
+  文件范围为预期 13 项且状态 `CLEAN / MERGEABLE`，随后以 merge commit `108ffd4`
+  合入 `master`。合并提交与 PR head 的 tree 都是 `b2bd93f…`，本地 `master`、
+  `origin/master` 已同步。GitHub 仍显示 `Checks (0)`，因此不把“无 checks”写成 CI 通过；
+  合并依据是 Step 100 的本地 708 项测试与四道工程门。
+- **范围边界:** PR 未包含 `.env`、API key、`runs/` 数据库/state/log、内部 `PRD.md`，也未
+  暂存作者既有的 `docs/PHASE0_5_UTILITY_BASELINE.json` 与 `docs/RELATED_WORK.md`。PRD 中的
+  schema 演进纪律仅保留在本地内部事实源，公开学习说明已进入 `docs/CONCEPTS.md`。
+- **当前结论:** 历史 Phase 0 证据恢复为“23/23 可读、23/23 不冒充当前可复验”；正式 Phase 0.5
+  的 runner/replay/report 共用同一 fail-closed 资格判据。由于手机仍停在修复前提交，之前的
+  `14/14 PASS` 和 `0/72 dry-run` 不能直接替代新提交的宿主验证；须先同步 `108ffd4`，再重跑
+  手机四道工程门、preflight、plan 与 dry-run。正式矩阵仍未启动。
+- **收尾复核:** 仅 DEVLOG 变化的收尾分支在相同代码树上再次通过全量 **708 passed in
+  48.44s**、Ruff check、Ruff format（131 files）、Black（119 files）与 `git diff --check`。
+- **剩余状态:** MERGED / TERMUX REVALIDATION REQUIRED / FORMAL MATRIX NOT RUN。
+
 ---
 
 ## 2026-08-13 · Phase 0.5 Gate 合并后深度代码审阅
