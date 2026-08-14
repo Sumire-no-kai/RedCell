@@ -39,7 +39,7 @@ from redcell.controls import (
 from redcell.llm import ScriptedProvider
 from redcell.llm.scripted import ScriptedRule
 from redcell.protocols.common import ImpactStatus, VulnerabilityCategory
-from redcell.protocols.run import ProviderRunConfiguration
+from redcell.protocols.run import ProviderRunConfiguration, UsageAccountingMode
 from redcell.scoring.level1 import Level1Scorer
 
 SCORER = Level1Scorer(SUPPORT_AGENT_POLICY)
@@ -274,6 +274,7 @@ def test_utility_context_ignores_operational_metadata_and_positive_controls() ->
             input_usd_per_mtok=1.0,
             output_usd_per_mtok=2.0,
             cached_input_usd_per_mtok=0.01,
+            usage_accounting_mode=UsageAccountingMode.TOTAL_MINUS_PROMPT_V1,
             usage_covers_billed_tokens=True,
         ),
         positive_repeats=20,

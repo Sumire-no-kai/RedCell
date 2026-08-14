@@ -19,7 +19,11 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from redcell.llm import OpenAICompatibleProvider, TokenPricing
-from redcell.protocols.run import ProviderExtraBody, ProviderRunConfiguration
+from redcell.protocols.run import (
+    ProviderExtraBody,
+    ProviderRunConfiguration,
+    UsageAccountingMode,
+)
 from redcell.shared_rate_limit import SQLiteRateLimiter
 
 # `.env` 里把一个键留空(`REDCELL_ATTACKER_TEMPERATURE=`)是很自然的写法,意思是"用默认值"。
@@ -65,8 +69,8 @@ class ProviderSettings(BaseSettings):
 
     ⚠️ **同时意味着成本会被低估:** `--max-cost` 是按 `usage` 报的 token 算的,
     而思考 token 不在里面。对 thinking 模型,那道闸门只管住了一部分开销 ——
-    首次跑完必须拿控制台用量对一次账。不想操心这件事就选非 thinking 的模型
-    (`*-flash-lite` 实测无此问题:512 下 0/7 截断,报的 token 与正文长度相符)。
+    首次跑完必须拿控制台用量对一次账。`*-flash-lite` 曾在 512 下实测 0/7 截断，只能说明可见正文
+    没被截断；Gemini 3 的 thinking 不能关闭，不能由此推断 `completion_tokens` 已覆盖全部计费输出。
     """
 
     # 未填价格 = 不知道，不能伪装成免费。免费档也要把三项都显式填 0。
@@ -83,6 +87,9 @@ class ProviderSettings(BaseSettings):
     和 `CALIBRATION.md` §10 的四个已知旋钮是同一类东西。启用它必须像那四个
     旋钮一样显式声明、重跑阳性对照、写进 DEVLOG,不能当默认性能优化用。
     """
+
+    usage_accounting_mode: UsageAccountingMode = UsageAccountingMode.PROMPT_COMPLETION_V1
+    """Versioned mapping from raw Provider usage to RedCell's billed-token ledger."""
 
     usage_covers_billed_tokens: bool = False
     """只有能证明 usage 覆盖全部计费 Token 的角色才可进入正式 Gate。"""
@@ -105,6 +112,7 @@ class ProviderSettings(BaseSettings):
             output_usd_per_mtok=self.output_usd_per_mtok,
             cached_input_usd_per_mtok=self.cached_input_usd_per_mtok,
             extra_body=self.extra_body,
+            usage_accounting_mode=self.usage_accounting_mode,
             usage_covers_billed_tokens=self.usage_covers_billed_tokens,
         )
 
@@ -135,6 +143,7 @@ class ProviderSettings(BaseSettings):
             min_interval_seconds=(60.0 / self.rpm) if self.rpm > 0 else 0.0,
             max_concurrency=self.max_concurrency,
             extra_body=self.extra_body,
+            usage_accounting_mode=self.usage_accounting_mode,
             usage_covers_billed_tokens=self.usage_covers_billed_tokens,
             shared_limiter=_shared_limiter(
                 base_url=self.base_url,

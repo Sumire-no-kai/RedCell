@@ -20,6 +20,7 @@ from redcell.llm import (
     TokenPricing,
 )
 from redcell.protocols import Role
+from redcell.protocols.run import UsageAccountingMode
 
 _OK_BODY = {
     "model": "glm-4.7-flash",
@@ -63,6 +64,68 @@ async def test_parses_content_tokens_and_latency() -> None:
     assert response.completion_tokens == 300
     assert response.total_tokens == 1500
     assert response.latency_ms > 0
+
+
+async def test_total_minus_prompt_accounts_hidden_thinking_tokens() -> None:
+    body = {
+        **_OK_BODY,
+        "usage": {"prompt_tokens": 15, "completion_tokens": 18, "total_tokens": 175},
+    }
+    provider = _provider(
+        httpx.MockTransport(lambda _: httpx.Response(200, json=body)),
+        pricing=TokenPricing(
+            input_usd_per_mtok=0.25,
+            output_usd_per_mtok=1.5,
+            cached_input_usd_per_mtok=0.025,
+        ),
+        usage_accounting_mode=UsageAccountingMode.TOTAL_MINUS_PROMPT_V1,
+    )
+
+    response = await provider.complete(_user("你好"))
+
+    assert response.prompt_tokens == 15
+    assert response.completion_tokens == 160
+    assert response.total_tokens == 175
+    assert response.cost_usd == pytest.approx((15 * 0.25 + 160 * 1.5) / 1_000_000)
+    assert response.raw["usage_accounting"] == {
+        "mode": "total-minus-prompt-v1",
+        "provider_prompt_tokens": 15,
+        "provider_completion_tokens": 18,
+        "provider_total_tokens": 175,
+        "hidden_output_tokens": 142,
+        "accounted_output_tokens": 160,
+    }
+
+
+async def test_prompt_completion_mode_preserves_legacy_semantics_when_total_is_larger() -> None:
+    body = {
+        **_OK_BODY,
+        "usage": {"prompt_tokens": 15, "completion_tokens": 18, "total_tokens": 175},
+    }
+    provider = _provider(httpx.MockTransport(lambda _: httpx.Response(200, json=body)))
+
+    response = await provider.complete(_user("你好"))
+
+    assert response.total_tokens == 33
+    assert response.raw["usage_accounting"]["hidden_output_tokens"] == 0
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"prompt_tokens": 15, "completion_tokens": 18},
+        {"prompt_tokens": 15, "completion_tokens": 18, "total_tokens": 32},
+    ],
+)
+async def test_total_minus_prompt_rejects_missing_or_inconsistent_total(usage: dict) -> None:
+    body = {**_OK_BODY, "usage": usage}
+    provider = _provider(
+        httpx.MockTransport(lambda _: httpx.Response(200, json=body)),
+        usage_accounting_mode=UsageAccountingMode.TOTAL_MINUS_PROMPT_V1,
+    )
+
+    with pytest.raises(ProviderProtocolError):
+        await provider.complete(_user("你好"))
 
 
 async def test_request_body_carries_model_messages_and_temperature() -> None:

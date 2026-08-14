@@ -139,7 +139,10 @@ def _usage_coverage_check(name: str, settings: ProviderSettings) -> PreflightChe
         return PreflightCheck(
             name=f"{name}.usage_coverage",
             passed=True,
-            detail="声明 Provider usage 覆盖全部计费 Token",
+            detail=(
+                "声明 Provider usage 覆盖全部计费 Token;"
+                f"accounting={settings.usage_accounting_mode.value}"
+            ),
         )
     return PreflightCheck(
         name=f"{name}.usage_coverage",

@@ -64,6 +64,7 @@ from redcell.protocols.run import (
     SearchConfiguration,
     SearchSelector,
     ThinkingConfiguration,
+    UsageAccountingMode,
 )
 from redcell.protocols.strategy import (
     MAX_TURNS_CEILING,
@@ -158,6 +159,7 @@ __all__ = [
     "ToolRetrySemantics",
     "TraceMetadata",
     "Turn",
+    "UsageAccountingMode",
     "ViolationTriad",
     "VulnerabilityCategory",
     "build_attempt",

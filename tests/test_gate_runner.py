@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -37,6 +40,33 @@ def _plan(**updates):
     }
     payload.update(updates)
     return build_gate_plan(FROZEN_PLAN, **payload)
+
+
+def test_matrix_dry_run_survives_legacy_windows_output_encoding(tmp_path) -> None:
+    plan_path = tmp_path / "plan.json"
+    state_path = tmp_path / "state.json"
+    plan_path.write_text(_plan().model_dump_json(indent=2), encoding="utf-8")
+    environment = os.environ.copy()
+    environment["PYTHONIOENCODING"] = "cp1252"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).parents[1] / "scripts" / "run_gate_matrix.py"),
+            "--plan",
+            str(plan_path),
+            "--state",
+            str(state_path),
+            "--dry-run",
+        ],
+        cwd=Path(__file__).parents[1],
+        env=environment,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr.decode("utf-8", errors="replace")
+    assert "待执行 72 格" in completed.stdout.decode("utf-8")
 
 
 def record_outcome(state: MatrixState, **kwargs) -> MatrixState:

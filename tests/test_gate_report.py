@@ -57,6 +57,7 @@ from redcell.protocols import (
     SearchConfiguration,
     SearchSelector,
     StrategyCatalogue,
+    UsageAccountingMode,
 )
 from redcell.search import ControllerDecision, ControllerDecisionOutcome
 from redcell.storage import RunStore
@@ -81,6 +82,7 @@ def _provider(name: str) -> ProviderRunConfiguration:
         max_concurrency=1,
         input_usd_per_mtok=0,
         output_usd_per_mtok=0,
+        usage_accounting_mode=UsageAccountingMode.PROMPT_COMPLETION_V1,
         usage_covers_billed_tokens=True,
     )
 
@@ -92,7 +94,7 @@ def _controller_configuration() -> ControllerRunConfiguration:
         connection_fingerprint="sha256:controller-frozen",
         prompt_version="controller-prompt-v1",
         evidence_policy_version="controller-evidence-v1",
-        thinking_disabled=True,
+        thinking_disabled=False,
     )
 
 
@@ -111,10 +113,13 @@ def _billing_evidence(
                 subject_fingerprint=billing_subject_fingerprint(configuration),
                 provider=configuration.provider,
                 model=configuration.model,
+                usage_accounting_mode=configuration.usage_accounting_mode,
                 service_tier="test",
                 checked_on="2026-08-13",
                 source_reference="test evidence",
                 source_summary="test usage covers all billed categories",
+                approved_runtime_rpm=configuration.rpm,
+                approved_runtime_max_concurrency=configuration.max_concurrency,
                 usage_covers_billed_tokens=True,
                 reasoning_tokens_covered=True,
             )

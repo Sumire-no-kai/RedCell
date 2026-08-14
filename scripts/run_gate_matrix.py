@@ -4,8 +4,8 @@
     python scripts/run_gate_matrix.py ... --dry-run          # 只打印将要执行什么
     python scripts/run_gate_matrix.py ... --enable-reserve <seed>
 
-约 72 个长 Run、21 小时以上,所以**必须可中断续跑**:每格结束立即落 state,
-重启后已完成的格子不再派发。
+约 72 个长 Run；Target 自限并发从 3 降为 2 后预计 32 小时以上，
+所以**必须可中断续跑**：每格结束立即落 state，重启后已完成的格子不再派发。
 
 ⚠️ **本脚本不做判断,只做执行。** 一个 cell 失败之后要不要启用备用 block、
 那次失效是不是"允许补位"的类型(基础设施 / 未知 Token / 可靠性 / 完整性),
@@ -27,6 +27,7 @@ from typing import BinaryIO
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
+from redcell.console import ensure_utf8_output
 from redcell.gate_plan import GatePlan
 from redcell.gate_runner import (
     NORMAL_RUN_EXIT_CODES,
@@ -44,7 +45,7 @@ from redcell.gate_runner import (
 )
 from redcell.storage import RunStore
 
-# Target 并发上限为 3(GLM 实测:并发 3 零 429,并发 5 因排队反而更慢)。
+# worker 最多并行 3 个 cell；Provider 共享 limiter 会进一步执行 Target=2 等更严格的角色上限。
 DEFAULT_CONCURRENCY = 3
 
 EXIT_VERIFICATION_FAILED = 90
@@ -179,6 +180,7 @@ def _inherited_env() -> dict[str, str]:
 
 
 def main() -> int:
+    ensure_utf8_output()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", type=Path, required=True)
     parser.add_argument("--state", type=Path, default=Path("runs/gate-matrix-state.json"))

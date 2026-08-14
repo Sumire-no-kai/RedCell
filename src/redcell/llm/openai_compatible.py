@@ -23,7 +23,7 @@ from pydantic import Field
 
 from redcell.llm.base import LLMMessage, LLMProvider, LLMResponse
 from redcell.protocols.common import RedCellModel
-from redcell.protocols.run import ProviderExtraBody
+from redcell.protocols.run import ProviderExtraBody, UsageAccountingMode
 from redcell.shared_rate_limit import SQLiteRateLimiter
 
 _log = structlog.get_logger(__name__)
@@ -141,6 +141,7 @@ class OpenAICompatibleProvider(LLMProvider):
         min_interval_seconds: float = 0.0,
         max_concurrency: int = 0,
         extra_body: ProviderExtraBody | dict[str, Any] | None = None,
+        usage_accounting_mode: UsageAccountingMode = UsageAccountingMode.PROMPT_COMPLETION_V1,
         usage_covers_billed_tokens: bool = False,
         shared_limiter: SQLiteRateLimiter | None = None,
         client: httpx.AsyncClient | None = None,
@@ -173,6 +174,9 @@ class OpenAICompatibleProvider(LLMProvider):
                 因此启用它必须像旋钮①②③④一样显式声明、重跑阳性对照、写进
                 DEVLOG,不能当成一个默认打开的性能优化。字段名与取值均不校验——
                 厂商专属,校验属于滥用这层抽象的普适性。
+            usage_accounting_mode: Provider usage 如何映射到计费账。默认沿用
+                prompt+completion；thinking 不可关闭且 total 覆盖全部计费 Token 的端点
+                使用 total-prompt。模式属于实验条件，不按 Provider 名称暗猜。
             client: 供测试注入 `httpx.MockTransport`,从而全程不联网、不花钱。
         """
         self._base_url = base_url.rstrip("/")
@@ -185,6 +189,7 @@ class OpenAICompatibleProvider(LLMProvider):
         self._extra_body = ProviderExtraBody.model_validate(extra_body or {}).model_dump(
             exclude_none=True
         )
+        self._usage_accounting_mode = usage_accounting_mode
         self._usage_covers_billed_tokens = usage_covers_billed_tokens
         self._shared_limiter = shared_limiter
         self._client = client
@@ -215,6 +220,10 @@ class OpenAICompatibleProvider(LLMProvider):
     @property
     def usage_covers_billed_tokens(self) -> bool:
         return self._usage_covers_billed_tokens
+
+    @property
+    def usage_accounting_mode(self) -> UsageAccountingMode:
+        return self._usage_accounting_mode
 
     async def complete(
         self,
@@ -406,7 +415,25 @@ class OpenAICompatibleProvider(LLMProvider):
             usage.get("completion_tokens")
         )
         prompt_tokens = _as_int(usage.get("prompt_tokens"))
-        completion_tokens = _as_int(usage.get("completion_tokens"))
+        provider_completion_tokens = _as_int(usage.get("completion_tokens"))
+        provider_total_tokens = usage.get("total_tokens")
+        hidden_output_tokens = 0
+        if self._usage_accounting_mode is UsageAccountingMode.TOTAL_MINUS_PROMPT_V1:
+            if not usage_known or not _is_token_count(provider_total_tokens):
+                raise ProviderProtocolError(
+                    f"{self._name} 的 total-minus-prompt-v1 缺少完整 usage:{_preview(usage)}"
+                )
+            total_tokens = _as_int(provider_total_tokens)
+            visible_total = prompt_tokens + provider_completion_tokens
+            if total_tokens < visible_total:
+                raise ProviderProtocolError(
+                    f"{self._name} 的 usage 不守恒:total={total_tokens} < "
+                    f"prompt+completion={visible_total}"
+                )
+            completion_tokens = total_tokens - prompt_tokens
+            hidden_output_tokens = completion_tokens - provider_completion_tokens
+        else:
+            completion_tokens = provider_completion_tokens
         prompt_details = (
             usage.get("prompt_tokens_details")
             if isinstance(usage.get("prompt_tokens_details"), dict)
@@ -418,6 +445,18 @@ class OpenAICompatibleProvider(LLMProvider):
             "provider": self._name,
             "finish_reason": choices[0].get("finish_reason"),
             "usage": usage,
+            "usage_accounting": {
+                "mode": self._usage_accounting_mode.value,
+                "provider_prompt_tokens": prompt_tokens,
+                "provider_completion_tokens": provider_completion_tokens,
+                "provider_total_tokens": (
+                    _as_int(provider_total_tokens)
+                    if _is_token_count(provider_total_tokens)
+                    else None
+                ),
+                "hidden_output_tokens": hidden_output_tokens,
+                "accounted_output_tokens": completion_tokens,
+            },
         }
         cost = 0.0
         if self._pricing is not None:
