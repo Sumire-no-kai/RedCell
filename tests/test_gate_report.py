@@ -64,6 +64,7 @@ from redcell.storage import RunStore
 from redcell.strategies import PHASE_0_STRATEGIES
 from redcell.utility_baseline import UtilityBaseline
 from redcell.validator import ReplayValidation, ValidationReport
+from redcell.versions import EXPERIMENT_CONDITIONS_SCHEMA_VERSION
 
 runner = CliRunner()
 FROZEN_PLAN = SeedPlan.model_validate_json(
@@ -188,6 +189,8 @@ def _formal_run(seed: int, condition: GateCondition) -> Run:
         search=SearchConfiguration(selector=selector),
         generation_memory=memory,
         controller=_controller_configuration() if selector is SearchSelector.LLM else None,
+        # Gate 只采信摘要可重算证实的 Run;正式 Run 一律由 CLI 带上 schema 版本。
+        conditions_schema_version=EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
     )
     return Run(
         id=f"run-{seed}-{condition.value}",

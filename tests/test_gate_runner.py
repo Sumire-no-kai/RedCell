@@ -453,7 +453,12 @@ def test_twelve_usable_blocks_are_reported_as_ready_for_replay() -> None:
 # ── 逐格核验 ─────────────────────────────────────────────────────────────
 
 
-def _finished_run(cell, **updates):
+def _finished_run(
+    cell,
+    *,
+    conditions_schema_version=None,
+    **updates,
+):
     from redcell.budget import BudgetLimit, BudgetLimits, BudgetUsage
     from redcell.protocols.run import (
         ArenaRunConfiguration,
@@ -466,6 +471,12 @@ def _finished_run(cell, **updates):
         RunStatus,
         SearchConfiguration,
     )
+    from redcell.protocols.strategy import StrategyCatalogue
+    from redcell.strategies import PHASE_0_STRATEGIES
+    from redcell.versions import EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+
+    if conditions_schema_version is None:
+        conditions_schema_version = EXPERIMENT_CONDITIONS_SCHEMA_VERSION
 
     provider = ProviderRunConfiguration(
         provider="p",
@@ -504,6 +515,9 @@ def _finished_run(cell, **updates):
             arena=ArenaRunConfiguration(
                 defense="standard", enforce_permissions=True, enforce_confirmation=True
             ),
+            strategy_catalogue=StrategyCatalogue(
+                version="phase0.5-v1", strategies=PHASE_0_STRATEGIES
+            ).condition_summary(),
             search=SearchConfiguration(selector=cell.search),
             generation_memory=(
                 GenerationMemoryConfiguration(
@@ -514,6 +528,7 @@ def _finished_run(cell, **updates):
                 if cell.cross_attempt_memory is GenerationMemoryMode.BOUNDED_RELEVANT_V1
                 else GenerationMemoryConfiguration(mode=cell.cross_attempt_memory)
             ),
+            conditions_schema_version=conditions_schema_version,
         ),
         **payload,
     )
@@ -525,11 +540,27 @@ def test_a_run_that_reached_the_token_prefix_verifies() -> None:
     assert verify_cell_run(_finished_run(cell), cell) is None
 
 
+def test_a_run_with_an_unverifiable_conditions_fingerprint_is_refused_immediately() -> None:
+    """不能等 72 格跑完后才由最终 report 发现 schema provenance 缺失。"""
+    cell = _plan().cells[0]
+    run = _finished_run(cell)
+    assert run.experiment_conditions is not None
+    legacy_conditions = run.experiment_conditions.model_copy(
+        update={"conditions_schema_version": None}
+    )
+    legacy_run = run.model_copy(update={"experiment_conditions": legacy_conditions})
+
+    reason = verify_cell_run(legacy_run, cell)
+
+    assert reason is not None
+    assert "可复验" in reason
+
+
 def test_a_run_stopped_by_something_other_than_tokens_is_refused() -> None:
     """⭐ 退出码看不出"耗尽的是哪一项"。
 
     墙钟或 attempt 上限停下的 Run 同样 exit 0/1,却到不了 320k 前缀 ——
-    不当场拦下,它会一路装成 usable 直到 21 小时后的 gate-report。
+    不当场拦下,它会一路装成 usable 直到约 32 小时后的 gate-report。
     """
     from redcell.budget import BudgetLimit
 

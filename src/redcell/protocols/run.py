@@ -23,6 +23,7 @@ from redcell.protocols.strategy import StrategyCatalogueSummary
 from redcell.reliability import ReliabilityPolicy, SelectionReliabilityPolicy
 from redcell.versions import (
     ATTACK_PATH_SIGNATURE_VERSION,
+    EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
     FINDING_SIGNATURE_VERSION,
     LEVEL1_SCORER_VERSION,
 )
@@ -212,9 +213,27 @@ class ExperimentConditions(RedCellModel):
     finding_signature_version: str = FINDING_SIGNATURE_VERSION
     attack_path_signature_version: str = ATTACK_PATH_SIGNATURE_VERSION
 
+    conditions_schema_version: str | None = None
+    """产出 `experiment_fingerprint` 时,本模型是哪一版。⭐
+
+    **不参与摘要计算** —— 它描述的是摘要的出处,不是被摘要的条件本身。
+
+    没有它,给本模型加一个**带默认值**的字段就会让所有历史 Run 读不出来:
+    `exclude_none` 只挡得住 `None`,挡不住"反序列化时被补上今天的默认值"。
+    2026-08-09 加 `scorer_version` / `finding_signature_version` /
+    `attack_path_signature_version` 时正是这样,23 条 Run 里 19 条当场失效,
+    而报错文案是"fingerprint 与 conditions 不一致",读起来像记录被人动过手脚。
+    根因是一个断言背了两个含义:「这条记录内部自洽」和「它是今天的代码产出的」。
+    后者不该是读取证据的条件。
+
+    `None` = 该记录早于本机制,只能原样保留、无法重算校验(产出它的代码已不在)。
+    新建条件必须显式传当前版本;`Run.conditions_fingerprint_verified` 据此表态,
+    Gate 只采信验得过的 Run。
+    """
+
     def fingerprint(self) -> str:
         payload = json.dumps(
-            self.model_dump(mode="json", exclude_none=True),
+            self.model_dump(mode="json", exclude_none=True, exclude={"conditions_schema_version"}),
             ensure_ascii=True,
             sort_keys=True,
             separators=(",", ":"),
@@ -320,13 +339,51 @@ class Run(RedCellModel):
         expected = self.experiment_conditions.fingerprint()
         if self.experiment_fingerprint is None:
             self.__dict__["experiment_fingerprint"] = expected
-        elif self.experiment_fingerprint != expected:
+        elif (
+            self.experiment_conditions.conditions_schema_version
+            == EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+            and self.experiment_fingerprint != expected
+        ):
             raise ValueError("experiment_fingerprint 与 experiment_conditions 不一致")
         return self
 
     @property
     def has_auditable_conditions(self) -> bool:
         return self.experiment_conditions is not None and self.experiment_fingerprint is not None
+
+    @property
+    def conditions_fingerprint_verified(self) -> bool:
+        """存下来的摘要**在今天仍能被重算证实**。⭐
+
+        与 `has_auditable_conditions` 是两回事:后者只问"有没有记录"。schema 版本
+        对不上时,产出该摘要的代码已经不在,重算出的数只能证明今天的代码算什么,
+        证明不了当时算的是什么 —— 那种情况下诚实的回答是"验不了",不是"不一致"。
+        正式 Gate 只采信验得过的 Run;读取历史证据不受此限。
+        """
+        if self.experiment_conditions is None or self.experiment_fingerprint is None:
+            return False
+        if (
+            self.experiment_conditions.conditions_schema_version
+            != EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+        ):
+            return False
+        return self.experiment_fingerprint == self.experiment_conditions.fingerprint()
+
+    @property
+    def has_verified_phase_0_5_conditions(self) -> bool:
+        """正式 Phase 0.5 Gate 的统一条件资格判据。
+
+        Runner、路径重放与最终报告必须共用这一处，避免其中一条路径把只可读取、
+        但已无法复验摘要的历史 Run 当成正式证据。
+        """
+        conditions = self.experiment_conditions
+        return (
+            conditions is not None
+            and conditions.search is not None
+            and conditions.generation_memory is not None
+            and conditions.strategy_catalogue is not None
+            and self.conditions_fingerprint_verified
+        )
 
     def gate_context_fingerprint(self) -> str:
         """Bind every non-treatment contract that can change Gate eligibility."""

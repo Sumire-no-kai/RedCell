@@ -41,6 +41,7 @@ from redcell.protocols import (
 )
 from redcell.protocols.run import ProviderRunConfiguration, Run, RunStatus
 from redcell.storage import RunStore
+from redcell.versions import EXPERIMENT_CONDITIONS_SCHEMA_VERSION
 
 runner = CliRunner()
 
@@ -268,6 +269,11 @@ def test_run_persists_an_auditable_condition_fingerprint(workspace) -> None:
     assert stored.experiment_conditions is not None
     assert stored.experiment_conditions.actor == "customer_b"
     assert stored.experiment_conditions.arena.enforce_permissions is True
+    assert (
+        stored.experiment_conditions.conditions_schema_version
+        == EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+    )
+    assert stored.conditions_fingerprint_verified
     assert stored.experiment_fingerprint == stored.experiment_conditions.fingerprint()
 
 

@@ -264,6 +264,89 @@
 
 ---
 
+## 2026-08-14 · 历史 Run 读不出来:同一类缺陷的第三次发作
+
+### 2026-08-14 19:39 AEST · Step 99 · 加带默认值的指纹字段,让 23 条 Run 里 19 条失效
+
+**先说影响:Gate 未被阻塞,丢的是 Phase 0 的历史证据。**
+
+- **症状:** `redcell.db` 里 23 条 Run,`get_run` 成功 4 条、失败 19 条,`list_runs`
+  整个调用直接抛异常(列表推导,一行坏则全盘皆输)。报错文案是
+  「`experiment_fingerprint` 与 `experiment_conditions` 不一致」—— 读起来像记录被人
+  动过手脚。失效的 19 条覆盖 static 6 / random 6 / thompson 7,**其中 18 条承载着
+  冻结指纹 `a0f8d190…`**。
+
+- **成因:** 2026-08-09(`f92604c` / `cb7700c`)给 `ExperimentConditions` 加了
+  `scorer_version` / `finding_signature_version` / `attack_path_signature_version`,
+  三个都**带默认值**。`fingerprint()` 里的 `exclude_none` 只挡得住 `None`,挡不住
+  「反序列化旧 payload 时被补上今天的默认值」。这些 Run 写于 08-02 至 08-06,
+  **缺陷已存在五天**,与 08-14 的 PR #34–#39 无关。
+
+- **这是同一类缺陷的第三次发作。** 前两次:2026-08-07 的 `exclude_none`
+  (controls 基线报告)、2026-08-12 的 `tool_call_codec_version`(Step 65)。
+  根因每次都一样 —— **一个断言背了两个含义**:「这条记录内部自洽」和
+  「它是今天的代码产出的」。后者不该是读取证据的条件。
+
+- **纪律层面的漏网:** 库里 23 条 Run 的 `protocol_version` 全是 `0.4.0`,与当前常量
+  相同 —— **加指纹字段时没有跟着升版本**。所以连版本门都救不了它。
+
+#### 修复(两部分,第二部分才是要紧的)
+
+1. **止血 —— 照 Step 65 的模式。** 新增 `EXPERIMENT_CONDITIONS_SCHEMA_VERSION`
+   与 `ExperimentConditions.conditions_schema_version`(**不参与摘要计算**:它描述
+   摘要的出处,不是被摘要的条件)。`Run` 只在版本与当前一致时才重算校验;版本缺失
+   或不同就诚实地说验不了,而不是报成不一致。新增
+   `Run.conditions_fingerprint_verified`,并让 `gate_report` 与 `gate_validation`
+   的 Run 资格判据都要求它 —— **一条已无法核对的 Run 可以被读取和分析,但不该支撑
+   一份正式结论**。两处判据必须一致,否则报告和复核会看到不同的 Run 集。
+   结果:23 条 Run 全部恢复可读,`a0f8d190…` 18 条回来了。
+
+2. **防复发 —— `tests/test_run_fingerprint_pins.py`。** 把 `fingerprint()` 与
+   `regression_context_fingerprint()` 的取值**钉成字面量**。
+   **这个缺陷能潜伏五天,是因为没有任何测试断言过摘要等于什么** —— 既有测试全都在
+   用今天的代码算两遍再比较,那种断言在 schema 漂移时会跟着一起漂,永远是绿的。
+   已验证守卫真的会响:给模型加一个带默认值的字段,钉住值 `5f912888…` 变成
+   `7a3337ff…`,测试当场变红。钉子失败时该做的不是改数字,是先问有没有升 schema 版本。
+
+- **验证:** 全量 **707 passed**(比修前 701 多 6 个防回归用例);`ruff check`、
+  `ruff format --check`(131 files)、`black --check`(119 files)、`git diff --check`
+  四门全过。未调用 Provider,未跑 controls,未触碰正式 Gate 数据。
+
+- **未受影响的部分(已逐项复核):** `gate-preflight` 先按名字拦开发库,在碰
+  `list_runs` 之前就返回,且外层包了宽异常;正式矩阵用新建空库,新 Run 自带 schema
+  版本,一律验得过。冻结的 v2 utility 基线在本次改动后重算仍为 `dd1eff2464fc…`,
+  source / adjudication digest 均对得上。
+
+- **剩余状态:** `GATE-PREFLIGHT READY ON TERMUX / FORMAL MATRIX NOT RUN`。该修复改变
+  Run schema，正式开跑前须把合并版本同步到手机并重跑四道工程门、preflight、plan 与 dry-run；
+  不得复用修复前的正式准备结论直接开跑。
+
+### 2026-08-14 20:10 AEST · Step 100 · 独立复审补齐逐格 fail-closed 与时间线
+
+- **复审方法:** 不沿用实现者的“已修好”前提，从真实 `redcell.db`、Run 构造、存储反序列化、
+  matrix runner、路径 replay 和最终 report 重新走完整调用链。只读实测 23/23 Run 恢复可读、
+  0 条反序列化失败；18 条冻结 `a0f8d190…` 记录恢复。23 条都没有新 schema provenance，
+  因而全部诚实标为“可读但不可复验”，不会进入正式 Gate。
+- **发现的问题:** report 与 replay 已拒绝不可复验的 Run，但 matrix runner 的逐格即时核验没有
+  同步该条件。若新建路径以后漏写 schema 版本，cell 会先记成 completed，直到整轮结束才失败，
+  违背“每格结束立即核验、坏 block 当场退出”的既定恢复语义。原 Step 99 还误写成重复的
+  `Step 84`，并把已完成的 billing/preflight 状态倒退为 `GATE-PREFLIGHT PENDING`。
+- **方案与理由:** 否决在 runner 再复制第四份字段判断；将“可用于正式 Phase 0.5 Gate”的条件
+  集中为 `Run.has_verified_phase_0_5_conditions`，由 runner、report 与 validation 共用。这样
+  schema provenance 缺失在第一格结束时就使 block fail-closed，同时三条消费路径不会日后漂移。
+  增加 current + legacy 两条记录混合读取的 `list_runs` 回归，以及 runner 对不可复验 Run 的
+  即时拒绝测试。
+- **文档同步:** 更正 Step 99 时间线与当前 Gate 状态；PRD/CONCEPTS 补记“记录可读、摘要可复验、
+  正式证据可采信”三层语义及 literal pin 纪律，避免再用一个布尔断言承担三个问题。
+- **验证证据:** 定向 CLI/fingerprint/store/runner/report/validation 回归 **81 passed**；全量
+  `pytest -p no:cacheprovider` 为 **708 passed in 48.18s**。`ruff check .`、
+  `ruff format --check .`（131 files）、`black --check src tests`（119 files）与
+  `git diff --check` 全部通过。验证未调用 Provider，也未写入正式 Gate 数据库。
+- **剩余状态:** VERIFIED — 独立复审发现的问题已修复，进入提交、push、PR 与合并收尾；
+  合并后仍须同步手机并重跑宿主侧工程门/preflight/plan/dry-run，正式矩阵保持未启动。
+
+---
+
 ## 2026-08-13 · Phase 0.5 Gate 合并后深度代码审阅
 
 ### 2026-08-13 23:51 AEST · Step 81 · 计费证据与矩阵恢复接口的反向审计及修复

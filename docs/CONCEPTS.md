@@ -2569,6 +2569,20 @@ Selection Abandonment、Token 和决策审计使用更严格的 Controller 专�
 Scorer 和 Strategy catalogue。Phase 0 的 `a0f8d190...` 只属于历史完整形状,Phase 0.5 不能一边
 增加字段、一边假装完整 SHA 没变。
 
+这里还有第三样容易漏掉的东西：**指纹算法自己的 schema 版本**。类比一张旧收据，纸上的总价可以
+保留，但今天的收银软件如果已经增加了税项，就不能用今天的公式重算旧收据，再把差额说成“有人改过
+账”。`conditions_schema_version` 记录“这枚摘要由哪版字段集合算出”，自身不进入摘要，避免版本号与
+摘要互相递归。读取时分三种状态：
+
+1. 当前 schema 且摘要相等：可读取、可复验，也可作为正式 Gate 证据；
+2. 缺少或不认识 schema：记录仍可读取和做历史分析，但只能标为不可复验，不能进正式 Gate；
+3. 当前 schema 但摘要不等：这是同版内部不一致，直接拒绝，不能用“历史兼容”绕过。
+
+为什么还要把两种指纹的实际 SHA 写成测试字面量？如果测试每次都用今天的代码算左右两边，schema
+漂移时两边会一起变化，测试永远是绿的。literal pin 像在档案袋外写下封存时的重量：字段、默认值或
+投影一变就当场报警，开发者必须先升级 schema 并解释迁移，而不是顺手更新预期值。正式矩阵的 runner、
+路径 replay 与最终 report 共用同一资格判据，使错误在第一格结束时暴露，而不是几十小时后才发现。
+
 ASR 漂移也只看不受 Controller/memory 影响的① Static×off。Golden 检查 Scorer 代码,
 阴性 controls/utility 检查 GLM Target 正常行为,attacker controls 检查 Gemini Generator,
 Static×off ASR 才是端到端漂移探针。②③④ 的 ASR 是处理结果,下降不能自动甩锅给 Provider,

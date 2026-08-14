@@ -109,6 +109,7 @@ from redcell.utility_baseline import (
     utility_baseline_json,
 )
 from redcell.validator import ValidationReport, validate_attack_paths
+from redcell.versions import EXPERIMENT_CONDITIONS_SCHEMA_VERSION
 
 app = typer.Typer(
     add_completion=False,
@@ -269,6 +270,8 @@ def _experiment_conditions(
             enforce_permissions=enforce_permissions,
             enforce_confirmation=enforce_confirmation,
         ),
+        # 新 Run 必须自带 schema 版本,否则它的摘要日后也只能"保留但验不了"。
+        conditions_schema_version=EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
     )
 
 
