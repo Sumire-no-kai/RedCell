@@ -5,6 +5,53 @@
 
 ---
 
+## 2026-08-14 · Phase 0.5 正式 Gate 开跑前联网核验与零成本准备
+
+### 2026-08-14 16:00 AEST · Step 84 · 官方计费核验、四道工程门与 preflight fail-closed
+
+- **进度:** 按正式 Runbook 联网核对 Z.AI 与 Google 官方资料，并在不启动正式矩阵的边界内执行
+  零成本准备。当前 `.env` 的九项单价与官网一致：`glm-4.7-flashx` 为 input/cached/output
+  `$0.07/$0.01/$0.40`，`gemini-3.1-flash-lite` 为 `$0.25/$0.025/$1.50`；Google 明确说明
+  output 单价包含 thinking Token，且 Gemini 3 系列不能关闭 thinking。
+- **关键阻塞:** 当前 OpenAI-compatible 解析器只把 `prompt_tokens` 与 `completion_tokens` 计入
+  `LLMResponse`；Google 原生 API 虽提供 `thoughtsTokenCount`，但兼容端点的公开契约没有证明
+  `completion_tokens` 覆盖 thinking。故 Attacker/Controller 不能诚实标记
+  `USAGE_COVERS_BILLED_TOKENS=true`，正式 Gate 继续 fail-closed。Target 已关闭 GLM thinking，
+  但账户 service tier 与实际配额仍需账户侧证据，不能从公开页面猜测。
+- **验证证据:** 全量 `pytest` 为 **688 passed in 46.74s**；`ruff check`、
+  `ruff format --check`（129 files）与 `black --check src tests`（117 files）全部通过。生成新的
+  billing evidence 默认拒绝模板、120-cell plan（72 primary + 48 disabled reserve）、10/10 正与
+  11/11 负 golden，并完成 72-cell dry-run；没有调用 Provider，也没有启动正式 seed。
+- **发现的问题:** `.env` 已配置 `REDCELL_SHARED_RATE_LIMIT_DB`，但 preflight 仍报告缺失。定位为
+  provider 与 preflight 直接调用 `os.getenv`，绕过了项目其余配置使用的 Pydantic dotenv 加载层；
+  因而文档推荐的 `.env` 写法不会进入跨进程 SQLite 限流器。这不是操作者漏配，而是配置接线缺陷。
+- **解决方向:** 在 `codex/fix/phase-0-5-preflight-env` 分支增加统一 runtime settings，让 preflight
+  和 Provider 构造读取同一个 env/dotenv 来源，并增加从真实临时 `.env` 加载的回归测试。
+- **剩余状态:** IN PROGRESS — 修复共享限流配置接线并重跑零成本链路；billing coverage 与账户配额
+  仍为独立 BLOCKED，未全绿前不得执行付费 controls 或正式矩阵。
+
+### 2026-08-14 16:04 AEST · Step 85 · dotenv 限流接线修复、全量回归与长跑电源核验
+
+- **修复:** 新增统一的 `RuntimeSettings`，让 `REDCELL_SHARED_RATE_LIMIT_DB` 与三个 Provider 一样
+  同时支持真实进程环境和项目 `.env`；preflight 与 Provider 构造共用同一加载函数，不再出现
+  “preflight 看不到、runner 也未启用”的分叉。回归测试在临时工作目录写入真实 `.env`，不靠
+  monkeypatch 直接注入目标变量，确保锁住本次实际失效路径。
+- **验证证据:** 定向配置/preflight 回归 **21 passed**；修复后的真实 preflight 中
+  `shared_rate_limit` 从 FAIL 变为 PASS，独立限流库成功初始化。全量回归为
+  **689 passed in 43.74s**；Ruff check、Ruff format（129 files）、Black（117 files）与
+  `git diff --check` 全部通过。preflight 仍只因三角色 usage/billing evidence 未确认而失败，说明
+  接线修复没有错误地放宽计费保护线。
+- **长跑电源核验:** 当前 Windows `Performance` 计划在交流电下 **3 小时**后自动睡眠，电池下
+  **4 分钟**后睡眠；本机使用 S0 Low Power Idle，休眠不可用。正式 runner 依赖持续进程与网络，
+  所以当前设置不能安全完成约 21 小时矩阵。Runbook 增加开跑前 `powercfg` 检查：接通交流电、把
+  AC 自动睡眠临时设为“从不”、保留原值并在结束后恢复。屏幕关闭无碍，系统睡眠不是安全暂停；
+  睡眠时在途请求会进入未知交付/整块 fail-closed 语义。
+- **剩余状态:** CODE FIX VERIFIED / PAID CONTROLS BLOCKED — 需要先决定并实现 Gemini thinking
+  Token 的可审计记账路径，再用账户 tier/配额和账单或 usage 导出完成 evidence；不得越过
+  preflight 运行付费 controls。正式 72-cell 矩阵保持未启动。
+
+---
+
 ## 2026-08-13 · Phase 0.5 Gate 合并后深度代码审阅
 
 ### 2026-08-13 23:51 AEST · Step 81 · 计费证据与矩阵恢复接口的反向审计及修复

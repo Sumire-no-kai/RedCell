@@ -15,8 +15,6 @@ temperature / cost。它们可以复用同一个实现类、甚至同一个模�
 
 from __future__ import annotations
 
-import os
-
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -147,11 +145,24 @@ class ProviderSettings(BaseSettings):
         )
 
 
+class RuntimeSettings(BaseSettings):
+    """Process-wide runtime configuration that also honours the project `.env`."""
+
+    model_config = _ENV | SettingsConfigDict(env_prefix="REDCELL_")
+
+    shared_rate_limit_db: str = ""
+
+
+def load_shared_rate_limit_database_url() -> str:
+    """Read the shared limiter database through the same env/dotenv path as providers."""
+    return RuntimeSettings().shared_rate_limit_db
+
+
 def _shared_limiter(
     *, base_url: str, model: str, min_interval_seconds: float, max_concurrency: int
 ) -> SQLiteRateLimiter | None:
     """All child processes opt into the same DB through one explicit environment key."""
-    database_url = os.getenv("REDCELL_SHARED_RATE_LIMIT_DB", "")
+    database_url = load_shared_rate_limit_database_url()
     if not database_url:
         return None
     return SQLiteRateLimiter(

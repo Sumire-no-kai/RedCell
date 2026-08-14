@@ -19,7 +19,6 @@ CI 里都要用,而「什么算配置齐了」必须只有一份定义。
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from pydantic import Field
@@ -29,6 +28,7 @@ from redcell.config import (
     ControllerSettings,
     ProviderSettings,
     TargetSettings,
+    load_shared_rate_limit_database_url,
 )
 from redcell.gate_analysis import SeedPlan, require_frozen_seed_plan
 from redcell.gate_billing_evidence import (
@@ -287,7 +287,7 @@ def run_preflight(
     checks.append(
         _shared_rate_limit_check(
             (
-                os.getenv("REDCELL_SHARED_RATE_LIMIT_DB", "")
+                load_shared_rate_limit_database_url()
                 if shared_rate_limit_db is None
                 else shared_rate_limit_db
             ),
