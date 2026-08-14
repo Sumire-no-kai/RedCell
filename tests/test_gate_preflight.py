@@ -115,6 +115,28 @@ def test_fully_configured_environment_passes(tmp_path) -> None:
     assert report.passed, report.summary()
 
 
+def test_shared_rate_limit_is_loaded_from_dotenv(tmp_path, monkeypatch) -> None:
+    """Documented `.env` configuration must reach preflight."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("REDCELL_SHARED_RATE_LIMIT_DB", raising=False)
+    limiter_db = f"sqlite:///{tmp_path / 'shared-rate-limit.db'}"
+    (tmp_path / ".env").write_text(
+        f"REDCELL_SHARED_RATE_LIMIT_DB={limiter_db}\n",
+        encoding="utf-8",
+    )
+    roles = _roles()
+
+    report = run_preflight(
+        seed_plan_json=FROZEN_SEED_PLAN,
+        database_url=_db(tmp_path),
+        golden_fixtures=GOLDEN_FIXTURES,
+        roles=roles,
+        billing_evidence=_billing_evidence(roles),
+    )
+
+    assert _check(report, "shared_rate_limit").passed, report.summary()
+
+
 def test_missing_controller_connection_is_named_explicitly(tmp_path) -> None:
     """Controller 缺配是当前最可能的失败,报错必须指出**具体缺哪几个键**。"""
     roles = _roles(controller=_settings("controller", connected=False))
