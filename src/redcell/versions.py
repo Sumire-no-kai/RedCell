@@ -11,7 +11,7 @@ EXPERIMENT_CONDITIONS_SCHEMA_VERSION = "experiment-conditions-v2"
 都算。判断标准不是"新字段可不可选":带默认值的字段在反序列化旧记录时会被补上今天的
 默认值,一样会改变摘要。
 
-v2 起始于 2026-08-12,对应现有字段集;v1 是加入本机制之前的所有历史记录,它们不带
-版本号,因此摘要只保留、不重算校验。`tests/test_run_fingerprint_pins.py` 会在摘要
+v2 于 2026-08-14 随本机制首次落盘,对应当时的现有字段集;此前的历史记录都不带这个
+专用版本号,因此摘要只保留、不重算校验。`tests/test_run_fingerprint_pins.py` 会在摘要
 漂移时当场变红,不必等到历史证据读不出来才发现。
 """

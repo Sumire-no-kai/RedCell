@@ -2,7 +2,7 @@
 
 ## 为什么单独一层
 
-正式矩阵是 72 个长 Run、约 21 小时、Target 并发上限 3 的连续作业。这类作业里
+正式矩阵是 72 个长 Run、约 32 小时以上、Target 并发上限 2 的连续作业。这类作业里
 **真正容易出错的不是执行,是调度语义**:哪些格子还能跑、一个格子失败之后该停什么、
 中断之后从哪儿续、备用 seed 什么时候才允许上场。这些规则来自 runbook,
 一旦写进 shell 循环就再也没人能验证它们。
@@ -367,13 +367,15 @@ def verify_cell_run(
     **为什么退出码不够。** `redcell run` 在预算耗尽时正常退出,而"耗尽的是哪一项"
     它不体现在退出码里:一格因**墙钟**或 **attempt 上限**停下,同样是 exit 0/1。
     那样的 Run 没有跑到 320k 前缀,却会被记成 `completed`、block 显示 usable ——
-    直到 21 小时之后 `gate-report` 才拒绝它,而那时补位又要再花六个 cell。
+    直到约 32 小时之后 `gate-report` 才拒绝它,而那时补位又要再花六个 cell。
     **让坏 block 在第一时间暴露,是这个函数存在的全部理由。**
     """
     if run is None:
         return "数据库中找不到已派发 Run ID 的记录"
     if expected_run_id is not None and run.id != expected_run_id:
         return "Run ID 与派发前持久化绑定不一致"
+    if not run.has_verified_phase_0_5_conditions:
+        return "Run 缺少可复验的 Phase 0.5 实验条件指纹"
     conditions = run.experiment_conditions
     if (
         run.seed != cell.seed

@@ -120,7 +120,7 @@ def test_a_current_schema_record_still_rejects_a_forged_fingerprint() -> None:
         raise AssertionError("伪造的 fingerprint 必须被拒绝")
 
 
-def test_every_stored_run_in_a_fresh_database_round_trips(tmp_path: Path) -> None:
+def test_current_and_legacy_runs_in_a_fresh_database_round_trip_together(tmp_path: Path) -> None:
     """加字段导致历史记录读不出来的那个缺陷,在这里直接可复现。
 
     只用本测试自己写入的库,不碰仓库里的 `redcell.db` —— 测试不该依赖开发机上
@@ -130,7 +130,7 @@ def test_every_stored_run_in_a_fresh_database_round_trips(tmp_path: Path) -> Non
     conditions = _pinned().model_copy(
         update={"conditions_schema_version": EXPERIMENT_CONDITIONS_SCHEMA_VERSION}
     )
-    run = Run(
+    current_run = Run(
         target_name="support-agent",
         policy_version="v1",
         adapter_type="arena",
@@ -138,9 +138,19 @@ def test_every_stored_run_in_a_fresh_database_round_trips(tmp_path: Path) -> Non
         limits={"max_attempts": 1},
         experiment_conditions=conditions,
     )
+    legacy_run = Run(
+        target_name="support-agent",
+        policy_version="v1",
+        adapter_type="arena",
+        algorithm="static",
+        limits={"max_attempts": 1},
+        experiment_conditions=_pinned(),
+        experiment_fingerprint="0" * 64,
+    )
     with RunStore(url) as store:
-        store.save_run(run)
+        store.save_run(current_run)
+        store.save_run(legacy_run)
         loaded = store.list_runs()
 
-    assert len(loaded) == 1
-    assert loaded[0].conditions_fingerprint_verified
+    assert len(loaded) == 2
+    assert [run.conditions_fingerprint_verified for run in loaded] == [True, False]

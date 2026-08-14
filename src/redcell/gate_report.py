@@ -464,14 +464,7 @@ def _is_phase_0_5_run(run: Run) -> bool:
     和分析,但不该支撑一份正式结论。Phase 0.5 的 Run 全部自带 schema 版本,
     所以这一条对本次矩阵是恒真的 —— 它挡的是把 Phase 0 旧记录混进来。
     """
-    conditions = run.experiment_conditions
-    return (
-        conditions is not None
-        and conditions.search is not None
-        and conditions.generation_memory is not None
-        and conditions.strategy_catalogue is not None
-        and run.conditions_fingerprint_verified
-    )
+    return run.has_verified_phase_0_5_conditions
 
 
 def _selected_prefixes(

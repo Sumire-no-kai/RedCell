@@ -369,6 +369,22 @@ class Run(RedCellModel):
             return False
         return self.experiment_fingerprint == self.experiment_conditions.fingerprint()
 
+    @property
+    def has_verified_phase_0_5_conditions(self) -> bool:
+        """正式 Phase 0.5 Gate 的统一条件资格判据。
+
+        Runner、路径重放与最终报告必须共用这一处，避免其中一条路径把只可读取、
+        但已无法复验摘要的历史 Run 当成正式证据。
+        """
+        conditions = self.experiment_conditions
+        return (
+            conditions is not None
+            and conditions.search is not None
+            and conditions.generation_memory is not None
+            and conditions.strategy_catalogue is not None
+            and self.conditions_fingerprint_verified
+        )
+
     def gate_context_fingerprint(self) -> str:
         """Bind every non-treatment contract that can change Gate eligibility."""
         if self.experiment_conditions is None:

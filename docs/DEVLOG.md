@@ -266,7 +266,7 @@
 
 ## 2026-08-14 · 历史 Run 读不出来:同一类缺陷的第三次发作
 
-### 2026-08-14 · Step 84 · 加带默认值的指纹字段,让 23 条 Run 里 19 条失效
+### 2026-08-14 19:39 AEST · Step 99 · 加带默认值的指纹字段,让 23 条 Run 里 19 条失效
 
 **先说影响:Gate 未被阻塞,丢的是 Phase 0 的历史证据。**
 
@@ -317,8 +317,33 @@
   版本,一律验得过。冻结的 v2 utility 基线在本次改动后重算仍为 `dd1eff2464fc…`,
   source / adjudication digest 均对得上。
 
-- **剩余状态:** 正式 Gate 仍为 `GATE-PREFLIGHT PENDING`。下一步不变:生成 billing
-  evidence 模板 → 以外部证据填写 → 零成本 preflight。
+- **剩余状态:** `GATE-PREFLIGHT READY ON TERMUX / FORMAL MATRIX NOT RUN`。该修复改变
+  Run schema，正式开跑前须把合并版本同步到手机并重跑四道工程门、preflight、plan 与 dry-run；
+  不得复用修复前的正式准备结论直接开跑。
+
+### 2026-08-14 20:10 AEST · Step 100 · 独立复审补齐逐格 fail-closed 与时间线
+
+- **复审方法:** 不沿用实现者的“已修好”前提，从真实 `redcell.db`、Run 构造、存储反序列化、
+  matrix runner、路径 replay 和最终 report 重新走完整调用链。只读实测 23/23 Run 恢复可读、
+  0 条反序列化失败；18 条冻结 `a0f8d190…` 记录恢复。23 条都没有新 schema provenance，
+  因而全部诚实标为“可读但不可复验”，不会进入正式 Gate。
+- **发现的问题:** report 与 replay 已拒绝不可复验的 Run，但 matrix runner 的逐格即时核验没有
+  同步该条件。若新建路径以后漏写 schema 版本，cell 会先记成 completed，直到整轮结束才失败，
+  违背“每格结束立即核验、坏 block 当场退出”的既定恢复语义。原 Step 99 还误写成重复的
+  `Step 84`，并把已完成的 billing/preflight 状态倒退为 `GATE-PREFLIGHT PENDING`。
+- **方案与理由:** 否决在 runner 再复制第四份字段判断；将“可用于正式 Phase 0.5 Gate”的条件
+  集中为 `Run.has_verified_phase_0_5_conditions`，由 runner、report 与 validation 共用。这样
+  schema provenance 缺失在第一格结束时就使 block fail-closed，同时三条消费路径不会日后漂移。
+  增加 current + legacy 两条记录混合读取的 `list_runs` 回归，以及 runner 对不可复验 Run 的
+  即时拒绝测试。
+- **文档同步:** 更正 Step 99 时间线与当前 Gate 状态；PRD/CONCEPTS 补记“记录可读、摘要可复验、
+  正式证据可采信”三层语义及 literal pin 纪律，避免再用一个布尔断言承担三个问题。
+- **验证证据:** 定向 CLI/fingerprint/store/runner/report/validation 回归 **81 passed**；全量
+  `pytest -p no:cacheprovider` 为 **708 passed in 48.18s**。`ruff check .`、
+  `ruff format --check .`（131 files）、`black --check src tests`（119 files）与
+  `git diff --check` 全部通过。验证未调用 Provider，也未写入正式 Gate 数据库。
+- **剩余状态:** VERIFIED — 独立复审发现的问题已修复，进入提交、push、PR 与合并收尾；
+  合并后仍须同步手机并重跑宿主侧工程门/preflight/plan/dry-run，正式矩阵保持未启动。
 
 ---
 
