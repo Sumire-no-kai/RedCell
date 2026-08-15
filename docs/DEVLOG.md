@@ -270,6 +270,21 @@ n=5 是同一个毛病:**判据定了,却没人算过样本量能不能支撑它
 - **剩余状态:** PHONE CANDIDATE VERIFIED / PR #47 OPEN / MERGE NOT AUTHORIZED /
   FORMAL RERUN NOT STARTED。
 
+### 2026-08-15 14:23 AEST · Step 116 · 手机准备证据回收与 PR 头对齐
+
+- **证据同步:** 将 Step 115 的 preflight、canonical plan、dry-run state 三份非敏感 JSON 同步到桌面
+  忽略目录 `runs/phase0-5b-pr47-ready-2026-08-15/`；桌面 SHA-256 与手机原件逐项一致，仍为
+  `8ee37d90…bbfd`、`169ce1aa…073f`、`f51530cc…70371`。没有复制 `.env`、API key、billing evidence、
+  SQLite、trace 或 Finding。手机共享存储中只为 ADB 传输创建的三个明确命名临时副本已删除并确认
+  不存在；Termux 私有目录原件与桌面证据保留。
+- **版本对齐:** Step 115 的验收日志作为 `d544361` 推到现有 PR #47 后，手机 detached HEAD 已同步到
+  `d544361`，原有未跟踪 utility baseline 仍在。PR 复核为 `OPEN / CLEAN / MERGEABLE`，无远端 status
+  checks；这表示 GitHub 未配置检查，不把它冒充为 CI 通过。手机测试针对的代码树与该提交相同，新增
+  内容只有验收日志，故没有重复运行 729 项测试。
+- **最终边界:** Termux wake lock 继续有效，手机没有正式 runner；PR 没有合并，Provider 没有调用。
+  下一步仍是作者明确授权合并后切回最新 `master`，随后等待单独的正式重跑命令。
+- **剩余状态:** EVIDENCE SYNCED / PR #47 OPEN / PHONE READY / FORMAL RERUN NOT STARTED。
+
 ---
 
 ## 2026-08-14 · Phase 0.5 正式 Gate 开跑前联网核验与零成本准备
