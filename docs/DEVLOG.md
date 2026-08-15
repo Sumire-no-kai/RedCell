@@ -132,6 +132,20 @@ n=5 是同一个毛病:**判据定了,却没人算过样本量能不能支撑它
 - **剩余状态:** PR READY TO MERGE — 本次作者已明确授权直接合并；该授权只适用于 PR #44，不能
   外推为以后未明确授权时也可主动合并。
 
+### 2026-08-15 13:32 AEST · Step 110 · PR #44 获授权合并并对齐主干
+
+- **合并结果:** ready PR [#44](https://github.com/Sumire-no-kai/RedCell/pull/44) 已按作者本次明确授权
+  以 merge commit `3af242a` 合入受保护的 `master`；GitHub 状态 `MERGED`，本地 `master`、
+  `origin/master` 与 `origin/HEAD` 均精确对齐该提交。此次授权不改变长期规则：以后未明确说可以
+  合并时，只能准备或创建 PR，不能主动 merge。
+- **合并依据:** 15 个受跟踪文件范围与预期一致；本地 721 tests、Ruff check、Ruff format、Black、
+  diff/行尾扫描、24-block 统计性能、14/14 preflight 和 0/144 dry-run 证据均见 Step 108。远端未配置
+  status checks，故没有伪称 CI 通过。内部 PRD、凭据和所有 `runs/` 产物未进入合并。
+- **当前边界:** 桌面代码已进入主干，但手机还未同步/复验；付费 controls、replay 和 144-cell 正式
+  Phase 0.5b 矩阵均未启动。下一步只同步 merge commit 到 Termux，执行手机四道工程门、preflight、
+  plan 与 dry-run；到正式 Provider 重跑命令前必须停下向作者说明并等待明确授权。
+- **剩余状态:** MERGED / PHONE ZERO-COST VALIDATION TODO / FORMAL RERUN NOT AUTHORIZED。
+
 ---
 
 ## 2026-08-14 · Phase 0.5 正式 Gate 开跑前联网核验与零成本准备
