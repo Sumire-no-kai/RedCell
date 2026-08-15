@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from redcell.finding_identity import attack_path_signature
 from redcell.gate_analysis import (
     FORMAL_RUN_TOKENS,
+    GateCondition,
     SeedPlan,
     TokenPrefix,
     analyse_phase_0_5,
@@ -48,8 +49,9 @@ def select_validation_evidence(store: RunStore, seed_plan: SeedPlan) -> Validati
         checkpoint_tokens=PRIMARY_CHECKPOINT,
         seed_plan=seed_plan,
     )
-    if len(analysis.valid_seeds) != 12:
-        raise ValueError("replay validation requires exactly 12 valid paired seed blocks")
+    required = len(seed_plan.primary)
+    if len(analysis.valid_seeds) != required:
+        raise ValueError(f"replay validation requires exactly {required} valid paired seed blocks")
     if analysis.duplicate_cells:
         raise ValueError("replay validation refuses duplicate seed-condition cells")
     if analysis.unregistered_seeds:
@@ -62,8 +64,10 @@ def select_validation_evidence(store: RunStore, seed_plan: SeedPlan) -> Validati
         and prefix.seed in set(analysis.valid_seeds)
         and prefix.valid
     ]
-    if len(selected) != 12 * 6:
-        raise ValueError("replay validation requires all 72 valid 320k cells")
+    if len(selected) != required * len(GateCondition):
+        raise ValueError(
+            f"replay validation requires all {required * len(GateCondition)} valid 320k cells"
+        )
     selected_keys = {(prefix.seed, prefix.condition) for prefix in selected}
     if len(selected_keys) != len(selected):
         raise ValueError("replay validation found duplicate 320k cells")

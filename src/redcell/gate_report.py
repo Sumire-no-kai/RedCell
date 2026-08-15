@@ -221,7 +221,7 @@ class GateReport(RedCellModel):
         failures = set(self.protection_failures)
         if failures & _MISSING_EVIDENCE_FAILURES:
             return GateVerdict.INCOMPLETE
-        if len(self.analysis.valid_seeds) < 12:
+        if len(self.analysis.valid_seeds) < self.analysis.required_seeds:
             return (
                 GateVerdict.EXPERIMENT_INVALID
                 if self.analysis.invalid_seeds or self.analysis.duplicate_cells

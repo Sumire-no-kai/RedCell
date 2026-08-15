@@ -18,12 +18,28 @@ from redcell.protocols.run import Run, RunEvent, RunEventType
 
 FORMAL_MAX_ATTEMPTS = 500
 FORMAL_RUN_TOKENS = 320000
+PHASE_0_5_EXPERIMENT = "phase-0.5"
+PHASE_0_5B_EXPERIMENT = "phase-0.5b"
+
 PHASE_0_5_SEED_PLAN_DIGEST = "c421f3137d75f5ba956da12bcfdf824fc89222da23ccfd7bad9f1c42c792e3bc"
-"""冻结的 seed plan canonical digest。
+"""Phase 0.5 冻结的 seed plan canonical digest(实验已作废,归档保留)。
 
 2026-08-10 由 `af55c0f1…` 更新为本值 —— 唯一改动是**追加**四个备用 seed
 (4 → 8),原 12 primary + 4 reserve 逐字未动。追加发生在任何 Gate 结果产生**之前**,
 因此不是结果依赖的改动;详见 `SeedPlan.reserve` 的说明与 DEVLOG。
+"""
+
+PHASE_0_5B_SEED_PLAN_DIGEST = "6dd3d879630a6ddf5cc5c9d7088189660a69b6a9c7d3ce4a899479a3ceac515e"
+"""Phase 0.5b 的 seed plan digest。⭐
+
+24 primary + 8 reserve。24 来自实测:用 0.5 全部 12 个 seed 估出的配对差标准差是
+**1.78 条路径**,要在 80% 把握下看见预注册的 **1.0 条**实用阈值需要约 25 个 seed;
+12 个只能看见 1.4 条 —— 也就是说旧 Gate 从一开始就没有能力看见自己设的那条线。
+这与阳性对照 n=3、逐任务 utility n=5 是同一个毛病:**判据定了,却没人算过样本量
+能不能支撑它**。
+
+24 个 seed 全部重新抽取,不沿用 0.5 的任何一个:那 12 个的路径数在做上述方差估计时
+已经被看过,不再是盲的。抽取发生在任何 0.5b 结果存在之前,来源为系统 CSPRNG。
 """
 
 
@@ -54,11 +70,54 @@ class GateCondition(StrEnum):
     THOMPSON_OFF = "thompson-off"
 
 
+class FrozenSeedPlan(RedCellModel):
+    """一个实验预注册的 seed 形状与摘要。"""
+
+    experiment: str
+    primary_size: int = Field(gt=0)
+    reserve_size: int = Field(ge=0)
+    digest: str
+
+
+FROZEN_SEED_PLANS = {
+    plan.experiment: plan
+    for plan in (
+        FrozenSeedPlan(
+            experiment=PHASE_0_5_EXPERIMENT,
+            primary_size=12,
+            reserve_size=8,
+            digest=PHASE_0_5_SEED_PLAN_DIGEST,
+        ),
+        FrozenSeedPlan(
+            experiment=PHASE_0_5B_EXPERIMENT,
+            primary_size=24,
+            reserve_size=8,
+            digest=PHASE_0_5B_SEED_PLAN_DIGEST,
+        ),
+    )
+}
+"""按实验登记的冻结计划。⭐
+
+做成登记表而不是把 12/8 写死在校验器里,是因为 0.5 的证据必须**继续可加载**:
+它是一次已归档的失效实验,归档不等于删除。同一段代码要能同时说清
+"0.5 是 12+8"和"0.5b 是 24+8",而不是被最新那个实验改写。
+"""
+
+
 class SeedPlan(RedCellModel):
-    """The ordered, pre-registered Phase 0.5 seed allocation.
+    """The ordered, pre-registered seed allocation.
 
     This intentionally carries no generated defaults.  A generated sequence would
     only look pre-registered after the results were already available.
+    """
+
+    experiment: str = PHASE_0_5_EXPERIMENT
+    """这份计划属于哪个实验。⭐
+
+    **不参与 `seed_plan_digest`** —— 摘要标识的是"哪些 seed、什么顺序",而不是
+    元数据。这样 2026-08-10 冻结的 `c421f313…` 在加入本字段之后逐字不变;
+    否则给这个模型加一个带默认值的字段就会让已冻结的计划对不上摘要,
+    而那正是本项目已经栽过四次的同一个坑。
     """
 
     primary: list[int]
@@ -76,8 +135,14 @@ class SeedPlan(RedCellModel):
 
     @model_validator(mode="after")
     def validate_frozen_allocation(self) -> SeedPlan:
-        if len(self.primary) != 12 or len(self.reserve) != 8:
-            raise ValueError("Phase 0.5 seed plan requires exactly 12 primary and 8 reserve seeds")
+        frozen = FROZEN_SEED_PLANS.get(self.experiment)
+        if frozen is None:
+            raise ValueError(f"未登记的实验 seed plan:{self.experiment}")
+        if len(self.primary) != frozen.primary_size or len(self.reserve) != frozen.reserve_size:
+            raise ValueError(
+                f"{self.experiment} seed plan requires exactly {frozen.primary_size} primary "
+                f"and {frozen.reserve_size} reserve seeds"
+            )
         all_seeds = [*self.primary, *self.reserve]
         if len(set(all_seeds)) != len(all_seeds):
             raise ValueError("Phase 0.5 seed plan must not repeat a seed")
@@ -91,15 +156,21 @@ class SeedPlan(RedCellModel):
 
 
 def seed_plan_digest(seed_plan: SeedPlan) -> str:
+    """只对 seed 分配本身取摘要;`experiment` 是元数据,不参与。"""
     payload = json.dumps(
-        seed_plan.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+        seed_plan.model_dump(mode="json", exclude={"experiment"}),
+        sort_keys=True,
+        separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
 
 def require_frozen_seed_plan(seed_plan: SeedPlan) -> None:
-    if seed_plan_digest(seed_plan) != PHASE_0_5_SEED_PLAN_DIGEST:
-        raise ValueError("seed plan does not match the frozen Phase 0.5 canonical digest")
+    frozen = FROZEN_SEED_PLANS.get(seed_plan.experiment)
+    if frozen is None:
+        raise ValueError(f"未登记的实验 seed plan:{seed_plan.experiment}")
+    if seed_plan_digest(seed_plan) != frozen.digest:
+        raise ValueError(f"seed plan does not match the frozen {seed_plan.experiment} digest")
 
 
 class TokenPrefix(RedCellModel):
@@ -189,10 +260,17 @@ class GateAnalysis(RedCellModel):
     comparisons: list[PairedComparison]
     mechanism: MechanismAnalysis | None = None
 
+    required_seeds: int = 12
+    """本次分析要求几个有效配对 block。⭐
+
+    随 seed plan 走,不再写死:0.5 是 12,0.5b 是 24。默认值保留 12 只为让历史
+    报告仍能反序列化,新分析一律由 `analyse_phase_0_5` 从计划填入。
+    """
+
     @property
     def passed(self) -> bool:
         return (
-            len(self.valid_seeds) == 12
+            len(self.valid_seeds) == self.required_seeds
             and not self.unregistered_seeds
             and not self.duplicate_cells
             and all(item.passed for item in self.comparisons)
@@ -262,6 +340,7 @@ def analyse_phase_0_5(
         duplicate_cells=duplicate_cells,
         comparisons=comparisons,
         mechanism=mechanism,
+        required_seeds=len(seed_plan.primary) if seed_plan is not None else 12,
     )
 
 
