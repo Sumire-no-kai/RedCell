@@ -503,6 +503,21 @@
 - **剩余状态:** `PHASE 0.5 FORMAL GATE = EXPERIMENT_INVALID`。待作者决定是停在无效实验结论，
   还是授权修复并建立全新的 Phase 0.5b 预注册。
 
+### 2026-08-15 10:51 AEST · Step 107 · 证据备份、日志提交与文档分支四道门
+
+- **本地备份:** 手机正式 SQLite 通过 ADB `exec-out` 二进制流复制到 gitignored
+  `runs/phase0-5-phone-2026-08-15/phase-0-5.db`；两端大小 110,530,560 bytes，SHA-256 均为
+  `3afc642e1f5da892d09e9e8a9620052c81fbc29c024f8fc22f79ffa9edc56bd7`。另复制 billing/controls/
+  adjudication/preflight/plan/state/golden/两份预报告到同一忽略目录；plan、state、golden 和最终
+  预报告的手机/电脑摘要逐项一致。没有复制 `.env`、API key、虚拟环境或缓存。
+- **日志提交:** `docs/phase-0-5-gate-start` 分支先以 `3c95cfb` 记录正式启动/完成，再以
+  `d875c9b` 记录完整性失效、机器/human verdict 边界与不可在原 seed plan 内恢复的原因。
+  两份作者既有未跟踪文档仍未暂存。
+- **合并前工程门:** 全量 `pytest -p no:cacheprovider` 为 **708 passed in 46.14s**；Ruff check 通过，
+  Ruff format 为 131 files already formatted，Black 为 119 files unchanged。本步没有 Provider 调用。
+- **剩余状态:** DOCUMENTATION READY FOR PUSH / PR。代码修复与 Phase 0.5b 是另一个需要作者授权的
+  核心协议任务，不与本步的实验裁定文档混在一个 PR。
+
 ---
 
 ## 2026-08-13 · Phase 0.5 Gate 合并后深度代码审阅
