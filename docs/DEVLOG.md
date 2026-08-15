@@ -228,6 +228,21 @@ n=5 是同一个毛病:**判据定了,却没人算过样本量能不能支撑它
   即使 PR 可合并也必须停在未合并状态，正式 Provider 重跑同样继续等待单独命令。
 - **剩余状态:** COMMITTED / PUSH + PR TODO / DO NOT MERGE / FORMAL RERUN NOT STARTED。
 
+### 2026-08-15 14:11 AEST · Step 114 · PR #47 创建并停在未合并边界
+
+- **远端结果:** 分支已推送到 origin，ready PR
+  [#47](https://github.com/Sumire-no-kai/RedCell/pull/47) 已创建；base=`master`、
+  head=`fix/phase05b-pre-run-review`，创建时 head=`7391b8c`，状态 `OPEN / CLEAN / MERGEABLE`。
+  远端没有配置 status checks，故只记录 `no checks reported`，不把它写成 CI 通过；合并依据仍是
+  Step 112 的本地 729 tests、四道格式门、14/14 preflight 与 144-cell dry-run。
+- **PR 讲解:** 描述已按核心协议要求说明“plan 是可执行合同”“历史 invalid 与未补位是两种状态”以及
+  “同名 abandonment 的两种可靠性语义”，并列出未采用的 plan/state 新 digest 与新 event enum 方案、
+  取舍理由、RedCell 中的职责、面试追问和局限。
+- **停止边界:** 本轮没有 merge 授权，所以 PR 保持未合并；没有同步手机、没有获取 wake lock、没有运行
+  付费 controls 或 144-cell 正式矩阵。需要作者另行明确授权 merge；合并并重新同步/复验手机后，正式
+  Provider 启动仍需要单独命令。
+- **剩余状态:** PR #47 OPEN / READY FOR REVIEW / DO NOT MERGE / FORMAL RERUN NOT STARTED。
+
 ---
 
 ## 2026-08-14 · Phase 0.5 正式 Gate 开跑前联网核验与零成本准备
