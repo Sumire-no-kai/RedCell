@@ -146,6 +146,30 @@ n=5 是同一个毛病:**判据定了,却没人算过样本量能不能支撑它
   plan 与 dry-run；到正式 Provider 重跑命令前必须停下向作者说明并等待明确授权。
 - **剩余状态:** MERGED / PHONE ZERO-COST VALIDATION TODO / FORMAL RERUN NOT AUTHORIZED。
 
+### 2026-08-15 13:41 AEST · Step 111 · Termux 同步最终主干并完成 Phase 0.5b 零成本就绪门
+
+- **版本与环境:** ADB 设备 `STF_AL00` 在线；Termux 仓库从 `cf66f69` 经公开 HTTPS `--ff-only`
+  同步到 PR #44/#45 后的最终 `master=994cc49`，与 `origin/master` 对齐。原有未跟踪
+  `docs/PHASE0_5_UTILITY_BASELINE.json` 保留；`.env`、API key 和正式 0.5 数据未经过 Git，也未读取或
+  打印凭据值。手机仍为 Python 3.14.6、原生 Ruff 0.16.1，`pip check` 无破损依赖。
+- **手机四道门:** 全量 **721 passed in 120.39s**；Ruff check 全绿；Ruff format 为
+  **131 files already formatted**；Black 为 **120 files unchanged**；`git diff --check` 通过。两端
+  受 Git 跟踪的 `.py/.pyi` 均为 123 个，宿主显示计数差异不来自项目源码缺失。
+- **最终零成本 Gate 证据:** 使用手机私有现有 billing evidence 与 `.env`，新建独立空库
+  `sqlite:///runs/phase-0-5b.db`，preflight **14/14 PASS**，billing digest 前缀仍为 `393185f3d8ee`；
+  0.5b plan 为 **144 primary + 48 disabled reserve**，默认报告目录 `runs/phase-0-5b`；新 state dry-run
+  为 **0/144 completed、0 usable / 24 primary / 0 invalid**。这些命令没有调用 Provider。
+- **产物同步与清理:** preflight、plan、state 三份非敏感准备产物已复制回桌面忽略目录
+  `runs/phase0-5b-phone-prep-2026-08-15/`；手机/桌面 SHA-256 分别一致为 `8ee37d90…bbfd`、
+  `e677074f…7c4b`、`f51530cc…0391`。只为传输创建的三个 `/data/local/tmp/redcell-phase05b-*-994cc49.json`
+  已逐个删除并确认不存在，没有动其他手机或电脑文件。
+- **停止边界:** 手机没有 `run_gate_matrix` 进程，Android `Wake Locks: size=0`；未运行付费
+  controller/target/attacker controls，未获取长跑 wake lock，未创建正式 tmux runner，也未执行任何
+  144-cell Provider seed。作者要求在正式重跑命令前先听完整说明，因此本步骤到此主动停止。
+- **剩余状态:** `PHASE 0.5B PHONE PREFLIGHT READY / FORMAL RERUN NOT STARTED`。下一步只有在作者看完
+  变更、成本/工期与执行方式并再次明确下令后，才在 Termux 前台获取 wake lock、跑付费 controls，
+  随后启动 144-cell 正式矩阵。
+
 ---
 
 ## 2026-08-14 · Phase 0.5 正式 Gate 开跑前联网核验与零成本准备
