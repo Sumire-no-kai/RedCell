@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy.exc import OperationalError
 
 from redcell.arena.support_agent.policy import SUPPORT_AGENT_POLICY
-from redcell.budget import BudgetLimits
+from redcell.budget import BudgetLimit, BudgetLimits
 from redcell.controller import LLMControllerAdapter
 from redcell.executor import ConversationExecutor
 from redcell.failures import (
@@ -337,6 +337,55 @@ async def test_llm_driver_persists_invocation_before_executing_attempt(store: Ru
     assert store.controller_invocations_for(run.id)[0].status.value == "succeeded"
     assert store.decisions_for(run.id)[0].invocation_id is not None
     assert len(store.attempts_for(result.run.id)) == 1
+
+
+async def test_a_selection_that_exhausts_the_budget_is_still_recorded(store: RunStore) -> None:
+    """选完就没预算了 —— 这次选择仍然必须落盘。⭐
+
+    2026-08-14 的正式矩阵栽在这里:Controller 调用成功并计费之后,预算复查直接结束
+    Run,而决策落盘排在那个分支后面。24 个 LLM Run 里有 10 个因此各留下一条无人引用的
+    succeeded invocation,10/10 都发生在越过 Token 上限的那一次,触发 controller audit
+    失败并让 block 报废。**花过的钱必须留下记录,哪怕它没换来一次 attempt。**
+
+    记成 ABANDONED 而不是 COMPLETED:没有 attempt 跑过,没有奖励可言;也不能留在
+    PENDING —— 审计把 PENDING 视为未结清。
+    """
+    strategy = _one_turn_strategy()
+    choice = f'{{"selected_strategy_id":"{strategy.id}"}}'
+    provider = ScriptedProvider([choice, choice], tokens_per_call=(5, 2))
+    # 第一次选择(7)之后还有预算,attempt 跑完;第二次选择正好把 14 用光,
+    # 于是那次 attempt 永远不会开始 —— 与正式矩阵里 10 个 Run 的形态一致。
+    run = _run().model_copy(
+        update={"algorithm": "llm", "limits": BudgetLimits(max_attempts=5, max_total_tokens=14)}
+    )
+    orchestrator = RunOrchestrator(
+        executor=_executor(StableAdapter(), ScriptedAttackGenerator({strategy.id: ["attack"]})),
+        driver=LLMControllerAdapter(
+            provider=provider,
+            run_id=run.id,
+            prompt_version="controller-prompt-v1",
+            model="scripted",
+        ),
+        store=store,
+    )
+
+    result = await orchestrator.execute(
+        RunExecutionRequest(run=run, strategies=[strategy], actor="customer_a")
+    )
+
+    invocations = store.controller_invocations_for(run.id)
+    decisions = store.decisions_for(run.id)
+    succeeded = [item for item in invocations if item.status.value == "succeeded"]
+
+    assert len(store.attempts_for(result.run.id)) == 1
+    assert len(succeeded) == 2
+    # 每条成功 invocation 都要有决策引用它 —— 这正是当时缺的那一条。
+    assert len(decisions) == len(succeeded) == result.run.usage.successful_selections
+    assert {decision.invocation_id for decision in decisions} == {item.id for item in succeeded}
+    outcomes = [decision.outcome for decision in decisions]
+    assert outcomes[-1] is ControllerDecisionOutcome.ABANDONED
+    assert ControllerDecisionOutcome.PENDING not in outcomes
+    assert result.run.stopped_by is BudgetLimit.TOKENS
 
 
 async def test_resume_invalidates_orphaned_successful_controller_invocation(

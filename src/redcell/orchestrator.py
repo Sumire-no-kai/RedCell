@@ -386,6 +386,14 @@ class RunOrchestrator:
                 exhausted = budget.exhausted()
                 if exhausted is not None:
                     run = self._completed_run(run, budget, stopped_by=exhausted)
+                    # ⚠️ 这次选择**已经发生、已经计费**,只是它的 attempt 永远不会开始。
+                    # 早先这里直接 break,决策就再也没机会落盘:2026-08-14 的正式矩阵里
+                    # 24 个 LLM Run 有 10 个因此各留下一条无人引用的 succeeded invocation
+                    # (10/10 都发生在越过 Token 上限的那一次),触发 controller audit 失败。
+                    # 花过的钱必须留下记录,哪怕它没换来一次 attempt。
+                    await self._commit_selection_without_attempt(
+                        run, strategy_id, exhausted, retry_rng
+                    )
                     break
 
                 strategy = by_id[strategy_id]
@@ -1157,6 +1165,47 @@ class RunOrchestrator:
             update={"outcome": ControllerDecisionOutcome.ABANDONED, "failure_reason": reason}
         )
         self._driver_pending = None
+
+    async def _commit_selection_without_attempt(
+        self,
+        run: Run,
+        strategy_id: str,
+        exhausted: BudgetLimit,
+        retry_rng: random.Random,
+    ) -> None:
+        """把"选完就没预算了"的那次选择落成 ABANDONED 决策。
+
+        不记成 COMPLETED:没有 attempt 跑过,没有奖励可言。也不能留在 PENDING ——
+        审计把 PENDING 视为未结清。ABANDONED 才是它的真实状态:选择成立、费用已付、
+        attempt 没开始。这样 invocation 有决策引用,`successful_selections` 与决策条数
+        也重新对得上(`complete_selection` 在 Controller 返回时就已经记过账了)。
+        """
+        self._abandon_selection(strategy_id, f"budget exhausted before attempt: {exhausted.value}")
+        decision = self._latest_decision()
+        if decision is None or decision.outcome is not ControllerDecisionOutcome.ABANDONED:
+            # 本地 Controller 不产生可落盘的决策行,没有孤儿可言。
+            return
+        attempt_id = new_id()
+        event = self._event(
+            run,
+            RunEventType.SELECTION_ABANDONED,
+            attempt_id=attempt_id,
+            payload={
+                "decision": decision.model_dump(mode="json"),
+                "stopped_by": exhausted.value,
+                "usage": run.usage.model_dump(mode="json"),
+            },
+        )
+        await self._persist(
+            partial(
+                self._store.commit_abandonment,
+                run=run,
+                attempt_id=attempt_id,
+                decision=decision,
+                run_events=[event],
+            ),
+            retry_rng,
+        )
 
     def _latest_decision(self) -> ControllerDecision | None:
         if self._controller is not None:
