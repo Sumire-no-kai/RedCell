@@ -41,6 +41,7 @@ from redcell.arena.support_agent.benign import (
 )
 from redcell.arena.support_agent.codec import TOOL_CALL_CODEC_VERSION
 from redcell.arena.support_agent.policy import POLICY_VERSION
+from redcell.failures import FailureRecord
 from redcell.finding_identity import finding_signature
 from redcell.protocols.adapter import AdapterInput, Message, TargetAdapter
 from redcell.protocols.common import RedCellModel, Role, VulnerabilityCategory
@@ -155,6 +156,55 @@ class ToolCallTrace(RedCellModel):
     """
 
     outcome: ToolCallOutcome
+
+
+class BenignTaskAttempt(RedCellModel):
+    """一次正常任务执行留下的可诊断记录。
+
+    存在的理由只有一个:让"任务为什么没办成"能**从产物里读出来**,而不是每次
+    都要重新花钱跑探针。三类原因在这里是可分辨的 ——
+
+    * `called_tools` 为空且 `malformed_tool_calls` 为 0 → 模型选择不调工具(行为)
+    * `malformed_tool_calls` > 0 → 模型想调但格式没解析成功(codec / 格式退化)
+    * `provider_retries` > 0 → 这一次撞上过网络抖动或限流(环境)
+    """
+
+    repeat_index: int = Field(ge=0)
+    succeeded: bool
+
+    called_tools: list[str] = Field(default_factory=list)
+    """**被评判的那个回合**实际调用了哪些工具。
+
+    与 `BenignTask.evaluate` 取同一个 output:判据看哪一回合,这里就记哪一回合,
+    否则这条记录解释不了它旁边那个 `succeeded`。
+    """
+
+    missing_tools: list[str] = Field(default_factory=list)
+    rejected_tools: list[str] = Field(default_factory=list)
+
+    missing_evidence_indices: list[int] = Field(default_factory=list)
+    """缺了哪几条预期证据 —— 存**下标**,不存值。⭐
+
+    与 `ToolCallTrace.arguments_digest` 同一条规矩:订单号、邮箱这类具体值不进报告。
+    工具名可以直接写(它们本来就写在 system prompt 里、也遍布报告),证据串不行。
+    下标保住了全部诊断力(分得清"两条都没出现"和"只差第二条"),
+    对照冻结且版本化的任务定义即可还原。
+    """
+
+    malformed_tool_calls: int = Field(default=0, ge=0)
+    """整轮所有回合的坏格式合计。
+
+    刻意不只取被评判的那一回合:格式退化是**链路**层面的信号,发生在哪个回合都算数。
+    """
+
+    provider_retries: int = Field(default=0, ge=0)
+    """本次执行中被重试掉的 provider 调用次数。
+
+    纯网络故障不会静默变成"任务没办成" —— 重试耗尽会让整条 controls 抛错崩掉。
+    但**恢复了的**重试会重发同一回合,而靶场只在每条 case 之前 reset,
+    因此重放可能让工具被执行两次、或让确认门状态错位,进而使任务判失败。
+    要把"环境问题"和"模型问题"分开,就必须把这个数留下。
+    """
 
 
 class BenignViolation(RedCellModel):
@@ -292,6 +342,18 @@ class ControlOutcome(RedCellModel):
 
     结构化保存而不是只留 `detail` 文案:判定"这是检测器的问题还是目标的问题"
     需要类别、指纹与 Impact 三态,而人类可读串既不可靠也不该被下游解析。
+    """
+
+    attempts: list[BenignTaskAttempt] = Field(default_factory=list)
+    """每一次正常任务执行的明细;阳性对照不适用,故为空。⭐
+
+    2026-08-12 就记过这个缺口(Step 65)却一直没补,2026-08-15 又付了一次代价:
+    utility 从 158/200 掉到 137/200,弥散在七条任务上,而产物**答不出任何一次
+    是为什么掉的** —— 上次靠花钱跑线上探针定的性,这次连探针都不好使,
+    因为要比的是三天前另一台机器上的一轮。
+
+    `completed_runs` 只回答"办成几次"。要回答"为什么没办成",必须留下
+    模型当时**调了什么**、缺了什么、坏了几次格式、重试了几次。
     """
 
     @model_validator(mode="after")
@@ -731,13 +793,15 @@ async def run_negative_control(
         raw_findings: list[str] = []
         violations: list[BenignViolation] = []
         completed = 0
+        attempts: list[BenignTaskAttempt] = []
         for repeat_index in range(repeats):
-            findings, ok, turns = await _run_benign_once(
+            findings, attempt, turns = await _run_benign_once(
                 adapter, scorer, task, policy, repeat_index=repeat_index
             )
             raw_findings.extend(finding.title for finding in findings)
             violations.extend(_benign_violations(findings, repeat_index=repeat_index, turns=turns))
-            completed += ok
+            attempts.append(attempt)
+            completed += attempt.succeeded
 
         outcomes.append(
             ControlOutcome(
@@ -746,6 +810,7 @@ async def run_negative_control(
                 runs=repeats,
                 completed_runs=completed,
                 violations=violations,
+                attempts=attempts,
                 detail=(
                     f"{repeats} 次里产生 raw Finding {len(raw_findings)} 条:"
                     f"{', '.join(sorted(set(raw_findings)))}；等待独立裁决"
@@ -754,12 +819,47 @@ async def run_negative_control(
                         "正常完成"
                         if completed == repeats
                         else f"零 raw Finding,但 {repeats} 次里只办成 {completed} 次"
-                        "(可用性问题,不等同检测器误报)"
+                        f"(可用性问题,不等同检测器误报;{summarise_failures(attempts)})"
                     )
                 ),
             )
         )
     return outcomes
+
+
+def summarise_failures(attempts: list[BenignTaskAttempt]) -> str:
+    """把失败原因压成一行,直接放进 CLI 输出。⭐
+
+    人第一眼看到的是 `detail`,而不是 JSON。把主因摆在这里,是为了让
+    "为什么没办成"在**看到问题的那一刻**就能读到 —— 否则它照样等于没记。
+    """
+    failures = [attempt for attempt in attempts if not attempt.succeeded]
+    if not failures:
+        return "无失败明细"
+    reasons: list[str] = []
+    no_call = sum(1 for a in failures if not a.called_tools and not a.malformed_tool_calls)
+    if no_call:
+        reasons.append(f"{no_call} 次未调用任何工具")
+    malformed = sum(1 for a in failures if a.malformed_tool_calls)
+    if malformed:
+        reasons.append(f"{malformed} 次出现坏格式")
+    wrong_tool = sum(1 for a in failures if a.called_tools and a.missing_tools)
+    if wrong_tool:
+        reasons.append(f"{wrong_tool} 次调了工具但缺预期工具")
+    rejected = sum(1 for a in failures if a.rejected_tools)
+    if rejected:
+        reasons.append(f"{rejected} 次有调用被拒")
+    evidence_only = sum(
+        1
+        for a in failures
+        if not a.missing_tools and not a.rejected_tools and a.missing_evidence_indices
+    )
+    if evidence_only:
+        reasons.append(f"{evidence_only} 次工具齐全但证据不全")
+    retried = sum(1 for a in failures if a.provider_retries)
+    if retried:
+        reasons.append(f"{retried} 次期间发生过重试")
+    return "；".join(reasons) or "原因未归类"
 
 
 def controls_conditions(
@@ -849,15 +949,21 @@ async def _run_benign_once(
     policy: RetryPolicy,
     *,
     repeat_index: int,
-) -> tuple[list[Finding], bool, list[Turn]]:
-    """跑一遍正当请求,返回 (触发的 Finding, 任务是否办成, 完整回合)。
+) -> tuple[list[Finding], BenignTaskAttempt, list[Turn]]:
+    """跑一遍正当请求,返回 (触发的 Finding, 可诊断的执行记录, 完整回合)。
 
     回合一并返回是为了给 Finding 附上可裁决的调用序列 —— 见 `ToolCallTrace`。
+    返回的是完整记录而不是一个布尔:布尔说得出"没办成",说不出"为什么"。
     """
     await adapter.reset()
     history = [Message(role=Role.USER, content=task.message)]
     turns: list[Turn] = []
     output = None
+    retries = 0
+
+    def _count_retry(_failure: FailureRecord, _attempt: int, _delay: float) -> None:
+        nonlocal retries
+        retries += 1
 
     # 需确认的任务正当路径要走完整的多个回合 —— 少发一个回合,
     # 这条任务就停在"已询问",它要验证的副作用路径根本不会被走到。
@@ -874,6 +980,7 @@ async def _run_benign_once(
                 AdapterInput(messages=list(history), actor=task.actor)
             ),
             policy=policy,
+            on_retry=_count_retry,
         )
         turns.append(Turn(index=index, attacker_message=prompt, output=output))
 
@@ -884,4 +991,20 @@ async def _run_benign_once(
         actor=task.actor,
         strategy_id="negative_control",
     )
-    return result.findings, task.evaluate(output).succeeded, turns
+    outcome = task.evaluate(output)
+    attempt = BenignTaskAttempt(
+        repeat_index=repeat_index,
+        succeeded=outcome.succeeded,
+        # 与判据取同一个 output —— 记的是"评判时看到了什么"。
+        called_tools=sorted({call.name for call in output.tool_calls}),
+        missing_tools=list(outcome.missing_tools),
+        rejected_tools=list(outcome.rejected_tools),
+        missing_evidence_indices=[
+            index
+            for index, evidence in enumerate(task.expected_evidence)
+            if evidence in outcome.missing_evidence
+        ],
+        malformed_tool_calls=sum(turn.output.malformed_tool_calls for turn in turns),
+        provider_retries=retries,
+    )
+    return result.findings, attempt, turns
