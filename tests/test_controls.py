@@ -157,6 +157,78 @@ async def test_negative_control_passes_on_ordinary_behaviour() -> None:
     assert outcomes[0].detail == "正常完成"
 
 
+async def test_a_failed_task_records_why_it_failed() -> None:
+    """产物必须自己说得出"为什么没办成",而不是留给下一次花钱跑探针。⭐
+
+    2026-08-12 记过这个缺口却没补,2026-08-15 又付了一次代价:utility 从 158/200
+    掉到 137/200、弥散在七条任务上,而产物答不出任何一次是为什么掉的 —— 于是
+    "模型漂移"和"执行环境变了"两种解释谁也证伪不了。
+    """
+    task = by_id("list_own_orders")
+    # 模型直接作答、一个工具都不调 —— 最常见的失败形态。
+    adapter = ArenaAdapter(ScriptedProvider(default="You have two orders."))
+
+    outcomes = await run_negative_control(adapter, SCORER, tasks=[task], repeats=1)
+
+    attempt = outcomes[0].attempts[0]
+    assert outcomes[0].completed_runs == 0
+    assert not attempt.succeeded
+    assert attempt.called_tools == []
+    assert attempt.missing_tools == [arena_tools.LIST_MY_ORDERS]
+    assert attempt.malformed_tool_calls == 0
+    assert attempt.provider_retries == 0
+    # 两条预期证据都没出现,记的是下标而不是订单号。
+    assert attempt.missing_evidence_indices == [0, 1]
+    assert "未调用任何工具" in outcomes[0].detail
+
+
+async def test_a_failed_task_never_writes_evidence_values_into_the_report() -> None:
+    """诊断记录也受"具体值不进报告"这条规矩约束 —— 与 `ToolCallTrace` 同源。"""
+    task = by_id("list_own_orders")
+    adapter = ArenaAdapter(ScriptedProvider(default="You have two orders."))
+
+    outcomes = await run_negative_control(adapter, SCORER, tasks=[task], repeats=1)
+
+    dumped = outcomes[0].model_dump_json()
+    for evidence in task.expected_evidence:
+        assert evidence not in dumped
+
+
+async def test_a_malformed_call_is_distinguishable_from_not_calling() -> None:
+    """两种失败在 `completed_runs` 里长得一模一样,而处置完全相反。
+
+    坏格式 → 查 codec / 格式退化;完全没调 → 是模型行为。少了这一维,
+    2026-08-12 那次零参数调用被丢弃的缺陷就只能靠花钱跑探针才发现。
+    """
+    task = by_id("list_own_orders")
+    # 标记内是正文:模型想调工具,但解析不出来。
+    adapter = ArenaAdapter(ScriptedProvider(default="<tool_call>please list them</tool_call>"))
+
+    outcomes = await run_negative_control(adapter, SCORER, tasks=[task], repeats=1)
+
+    attempt = outcomes[0].attempts[0]
+    assert not attempt.succeeded
+    assert attempt.called_tools == []
+    assert attempt.malformed_tool_calls == 1
+    assert "坏格式" in outcomes[0].detail
+
+
+async def test_a_successful_task_still_leaves_a_record() -> None:
+    """成功的那些也要留底 —— 否则没法回答"失败的那几次和成功的有什么不同"。"""
+    task = by_id("faq_refund_window")
+    adapter = ArenaAdapter(
+        ScriptedProvider([_call(arena_tools.SEARCH_FAQ, topic="refund"), "About 30 days."])
+    )
+
+    outcomes = await run_negative_control(adapter, SCORER, tasks=[task], repeats=1)
+
+    attempt = outcomes[0].attempts[0]
+    assert attempt.succeeded
+    assert attempt.called_tools == [arena_tools.SEARCH_FAQ]
+    assert attempt.missing_tools == []
+    assert attempt.missing_evidence_indices == []
+
+
 async def test_negative_control_fails_on_a_false_positive() -> None:
     """raw Finding 不能自动叫误报；独立裁决后仍必须硬失败。"""
     task = by_id("faq_refund_window")
