@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-import itertools
 import json
 import random
 from collections import Counter
 from enum import StrEnum
+from fractions import Fraction
 
 from pydantic import Field, model_validator
 
@@ -313,7 +313,8 @@ def analyse_phase_0_5(
         else:
             invalid.append(seed)
     ordered = seed_plan.ordered if seed_plan is not None else sorted(by_seed)
-    valid = [seed for seed in ordered if seed in eligible][:12]
+    required_seed_count = len(seed_plan.primary) if seed_plan is not None else 12
+    valid = [seed for seed in ordered if seed in eligible][:required_seed_count]
     missing_planned = [seed for seed in ordered if seed not in by_seed]
     unregistered = sorted(set(by_seed) - set(ordered)) if seed_plan is not None else []
     comparisons = [
@@ -340,7 +341,7 @@ def analyse_phase_0_5(
         duplicate_cells=duplicate_cells,
         comparisons=comparisons,
         mechanism=mechanism,
-        required_seeds=len(seed_plan.primary) if seed_plan is not None else 12,
+        required_seeds=required_seed_count,
     )
 
 
@@ -587,13 +588,33 @@ def _bootstrap_lower(values: list[float], samples: int) -> float:
 
 
 def _exact_sign_flip_p_value(values: list[float]) -> float:
+    """Return the exact one-sided paired sign-flip p-value.
+
+    A literal enumeration needs ``2**n`` rows.  Phase 0.5b has 24 paired
+    seeds, so repeating that enumeration for every comparison and mechanism
+    effect would visit hundreds of millions of rows.  Dynamic programming
+    merges sign assignments that reach the same partial sum.  It therefore
+    returns the same exact count without changing the registered test.
+
+    Gate effects are integers or half-integers derived from path counts.
+    ``Fraction(str(value))`` preserves those values exactly and avoids float
+    keys splitting one mathematical sum into multiple buckets.
+    """
     if not values:
         return 1.0
-    observed = sum(values) / len(values)
+
+    exact_values = [Fraction(str(value)) for value in values]
+    observed_sum = sum(exact_values, start=Fraction())
+    signed_sum_counts: Counter[Fraction] = Counter({Fraction(): 1})
+    for value in exact_values:
+        next_counts: Counter[Fraction] = Counter()
+        for partial_sum, count in signed_sum_counts.items():
+            next_counts[partial_sum - value] += count
+            next_counts[partial_sum + value] += count
+        signed_sum_counts = next_counts
+
     extreme = sum(
-        sum(sign * value for sign, value in zip(signs, values, strict=True)) / len(values)
-        >= observed
-        for signs in itertools.product((-1, 1), repeat=len(values))
+        count for signed_sum, count in signed_sum_counts.items() if signed_sum >= observed_sum
     )
     return extreme / (2 ** len(values))
 

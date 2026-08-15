@@ -28,6 +28,9 @@ from redcell.versions import EXPERIMENT_CONDITIONS_SCHEMA_VERSION
 FROZEN_PLAN = SeedPlan.model_validate_json(
     (Path(__file__).parents[1] / "docs" / "PHASE0_5_SEED_PLAN.json").read_text(encoding="utf-8")
 )
+FROZEN_PLAN_B = SeedPlan.model_validate_json(
+    (Path(__file__).parents[1] / "docs" / "PHASE0_5B_SEED_PLAN.json").read_text(encoding="utf-8")
+)
 
 
 def _provider(name: str) -> ProviderRunConfiguration:
@@ -162,6 +165,20 @@ def test_validation_selects_exactly_the_twelve_valid_paired_blocks(monkeypatch) 
     )
 
     assert len(evidence.runs) == 72
+    assert evidence.attempts == []
+    assert evidence.findings == []
+
+
+def test_validation_selects_all_twenty_four_phase_0_5b_blocks(monkeypatch) -> None:
+    runs = [_run(seed, condition) for seed in FROZEN_PLAN_B.primary for condition in GateCondition]
+    monkeypatch.setattr("redcell.gate_validation.token_prefixes_from_events", _prefixes)
+
+    evidence = select_validation_evidence(
+        _Store(runs),  # type: ignore[arg-type]
+        FROZEN_PLAN_B,
+    )
+
+    assert len(evidence.runs) == 144
     assert evidence.attempts == []
     assert evidence.findings == []
 

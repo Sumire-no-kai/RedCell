@@ -83,6 +83,39 @@ n=5 是同一个毛病:**判据定了,却没人算过样本量能不能支撑它
 - **剩余状态:** `PHASE 0.5B READY TO START / NOT STARTED`。0.5 的裁定仍是
   `EXPERIMENT_INVALID`,不因本次修复而改变。
 
+### 2026-08-15 13:21 AEST · Step 108 · 开跑前独立复核发现 12-seed 硬编码并修复统计执行
+
+- **复核发现:** 在没有调用 Provider 的前提下，用 24 个完整合成 paired block 走真实
+  `analyse_phase_0_5`，得到 `valid_seed_count=12 / required_seeds=24 / passed=false`。根因是有效
+  seed 选择仍写死 `[:12]`；因此即使付费跑完 144 格，最终 Gate 也会确定性失败。PRD 的原 0.5
+  合同还写着 `2^12=4096`，若只去掉切片，当前逐项枚举会在十个统计量上重复遍历 24-seed
+  符号空间，形成新的收尾性能风险。Runbook 另有一处 `--run-out runs/phase-0-5` 旧路径，会把
+  0.5b 派生报告混进失效实验目录。上述问题均在正式 0.5b Provider 调用前发现，没有烧掉新 seed。
+- **作者授权与设计:** 作者授权按推荐方案一次性修复、登记、提交并合并，做到手机正式重跑前停止。
+  统计判据不变：仍精确计算全部 `2^24=16,777,216` 种单侧符号翻转；实现改用动态规划合并相同
+  部分和，返回与逐项枚举完全相同的极端分配计数。类比是把“总分相同的答卷”归组计数，而不是
+  少抽答卷；因此不是 Monte Carlo，也没有改变 p 值、实际效应门、bootstrap 或 Holm 校正。
+- **实现:** 分析器从已登记 seed plan 动态读取 primary 数量，不再切成 12；精确符号翻转用
+  `Fraction` 表达路径差并以部分和计数；CLI 和报告移除“12+8 / Twelve”硬编码；validation 新增
+  24×6 选择测试；Runbook 输出目录改为 `runs/phase-0-5b`。PRD 新增独立 0.5b 预注册，明确旧 0.5
+  裁定与证据不变、24+8 digest、全新 seed、独立库/目录、完整审计作用域、成本工期和再次授权边界。
+- **从零 review 的追加修复:** Runbook 虽已传正确目录，但 `gate-plan` 的默认 `run_out` 仍指向旧
+  `runs/phase-0-5`，帮助文本也写死 72 主格。现改为未显式传参时从 seed plan 的 experiment 身份
+  推导 `runs/phase-0-5` / `runs/phase-0-5b`，并增加 CLI 级 0.5b 测试，确认 144+48 形状和全部 argv
+  都进入独立目录。这样操作者漏写可选参数也不会把两轮派生产物混放。
+- **样本量表述更正:** 1.78 的规划标准差在双侧正态近似下约需 25 个 seed 才达到 80%；作者已在
+  任何 0.5b 结果前冻结 24 个，对应约 79%。文档现诚实记录为接近 25 的工程折中，不再把 24 写成
+  严格达到 80%，也不作 publication-grade 功效声明。
+- **最终桌面验证:** 定向 CLI/analysis/validation/plan/seed 回归 **54 passed**；全量
+  **721 passed in 64.51s**。Ruff check 全绿，Ruff format 为 **132 files already formatted**，Black
+  为 **120 files unchanged**，`git diff --check` 通过；逐字节扫描全部受跟踪 Python 文件，混合行尾
+  为 **0**。完整 24-block、默认 10,000 bootstrap 的分析约 **1.34 秒**，读取 24/24、Gate 可通过，
+  三个构造主比较的精确 p 值均为 `1/2^24`。桌面最终 preflight 为 **14/14 PASS**；最终 plan 为
+  144 primary + 48 disabled reserve，报告目录 `runs/phase-0-5b`，dry-run 为 **0/144 completed、
+  24 primary block、0 invalid**。未调用 Provider、未跑付费 controls、未启动正式矩阵。
+- **剩余状态:** READY FOR COMMIT / PR — 推送并合并后同步手机，再完成手机端四道工程门、preflight
+  与 144-cell dry-run；正式重跑前必须停下向作者说明并等待明确命令。
+
 ---
 
 ## 2026-08-14 · Phase 0.5 正式 Gate 开跑前联网核验与零成本准备
