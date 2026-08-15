@@ -215,6 +215,19 @@ n=5 是同一个毛病:**判据定了,却没人算过样本量能不能支撑它
 - **剩余状态:** READY FOR COMMIT / PR — 提交并推送修复分支，创建未合并 PR；正式 controls、手机同步与
   Phase 0.5b 重跑仍不得开始，merge 也等待作者另行授权。
 
+### 2026-08-15 14:09 AEST · Step 113 · 开跑前修复提交与推送前范围审计
+
+- **提交:** 五类 fail-closed 修复、回归测试、Runbook/CONCEPTS/DEVLOG 与 Markdown 行尾保护已提交为
+  `02a1eda`（`fix: harden phase 0.5b pre-run gates`），位于独立分支
+  `fix/phase05b-pre-run-review`；没有直接提交到受保护的 `master`。
+- **范围审计:** 提交精确包含 15 个预期受跟踪文件，`495 insertions / 49 deletions`；内部 `PRD.md`
+  已同步设计理由但继续被 ignore。作者原有未跟踪的 `docs/PHASE0_5_UTILITY_BASELINE.json` 与
+  `docs/RELATED_WORK.md` 未暂存、未修改。提交不含 `.env`、API key、SQLite、state、preflight、trace、
+  Finding 或其他 `runs/` 产物。
+- **合并权限:** 作者本轮只要求 review 与修复，没有明确授权 merge。下一步推送分支并创建 ready PR；
+  即使 PR 可合并也必须停在未合并状态，正式 Provider 重跑同样继续等待单独命令。
+- **剩余状态:** COMMITTED / PUSH + PR TODO / DO NOT MERGE / FORMAL RERUN NOT STARTED。
+
 ---
 
 ## 2026-08-14 · Phase 0.5 正式 Gate 开跑前联网核验与零成本准备
