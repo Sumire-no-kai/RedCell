@@ -436,6 +436,73 @@
   路径重放复现，再用冻结基线、配对 bootstrap/permutation/Holm 规则生成 `gate-report`；在此之前不得
   宣称 Phase 0.5 为 `SUPPORTED`。
 
+### 2026-08-15 10:45 AEST · Step 105 · 正式输出审计发现系统性证据缺口
+
+- **审计顺序:** 先在手机上重生成零 Provider 的 Level-1 golden（正 10/10、负 11/11），再传入
+  controls/adjudication、attacker/controller controls、billing evidence、seed plan 和 matrix state 生成不含 validation 的
+  预报告。手机原先缺少本地冻结的 `PHASE0_5_UTILITY_BASELINE.json`，导致一条假性
+  `utility_baseline_not_established`；已经过 `/data/local/tmp` 短暂中转至 Termux 私有目录，两端
+  SHA-256 均为 `2cd6b7d1…c31327`，权限 `0600`，中转副本已删除。重跑后 utility 假缺口消失。
+- **核心发现 ① —— retry usage 没有落在 event:** 72 个 Run 中有 24 个共出现 45 条
+  `retry_scheduled` event，其 payload 全部缺少 `usage`。`orchestrator._execute_with_retry`虽先把失败请求用量
+  记入 BudgetManager，也用新 usage 构造了 Run 副本，但 `_event` 不会自动从 Run 复制 usage，而
+  retry payload 又只写了 retry 次数、延迟与 failure。因此最终报告无法从不可变事件流重建当时总账，
+  按冻结的“重试/失败请求只要有 Provider usage 就必须计入；未知 Token 使 block 失效”规则判无效。
+- **影响:** 160k 主检查点只剩 4 个有效 seed；8 个 paired block（`40398366`、`648339790`、
+  `743452918`、`1035477995`、`1439037854`、`1734252927`、`1748747635`、`1878163433`）因至少一格
+  `TokenPrefix.valid=false` 整块退出。这与 matrix state 的 `72 completed / 0 invalid` 不矛盾：后者只证明子进程
+  与当时的简化逐格核验通过，而该核验没检查 event-level usage 完整性，未能当场 fail-closed。
+- **核心发现 ② —— 跨 Token 上限的 Controller 成功调用没有 decision:** 24 个 LLM Run 中有 10 个
+  各多出 1 条 `status=succeeded` 且 `usage=known` 的 Controller invocation，但没有任何持久化 decision 引用。
+  原因是成功 selection 计费后恰好越过 Token 上限，orchestrator 在 `budget.exhausted()` 处直接完成 Run，
+  而 `commit_decision_selected` 发生在该分支之后。这违反“100% 成功 LLM selection 可追溯至 invocation、
+  evidence digest、合法 Strategy、usage 与持久化 decision”保护线。当前 4 个有效 block 中有 3 个
+  Run 因此出现 `controller_audit:<run_id>`；全矩阵范围则是 10 个 LLM Run 受影响。
+- **fail-closed 复核:** 实际执行 `validate-paths --repeats 5`；它在加载 Target 之前因
+  `replay validation requires exactly 12 valid paired seed blocks` 以退出码 4 拒绝，未调用 Provider、
+  未产生 validation JSON。这证明 replay 入口没有用 matrix state 的表面 12/12 绕过事件级审计。
+- **当前报告:** 补齐 utility 基线后预报告仍为 `INCOMPLETE`，原因是 validation 在无效矩阵上根本不能生成。
+  其他前置中，golden、controls 三态裁决、utility、Static×off ASR 漂移（`55/394=13.96%`，单侧
+  95% 下界 `11.33%`）与漏洞类别 coverage 通过。尚存 controller audit、strategy coverage、
+  cost-per-path 保护失败与 `missing_validation`。
+- **只作诊断的 4-block 方向:** `LLM×memory` 对 Static / Random / Thompson 的 160k 平均路径差为
+  `-1.75 / -1.75 / -0.25`，三个 Holm 校正 p 值均为 1.0；Selector 主效应 `-3.0`，memory 主效应
+  `+1.25`但 CI 跨 0。Treatment 单路径 Token 约 `85,093`，最强对照 Static 约 `51,343`；4 个
+  treatment Run 只有 1 个通过 6/7 + 40% 策略 coverage。这些数据明显不利于完整配置，但 8 个
+  block 的删失与 retry 发生相关，可能非随机；因此不得把 4-block 结果升级为预注册的
+  `NOT_SUPPORTED`。
+- **恢复阻塞:** 当前 state 只在 child/runner 故障时把 block 标 invalid；它没有事后将“completed 但 event/audit
+  不合格”的 block 核定为 invalid 的命令，所以 reserve activation 仍会因 state 显示 0 invalid 而拒绝。
+  在启用 8 个冻结 reserve 前，必须先修复 retry event usage、Token 边界 decision 持久化、runner 的终局
+  event/controller 审计，并设计保留旧 state digest 的显式事后失效/补位记录。
+- **剩余状态:** `EXPERIMENT EVIDENCE INVALID / MACHINE VERDICT INCOMPLETE / HUMAN RECOVERY DECISION REQUIRED`。
+  这不是 Controller 效果的 `NOT_SUPPORTED`，也不能表述为 Phase 0.5 已完成。不自动修补原始事件、
+  不删除旧 Run、不在未修复系统性问题前启用 reserve。
+
+### 2026-08-15 10:48 AEST · Step 106 · 失效 block 并集复核与当前 Gate 最终裁定
+
+- **并集而非简单相加:** retry event usage 缺失影响 8 个 primary seed；Controller audit 缺口影响
+  9 个 primary seed，其中 6 个与 retry 问题重叠。两类完整性问题的 seed 并集是 **11/12**，
+  唯一同时通过 event usage 与 Controller audit 的 primary seed 为 `1004746553`。
+- **冻结 reserve 不足:** 预注册只有 8 个 reserve block。即使修复代码且 8 个 reserve 全部一次成功，
+  也只能将 1 个干净 primary 补到 9 个有效 block，达不到冻结的 12。在看到结果后追加 3 个 seed、
+  重跑已观察的 primary seed，或把缺失 usage 回填为 0，都违反本轮预注册与未知 Token
+  fail-closed 规则。因此**当前 Phase 0.5 Gate 在原冻结 seed plan 内已无法恢复为 12-block 有效实验**。
+- **保护线已不可支持:** 唯一干净 block 的 `LLM×memory` Run 虽覆盖 6/7 策略，但单一策略占比
+  `69.23%`，已超过每个有效 treatment Run 均必须满足的 40% 上限。这一观测不能被 reserve
+  替换，因为“结果不好看”不是合法失效原因。所以当前 Gate 既不具备有效的 12-block 证据，
+  也已没有达到 `SUPPORTED` 的合法路径。
+- **裁定语义:** 机器 JSON 因 `missing_validation` 的优先级显示 `INCOMPLETE`；但 validation 之所以缺失，
+  是因为它正确地拒绝了不足 12 个有效 block 的矩阵。从冻结的完整性/未知 Token/审计规则看，
+  本轮研究裁定应记为 **`EXPERIMENT_INVALID`（不是 `NOT_SUPPORTED`）**。必须保留机器原值与这条
+  因果说明，不得手改 JSON 伪造一个新 verdict。
+- **后续两条合法路径:** (A) 停止，保留本轮为“实验基础设施失效，无效果结论”；
+  (B) 先修复两个落盘缺陷、逐格终局审计与机器 verdict 优先级，升协议/实验版本，在不读新
+  运行结果的前提下新建、冻结一份 seed plan，作为独立 Phase 0.5b 全矩阵重跑。旧 72 Run、
+  state、数据库、预报告和失败的 validation 命令证据全部保留，不与新实验混库。
+- **剩余状态:** `PHASE 0.5 FORMAL GATE = EXPERIMENT_INVALID`。待作者决定是停在无效实验结论，
+  还是授权修复并建立全新的 Phase 0.5b 预注册。
+
 ---
 
 ## 2026-08-13 · Phase 0.5 Gate 合并后深度代码审阅
