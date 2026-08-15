@@ -389,6 +389,53 @@
   手机宿主与新代码提交已重新对齐；正式开跑仍需墙充、稳定 Wi-Fi、wake lock 和单一 tmux runner，
   且是需要单独确认的付费动作。
 
+### 2026-08-14 22:50 AEST · Step 103 · 作者授权并在 Termux 前台启动正式 72-cell Gate
+
+- **授权与边界:** 作者明确要求“用命令直接开始测试”，因此本步首次启动会产生真实
+  Provider 调用与费用的正式 Gate seed。没有启用 reserve seed，没有改变冻结 plan/state，也没有
+  启动第二个 runner。
+- **开跑前现场复核:** ADB 设备为 `STF_AL00`；Termux 在前台且仓库位于
+  `/data/data/com.termux/files/home/RedCell`。手机 `master...origin/master` 干净，HEAD 为仅文档收尾后的
+  `cf66f69`（代码树与 Step 102 的已验证版本相同）；电量 100%、USB 供电、温度 32.0°C，
+  可用空间 9.1 GiB，Termux 在 device-idle 白名单，网络/DNS 零成本探测通过，开跑前未发现
+  `run_gate_matrix.py` 进程。未读取或打印任何 API key 值。
+- **计划与状态核对:** 对
+  `gate-plan-termux-97e34ca.json` + `gate-matrix-state-termux-97e34ca.json` 重跑同一 runner 的
+  `--dry-run`，仍为 **72 格待执行、0/72 completed、0 usable / 12 primary / 0 invalid**；这与 Step 102
+  的 14/14 preflight、四道工程门和新建空库证据一致。
+- **电源与可见执行:** 新建单一 tmux 会话 `phase05-gate`，把 history limit 提高到 200,000 行，
+  并将 Termux 前台客户端附着到该会话。首次在新 pane 内调用 `termux-wake-lock` 因 Android shell
+  环境返回 2；改由同一 Termux UID 直接调用后返回 0，并用 Android `Wake Locks: size=1` 确认已
+  持有，而不是只信命令退出码。
+- **正式执行证据:** `2026-08-14 22:50:08 AEST` 显示 `FORMAL_GATE_START_20260814`，随后主
+  `run_gate_matrix.py` 进程与首批 3 个子进程已存活；前台输出为 `=== 本批 3 格 ===`，
+  首批是同一 primary seed 的 `static-memory`、`static-off` 与 `llm-memory`，每格都使用冻结的
+  `budget=500` / `max_total_tokens=320000`。
+- **剩余状态:** `FORMAL MATRIX RUNNING / 0 OF 72 CELLS COMPLETED AT LAUNCH`。不把“进程已启动”写成
+  Gate 已通过；需继续监视逐格结果、电源/网络/空间和 fail-closed 状态。如出现 invalid block，必须先核定
+  失效类型并取得人工 reserve 授权，不得自动换 seed；72/72 后仍须运行 replay / `validate-paths`
+  与 `gate-report` 才能得出 `SUPPORTED` 或 `NOT SUPPORTED`。
+
+### 2026-08-15 10:32 AEST · Step 104 · 手机正式矩阵完成性只读复核
+
+- **终端与进程证据:** `phase05-gate` 会话保留完整收尾输出：
+  `cells 72/72 completed`、`blocks 12 usable / 12 primary / 0 invalid`、
+  `已有 12 个可用 block —— 可以进入 validate-paths`。主 runner 与子进程均已退出，不是还在无输出地挂起。
+- **独立落盘证据:** state JSON 实际包含 120 格：72 个 primary 全部为 `completed`，48 个 reserve
+  仍为 `pending`；`enabled_reserve_seeds=0`、`reserve_activations=0`。72 个完成格的退出码全为 1，在
+  `redcell run` 契约中表示“正常完成且有 Finding”，不是运行故障。正式 SQLite 库已增长至
+  106 MiB，逐格日志正好 72 份且零份为空。
+- **时间线:** 矩阵于 `2026-08-14 22:50:08 AEST` 开始，state 最终原子落盘于
+  `2026-08-15 07:21:57 AEST`，连续运行约 8 小时 32 分。原先的 32 小时是按更慢 Provider/上限停止做的
+  保守预算，不是必须占满的时长。
+- **显示问题说明:** 主 runner 将每格 stdout/stderr 写入独立日志，tmux 主窗只在一格结束后打印一行；
+  因此手机在单格运行期看似“没变化”是粗粒度 UI，不是本次未执行。已刷新当前 tmux 客户端显示。
+- **电源收尾:** 矩阵完成后执行 `termux-wake-unlock`，Android 复核为 `Wake Locks: size=0`；没有修改
+  正式数据、没有启用 reserve，也没有开始 replay / `validate-paths` / `gate-report`。
+- **剩余状态:** `FORMAL MATRIX COMPLETE / FINAL GATE VERDICT NOT YET COMPUTED`。下一阶段是对 Finding 做
+  路径重放复现，再用冻结基线、配对 bootstrap/permutation/Holm 规则生成 `gate-report`；在此之前不得
+  宣称 Phase 0.5 为 `SUPPORTED`。
+
 ---
 
 ## 2026-08-13 · Phase 0.5 Gate 合并后深度代码审阅
