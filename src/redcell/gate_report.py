@@ -192,7 +192,8 @@ class GateReport(RedCellModel):
             "Controller rationale is low-strength self-report and is not causal evidence.",
             "Token equality does not imply equal compute or monetary value across models.",
             "The result applies only to the frozen policy-known arena and conditions.",
-            "Twelve paired seeds are an internal falsifiable Gate, not publication-grade power.",
+            "The registered paired-seed sample is an internal falsifiable Gate, not "
+            "publication-grade power.",
             "Attack-path identity includes strategy_id, so broader strategy allocation can "
             "increase measured path breadth without adding a new structural vulnerability; "
             "interpret finding-signature breadth and strategy allocation alongside it.",
@@ -221,7 +222,7 @@ class GateReport(RedCellModel):
         failures = set(self.protection_failures)
         if failures & _MISSING_EVIDENCE_FAILURES:
             return GateVerdict.INCOMPLETE
-        if len(self.analysis.valid_seeds) < 12:
+        if len(self.analysis.valid_seeds) < self.analysis.required_seeds:
             return (
                 GateVerdict.EXPERIMENT_INVALID
                 if self.analysis.invalid_seeds or self.analysis.duplicate_cells

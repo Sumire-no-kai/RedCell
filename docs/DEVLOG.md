@@ -5,6 +5,135 @@
 
 ---
 
+## 2026-08-15 · Phase 0.5b:修完两个落盘缺陷,冻结 24 seed 新预注册
+
+### 2026-08-15 · Step 107 · 独立复核 Codex 裁定,并落地作者的两项决策
+
+**作者决策:B(修完重来)+ A(primary 提到 24)。全新抽 seed,审计作用域不动。**
+
+#### 复核结论:Codex 的数字全部准确,裁定成立;但两条根因的表述要修正
+
+用 110 MB 正式库独立复算,**每个数都对得上**:45 条 retry 事件 / 24 个 Run;10 个 LLM Run
+各多 1 条孤儿 invocation;retry 8 seed + controller 9 seed − 重叠 6 = **并集 11/12**;
+唯一干净 seed `1004746553`;该 block 的 `llm×memory` 6/7 覆盖、最大占比 **69.23%**(18/26)
+未过 40% 上限;ASR `55/394=13.96%`;cost/path `85,093` vs `51,343`;Holm p 全 1.0;
+1 干净 + 8 备用 = 9 < 12。
+
+**尤其认可一处克制:拒绝把 4-block 的方向升级为 `NOT_SUPPORTED`。** 删失与 retry 发生
+相关,幸存的 4 个不是随机样本 —— 这一步若走错,整个项目的可信度就没了。
+
+**两条表述修正(不改变裁定):**
+
+1. **「retry payload 全部缺少 usage」只对顶层成立。** 失败请求自身的 usage 就在
+   `payload.failure.usage`,45/45 都有、全部 `usage_known: true`、合计 109,808 token。
+   从事件流重建过账:最后快照 320,679 = `run.usage` 320,679,`retries=1` 已记录。
+   **总账重建得出来** —— 缺的只是 retry 那一刻的累计快照。冻结规则写的是「**未知**
+   Token 使 block 失效」,而这些 token 不是未知的;判它们失效的是
+   `usage_events_complete` 这个结构性键检查,比它代表的规则更严。**这已是同一科毛病
+   的第四次**(08-07 `exclude_none`、08-12 codec 版本、08-14 schema 版本)。
+2. **两条缺陷都发生在 160k 比较窗口之外。** 10 个孤儿逐个查过,**10/10 都在越过 320k
+   上限的那一次**(`stopped_by=tokens`,320,072–322,009),而审计是整 Run 作用域。
+
+**但裁定不变:** 即便 8 个 retry block 全恢复,controller 缺口仍覆盖 9 个 seed,
+3 + 8 = 11 < 12。而事后收窄作用域是「看到结果后改判据」,不能做。**作用域保持整 Run。**
+
+#### 两个缺陷的修复
+
+- **缺陷 B(`68cf10b`):** `orchestrator.py:386` 的预算复查直接 `break`,而决策落盘排在
+  该分支之后。修为在 break 前把决策落成 **ABANDONED**:不记 COMPLETED(没有 attempt
+  跑过,无奖励可言),也不能留 PENDING(审计视为未结清)。**花过的钱必须留下记录,
+  哪怕它没换来一次 attempt。**
+- **缺陷 A(`1769700`):** `retry_scheduled` 漏写 `usage` 快照。顺带把
+  `USAGE_BEARING_EVENTS` 提成模块常量,让**写入方测试**与**读取方校验**共用一份定义;
+  新测试断言的是**通用不变量**(所有该类事件都得带快照),不是「retry 有 usage」——
+  当初正是没人断言过这件事,一行缺失才能藏到矩阵跑完。
+
+#### 24 个 seed:这次是算出来的
+
+用 0.5 全部 12 个 seed 估配对差,**标准差 = 1.78 条路径**。对照预注册的 1.0 实用阈值:
+
+| | |
+|---|---|
+| 80% 把握看见 1.0 条,需要 | **≈ 25 个 seed** |
+| 12 个实际能看见 | **≈ 1.4 条** |
+
+**旧 Gate 从一开始就没有能力看见自己设的那条线。** 这与阳性对照 n=3、逐任务 utility
+n=5 是同一个毛病:**判据定了,却没人算过样本量能不能支撑它。** 阈值 1.0 不动,改样本量。
+
+**24 个全部重抽,不沿用 0.5 的任何一个** —— 那 12 个的路径数在做上述方差估计时已被看过,
+不再是盲的。**这个污染是我们自己造成的**,所以由测试挡住,不靠记性。抽取用系统 CSPRNG,
+发生在任何 0.5b 结果存在之前。备用维持 8 个:0.5 连续 8.5 小时里偶发故障为 0,备用一个
+没用上 —— 失败是系统性的,加备用救不了。
+
+#### seed plan 做成登记表
+
+`FROZEN_SEED_PLANS` 按实验登记形状与 digest;`SeedPlan.experiment` **不参与摘要**
+(摘要标识的是「哪些 seed、什么顺序」,不是元数据)。因此 0.5 的 `c421f313…` 加字段后
+**逐字不变**,已归档的失效实验仍可加载 —— 归档不等于删除。`GateAnalysis.required_seeds`
+随计划走,`gate_report` / `gate_validation` 里写死的 12 一并改掉。
+
+- **0.5b 计划:** `docs/PHASE0_5B_SEED_PLAN.json`,24 + 8,digest
+  `6dd3d879630a6ddf5cc5c9d7088189660a69b6a9c7d3ce4a899479a3ceac515e`。
+- **预算:** 144 格 ≈ 4,600 万 Token、约 **$11**、约 **17 小时**(按 0.5 实测 72 格
+  `$5.31` / 8 小时 32 分翻倍)。Runbook 已整体切到 0.5b,库改为 `runs/phase-0-5b.db`。
+
+- **验证:** 全量 **716 passed**;ruff check / ruff format(132 files)/ black(120 files)/
+  `git diff --check` 四门全过。未调用 Provider,未跑 controls,未创建 0.5b 数据库。
+
+- **剩余状态:** `PHASE 0.5B READY TO START / NOT STARTED`。0.5 的裁定仍是
+  `EXPERIMENT_INVALID`,不因本次修复而改变。
+
+### 2026-08-15 13:21 AEST · Step 108 · 开跑前独立复核发现 12-seed 硬编码并修复统计执行
+
+- **复核发现:** 在没有调用 Provider 的前提下，用 24 个完整合成 paired block 走真实
+  `analyse_phase_0_5`，得到 `valid_seed_count=12 / required_seeds=24 / passed=false`。根因是有效
+  seed 选择仍写死 `[:12]`；因此即使付费跑完 144 格，最终 Gate 也会确定性失败。PRD 的原 0.5
+  合同还写着 `2^12=4096`，若只去掉切片，当前逐项枚举会在十个统计量上重复遍历 24-seed
+  符号空间，形成新的收尾性能风险。Runbook 另有一处 `--run-out runs/phase-0-5` 旧路径，会把
+  0.5b 派生报告混进失效实验目录。上述问题均在正式 0.5b Provider 调用前发现，没有烧掉新 seed。
+- **作者授权与设计:** 作者授权按推荐方案一次性修复、登记、提交并合并，做到手机正式重跑前停止。
+  统计判据不变：仍精确计算全部 `2^24=16,777,216` 种单侧符号翻转；实现改用动态规划合并相同
+  部分和，返回与逐项枚举完全相同的极端分配计数。类比是把“总分相同的答卷”归组计数，而不是
+  少抽答卷；因此不是 Monte Carlo，也没有改变 p 值、实际效应门、bootstrap 或 Holm 校正。
+- **实现:** 分析器从已登记 seed plan 动态读取 primary 数量，不再切成 12；精确符号翻转用
+  `Fraction` 表达路径差并以部分和计数；CLI 和报告移除“12+8 / Twelve”硬编码；validation 新增
+  24×6 选择测试；Runbook 输出目录改为 `runs/phase-0-5b`。PRD 新增独立 0.5b 预注册，明确旧 0.5
+  裁定与证据不变、24+8 digest、全新 seed、独立库/目录、完整审计作用域、成本工期和再次授权边界。
+- **从零 review 的追加修复:** Runbook 虽已传正确目录，但 `gate-plan` 的默认 `run_out` 仍指向旧
+  `runs/phase-0-5`，帮助文本也写死 72 主格。现改为未显式传参时从 seed plan 的 experiment 身份
+  推导 `runs/phase-0-5` / `runs/phase-0-5b`，并增加 CLI 级 0.5b 测试，确认 144+48 形状和全部 argv
+  都进入独立目录。这样操作者漏写可选参数也不会把两轮派生产物混放。
+- **样本量表述更正:** 1.78 的规划标准差在双侧正态近似下约需 25 个 seed 才达到 80%；作者已在
+  任何 0.5b 结果前冻结 24 个，对应约 79%。文档现诚实记录为接近 25 的工程折中，不再把 24 写成
+  严格达到 80%，也不作 publication-grade 功效声明。
+- **最终桌面验证:** 定向 CLI/analysis/validation/plan/seed 回归 **54 passed**；全量
+  **721 passed in 64.51s**。Ruff check 全绿，Ruff format 为 **132 files already formatted**，Black
+  为 **120 files unchanged**，`git diff --check` 通过；逐字节扫描全部受跟踪 Python 文件，混合行尾
+  为 **0**。完整 24-block、默认 10,000 bootstrap 的分析约 **1.34 秒**，读取 24/24、Gate 可通过，
+  三个构造主比较的精确 p 值均为 `1/2^24`。桌面最终 preflight 为 **14/14 PASS**；最终 plan 为
+  144 primary + 48 disabled reserve，报告目录 `runs/phase-0-5b`，dry-run 为 **0/144 completed、
+  24 primary block、0 invalid**。未调用 Provider、未跑付费 controls、未启动正式矩阵。
+- **剩余状态:** READY FOR COMMIT / PR — 推送并合并后同步手机，再完成手机端四道工程门、preflight
+  与 144-cell dry-run；正式重跑前必须停下向作者说明并等待明确命令。
+
+### 2026-08-15 13:31 AEST · Step 109 · Phase 0.5b 修复分支推送与 PR #44 合并前审计
+
+- **Git 进度:** 本轮动态 24-seed 分析、精确置换、CLI 隔离和文档提交为 `e3774b8`；连同本分支
+  此前的 budget-boundary decision、retry usage 与 24+8 预注册三个提交，已推送到
+  `fix/record-selection-that-exhausts-budget`，创建 ready PR
+  [#44](https://github.com/Sumire-no-kai/RedCell/pull/44)。
+- **PR 审计:** base=`master`、head 精确匹配本分支，状态 `OPEN / CLEAN / MERGEABLE`；共 4 个提交、
+  15 个受跟踪文件，范围只包含两处落盘修复、0.5/0.5b seed 登记兼容、动态统计/validation/CLI、
+  回归测试及公开 DEVLOG/Runbook/CONCEPTS。远端没有配置 status checks，因此只记录“无 checks”，
+  不把它写成 CI 通过；合并依据是 Step 108 的本地四道门与零成本 Gate 证据。
+- **边界:** 内部 `PRD.md` 已登记 0.5b 理由和合同但继续被 ignore；作者既有未跟踪
+  `docs/PHASE0_5_UTILITY_BASELINE.json`、`docs/RELATED_WORK.md` 未暂存。没有 `.env`、API key、正式
+  SQLite、state、trace、Finding 或 controls 产物进入 PR。本步骤没有 Provider 调用。
+- **剩余状态:** PR READY TO MERGE — 本次作者已明确授权直接合并；该授权只适用于 PR #44，不能
+  外推为以后未明确授权时也可主动合并。
+
+---
+
 ## 2026-08-14 · Phase 0.5 正式 Gate 开跑前联网核验与零成本准备
 
 ### 2026-08-14 16:00 AEST · Step 84 · 官方计费核验、四道工程门与 preflight fail-closed

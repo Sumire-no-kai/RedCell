@@ -707,7 +707,8 @@ def gate_report(
         Path | None, typer.Option(help="冻结 replay validation JSON；缺失时报告保持 INCOMPLETE")
     ] = None,
     seed_plan_json: Annotated[
-        Path | None, typer.Option(help="冻结的 12+8 seed plan JSON；缺失时报告保持 INCOMPLETE")
+        Path | None,
+        typer.Option(help="冻结的 Phase 0.5/0.5b seed plan JSON；缺失时报告保持 INCOMPLETE"),
     ] = None,
     golden_json: Annotated[
         Path | None, typer.Option(help="冻结 Level-1 golden 结果；缺失时报告保持 INCOMPLETE")
@@ -802,21 +803,25 @@ def gate_plan(
         int,
         typer.Option(help="正式 Run 的安全 attempt 上限；必须在开跑前显式冻结，不能沿用默认 20"),
     ],
-    seed_plan_json: Annotated[Path, typer.Option(help="冻结的 12+8 seed plan JSON")],
+    seed_plan_json: Annotated[Path, typer.Option(help="冻结的 Phase 0.5/0.5b seed plan JSON")],
     db: Annotated[str, typer.Option(help="正式矩阵专用 SQLite 连接串；不得混用开发数据库")],
-    run_out: Annotated[Path, typer.Option(help="每个正式 Run 的报告目录")] = Path("runs/phase-0-5"),
+    run_out: Annotated[
+        Path | None,
+        typer.Option(help="每个正式 Run 的报告目录；默认按 seed plan 的实验身份隔离"),
+    ] = None,
     out: Annotated[Path, typer.Option(help="只读执行清单 JSON 输出路径")] = Path(
         "runs/gate-plan.json"
     ),
 ) -> None:
-    """生成 72 个主单元 + 48 个备用单元的命令清单，但绝不执行它们。"""
+    """生成已登记实验的主单元与禁用备用单元清单，但绝不执行它们。"""
     try:
         seed_plan = SeedPlan.model_validate_json(seed_plan_json.read_text(encoding="utf-8"))
+        report_directory = run_out or Path("runs") / seed_plan.experiment.replace(".", "-")
         plan: GatePlan = build_gate_plan(
             seed_plan,
             max_attempts=max_attempts,
             database_url=db,
-            report_directory=str(run_out),
+            report_directory=str(report_directory),
         )
     except (OSError, ValueError) as exc:
         typer.secho(f"Gate plan 配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
@@ -830,7 +835,7 @@ def gate_plan(
 
 @app.command(name="gate-preflight")
 def gate_preflight(
-    seed_plan_json: Annotated[Path, typer.Option(help="冻结的 12+8 seed plan JSON")],
+    seed_plan_json: Annotated[Path, typer.Option(help="冻结的 Phase 0.5/0.5b seed plan JSON")],
     db: Annotated[str, typer.Option(help="正式矩阵专用 SQLite 连接串;必须为空且不得混用开发库")],
     golden_fixtures: Annotated[Path, typer.Option(help="冻结 Level-1 fixture JSON")] = Path(
         "tests/fixtures/level1-golden-v2.json"
@@ -936,7 +941,7 @@ def golden(
 
 @app.command(name="validate-paths")
 def validate_paths(
-    seed_plan_json: Annotated[Path, typer.Option(help="冻结的 12+8 seed plan JSON")],
+    seed_plan_json: Annotated[Path, typer.Option(help="冻结的 Phase 0.5/0.5b seed plan JSON")],
     db: Annotated[str, typer.Option(help="正式 Phase 0.5 专用 SQLite 连接串")],
     out: Annotated[Path, typer.Option(help="冻结 replay validation JSON 输出路径")] = Path(
         "runs/validation.json"

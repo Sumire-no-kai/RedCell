@@ -46,7 +46,7 @@ def test_gate_plan_refuses_a_different_attempt_cap_or_seed_plan() -> None:
             database_url="sqlite:///runs/phase-0-5.db",
             report_directory="runs/phase-0-5",
         )
-    with pytest.raises(ValueError, match="canonical digest"):
+    with pytest.raises(ValueError, match="does not match the frozen"):
         build_gate_plan(
             SeedPlan(primary=list(range(1, 13)), reserve=list(range(13, 21))),
             max_attempts=500,

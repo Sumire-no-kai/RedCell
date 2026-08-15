@@ -189,7 +189,35 @@ def test_gate_plan_generates_primary_and_disabled_reserve_cells_without_running(
     assert all(cell["max_attempts"] == 500 for cell in payload["cells"])
     assert all(cell["max_total_tokens"] == 320000 for cell in payload["cells"])
     assert all("sqlite:///runs/phase-0-5.db" in cell["argv"] for cell in payload["cells"])
+    assert Path(payload["report_directory"]).as_posix() == "runs/phase-0-5"
     assert "未调用 Provider" in result.output
+
+
+def test_gate_plan_defaults_phase_0_5b_reports_to_an_isolated_directory(workspace) -> None:
+    seed_path = Path(__file__).parents[1] / "docs" / "PHASE0_5B_SEED_PLAN.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "gate-plan",
+            "--seed-plan-json",
+            str(seed_path),
+            "--max-attempts",
+            "500",
+            "--db",
+            "sqlite:///runs/phase-0-5b.db",
+            "--out",
+            "gate-plan-0.5b.json",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CLEAN, result.output
+    payload = json.loads((workspace / "gate-plan-0.5b.json").read_text(encoding="utf-8"))
+    assert payload["primary_cells"] == 144
+    assert payload["reserve_cells"] == 48
+    assert len(payload["cells"]) == 192
+    assert Path(payload["report_directory"]).as_posix() == "runs/phase-0-5b"
+    assert all("runs/phase-0-5b" in " ".join(cell["argv"]) for cell in payload["cells"])
 
 
 def test_golden_cli_writes_the_frozen_deterministic_report(workspace) -> None:
