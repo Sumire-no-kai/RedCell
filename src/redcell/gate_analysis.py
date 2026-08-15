@@ -27,6 +27,24 @@ PHASE_0_5_SEED_PLAN_DIGEST = "c421f3137d75f5ba956da12bcfdf824fc89222da23ccfd7bad
 """
 
 
+USAGE_BEARING_EVENTS = frozenset(
+    {
+        RunEventType.DECISION_SELECTED,
+        RunEventType.RETRY_SCHEDULED,
+        RunEventType.SELECTION_ABANDONED,
+        RunEventType.ATTEMPT_COMMITTED,
+        RunEventType.ATTEMPT_ABANDONED,
+        RunEventType.RUN_COMPLETED,
+    }
+)
+"""必须随事件写下当时总账快照的事件类型。⭐
+
+提成模块常量而不是留在判定函数里,是为了让**写入方的测试**能引用同一份定义:
+2026-08-14 的正式矩阵里 `retry_scheduled` 漏写 `usage`,8 个 seed 的配对 block 整块
+报废,而当时没有任何测试断言过"这些事件都得带快照"。两边各写一份集合,迟早会漂。
+"""
+
+
 class GateCondition(StrEnum):
     STATIC_OFF = "static-off"
     STATIC_MEMORY = "static-memory"
@@ -270,18 +288,10 @@ def token_prefixes_from_events(
         and event.attempt_id is not None
         and isinstance(event.payload.get("usage"), dict)
     }
-    usage_bearing_events = {
-        RunEventType.DECISION_SELECTED,
-        RunEventType.RETRY_SCHEDULED,
-        RunEventType.SELECTION_ABANDONED,
-        RunEventType.ATTEMPT_COMMITTED,
-        RunEventType.ATTEMPT_ABANDONED,
-        RunEventType.RUN_COMPLETED,
-    }
     usage_events_complete = all(
         isinstance(event.payload.get("usage"), dict)
         for event in ordered_events
-        if event.event_type in usage_bearing_events
+        if event.event_type in USAGE_BEARING_EVENTS
     )
     output: list[TokenPrefix] = []
     for checkpoint in checkpoints:
@@ -293,7 +303,7 @@ def token_prefixes_from_events(
         committed_tokens = 0
         for event in ordered_events:
             usage = event.payload.get("usage", {})
-            if event.event_type in usage_bearing_events and not isinstance(
+            if event.event_type in USAGE_BEARING_EVENTS and not isinstance(
                 event.payload.get("usage"), dict
             ):
                 continue

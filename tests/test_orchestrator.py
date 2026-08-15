@@ -18,6 +18,7 @@ from redcell.failures import (
     SideEffectStatus,
     TransientAgentError,
 )
+from redcell.gate_analysis import USAGE_BEARING_EVENTS
 from redcell.generation import (
     AttackGenerationRequest,
     AttackGenerator,
@@ -481,6 +482,43 @@ async def test_llm_selection_abandonment_invalidates_without_creating_attempt(
     assert [event.event_type for event in store.events_for(run.id)].count(
         RunEventType.SELECTION_ABANDONED
     ) == 1
+
+
+async def test_every_usage_bearing_event_carries_a_usage_snapshot(store: RunStore) -> None:
+    """Gate 从不可变事件流复原「跑到某个 Token 数时是什么状态」,少一条快照就复原不了。⭐
+
+    2026-08-14 的正式矩阵栽在这里:`retry_scheduled` 唯独漏了 `usage`,24 个 Run 受影响,
+    8 个 seed 的配对 block 整块报废 —— 占 12 个 primary 的三分之二。
+
+    这里断言的是**通用不变量**而不是"retry 事件有 usage":下一个新增的事件类型
+    照样会被这条测试抓住,而当初正是没人检查过这件事。
+    """
+    adapter = FlakyAdapter(
+        failures_before_success=2,
+        capabilities=AdapterCapabilities(
+            reset_scope=ResetScope.FULL_STATE,
+            delivery_observability=DeliveryObservability.IN_PROCESS,
+        ),
+    )
+    strategy = _one_turn_strategy()
+    result = await _execute(
+        store=store,
+        adapter=adapter,
+        generator=ScriptedAttackGenerator({strategy.id: ["attack"]}),
+        retry_policy=RetryPolicy(base_delay_seconds=0, max_delay_seconds=0),
+    )
+
+    events = store.events_for(result.run.id)
+    retries = [event for event in events if event.event_type is RunEventType.RETRY_SCHEDULED]
+    assert retries, "本用例必须真的触发重试,否则它什么都没验证"
+
+    missing = [
+        event.event_type.value
+        for event in events
+        if event.event_type in USAGE_BEARING_EVENTS
+        and not isinstance(event.payload.get("usage"), dict)
+    ]
+    assert missing == []
 
 
 async def test_network_failure_gets_broader_retry_and_stable_ids(store: RunStore) -> None:

@@ -762,6 +762,12 @@ class RunOrchestrator:
                         "retry_number": retry_index,
                         "delay_seconds": delay,
                         "failure": exc.failure.model_dump(mode="json"),
+                        # ⚠️ 失败请求的用量已经记进账本,但这里少写这一行累计快照,
+                        # 2026-08-14 的正式矩阵就有 8 个 seed 的 block 报废:Gate 要求
+                        # 每个 usage-bearing 事件都带当时的总账,才能从不可变事件流
+                        # 复原"跑到 16 万 token 时是什么状态"。`_event` 不会自动从 Run
+                        # 复制 usage —— 每个事件都得自己写。
+                        "usage": budget.usage().model_dump(mode="json"),
                     },
                 )
                 retry_run = run.model_copy(update={"usage": budget.usage()})
