@@ -243,6 +243,33 @@ n=5 是同一个毛病:**判据定了,却没人算过样本量能不能支撑它
   Provider 启动仍需要单独命令。
 - **剩余状态:** PR #47 OPEN / READY FOR REVIEW / DO NOT MERGE / FORMAL RERUN NOT STARTED。
 
+### 2026-08-15 14:20 AEST · Step 115 · PR #47 候选版本完成 Termux 末次零成本验收
+
+- **更新方式与边界:** 作者要求末次检查手机并在需要时更新。由于 PR #47 尚未获得合并授权，Termux
+  没有伪装成已同步主干，也没有改写手机 `master`；只从 origin 获取该 PR 分支，并以 detached HEAD
+  精确检出候选提交 `5303cb4` 做零成本实机验收。手机原有未跟踪
+  `docs/PHASE0_5_UTILITY_BASELINE.json` 保留，`.env` 内容和 API key 未读取、未打印或经过 Git。
+- **手机四道门:** Python 3.14.6 环境下全量 **729 passed in 119.25s**；Ruff check 全绿；Ruff format
+  为 **131 files already formatted**；Black 为 **120 files unchanged**；补跑 `git diff --check` 通过。
+  第一次串联命令只因旧 tmux shell 的 `PATH` 未包含 Termux `git` 而停在最后一步，定位后恢复
+  `/data/data/com.termux/files/usr/bin` 并单独补跑成功；这不是代码或格式失败。
+- **零成本 Gate 证据:** 使用手机私有现有 billing evidence 与配置，preflight **14/14 PASS**；三个参与
+  角色均声明 usage 覆盖全部计费 Token，billing digest 前缀为 `393185f3d8ee`；正式专用
+  `sqlite:///runs/phase-0-5b.db` 被确认为空。当前候选代码重建的 canonical plan 为 **144 primary +
+  48 disabled reserve**，新 state dry-run 为 **0/144 completed、0 usable / 24 primary / 0 invalid**。
+  preflight、plan、state 位于手机忽略目录 `runs/phase0-5b-pr47-ready-2026-08-15/`，SHA-256 分别为
+  `8ee37d90…bbfd`、`169ce1aa…073f`、`f51530cc…70371`；没有调用 Provider。
+- **设备持续运行状态:** ADB 设备在线，USB 供电、100% 电量、屏幕处于 Awake，`/data` 尚余 **9.1 GB**；
+  已通过 Termux 前台请求 `termux:service-wakelock`，系统确认 PARTIAL_WAKE_LOCK 由 Termux 进程持有。
+  `phase05-gate` 与 `phase05-verify` 两个 tmux shell 均存活且空闲，没有遗留 `run_gate_matrix.py` 或
+  `gate-run` 进程。唤醒锁用于避免锁屏/省电策略中断长跑，不代表正式测试已经开始。
+- **结论与停止边界:** PR #47 的**候选提交**已经通过手机末次零成本验收；但正式矩阵应运行可追溯的
+  已合并主干，而不是长期停留在 detached PR 提交。故当前还差作者明确授权合并 PR #47、手机切回并
+  fast-forward 到合并后的 `master`，再核对一次提交与 preflight/dry-run 身份。此后仍需作者另行明确下达
+  正式 Provider 重跑命令。当前没有运行付费 controls、replay 或 144-cell 矩阵。
+- **剩余状态:** PHONE CANDIDATE VERIFIED / PR #47 OPEN / MERGE NOT AUTHORIZED /
+  FORMAL RERUN NOT STARTED。
+
 ---
 
 ## 2026-08-14 · Phase 0.5 正式 Gate 开跑前联网核验与零成本准备
