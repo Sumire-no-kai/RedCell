@@ -116,6 +116,22 @@ n=5 是同一个毛病:**判据定了,却没人算过样本量能不能支撑它
 - **剩余状态:** READY FOR COMMIT / PR — 推送并合并后同步手机，再完成手机端四道工程门、preflight
   与 144-cell dry-run；正式重跑前必须停下向作者说明并等待明确命令。
 
+### 2026-08-15 13:31 AEST · Step 109 · Phase 0.5b 修复分支推送与 PR #44 合并前审计
+
+- **Git 进度:** 本轮动态 24-seed 分析、精确置换、CLI 隔离和文档提交为 `e3774b8`；连同本分支
+  此前的 budget-boundary decision、retry usage 与 24+8 预注册三个提交，已推送到
+  `fix/record-selection-that-exhausts-budget`，创建 ready PR
+  [#44](https://github.com/Sumire-no-kai/RedCell/pull/44)。
+- **PR 审计:** base=`master`、head 精确匹配本分支，状态 `OPEN / CLEAN / MERGEABLE`；共 4 个提交、
+  15 个受跟踪文件，范围只包含两处落盘修复、0.5/0.5b seed 登记兼容、动态统计/validation/CLI、
+  回归测试及公开 DEVLOG/Runbook/CONCEPTS。远端没有配置 status checks，因此只记录“无 checks”，
+  不把它写成 CI 通过；合并依据是 Step 108 的本地四道门与零成本 Gate 证据。
+- **边界:** 内部 `PRD.md` 已登记 0.5b 理由和合同但继续被 ignore；作者既有未跟踪
+  `docs/PHASE0_5_UTILITY_BASELINE.json`、`docs/RELATED_WORK.md` 未暂存。没有 `.env`、API key、正式
+  SQLite、state、trace、Finding 或 controls 产物进入 PR。本步骤没有 Provider 调用。
+- **剩余状态:** PR READY TO MERGE — 本次作者已明确授权直接合并；该授权只适用于 PR #44，不能
+  外推为以后未明确授权时也可主动合并。
+
 ---
 
 ## 2026-08-14 · Phase 0.5 正式 Gate 开跑前联网核验与零成本准备
