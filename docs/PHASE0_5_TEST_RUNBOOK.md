@@ -9,9 +9,15 @@
 > 越过 Token 上限的那次选择未落盘决策 9 个 seed,重叠 6 个)。**那不是「LLM Controller
 > 没用」的结论,是根本没测成。** 两个缺陷均已定位并修复,并各自带回归测试。
 >
-> 0.5b 与 0.5 的差别只有两处:**24 个全新 primary seed**(见下)与**独立数据库**。
+> 0.5b 与 0.5 在实验设计上的差别只有两处:**24 个全新 primary seed**(见下)与**独立数据库**。
 > 判据、阈值、条件、旋钮、审计作用域一律不动 —— 修的是仪器,不是尺子。
 > 旧实验的库、state、产物与失败的 validation 证据全部保留,不与本次混库。
+>
+> **[2026-08-15 开跑前 review]** 又补了五道不改变实验处理的执行保护：计划载入时重建
+> canonical 24×6 矩阵；在线 Phase 0.5 在首次调用前复核三角色 usage coverage 声明；日志默认跟随
+> plan 报告目录；进度只在 24 个可用 block 齐全时宣告 replay-ready；历史 invalid 与尚未补位分别
+> 显示。预算边界的成功 decision 不再误算成 Controller selection failure。上述修改均发生在任何
+> 0.5b Provider 结果之前，seed、阈值、指标和统计判据未变。
 
 ## 1. 开跑前冻结清单
 
@@ -39,6 +45,9 @@
       单侧成对符号翻转检验,现在精确计数全部 `2^24=16,777,216` 种正负号分配。实现用动态规划
       合并“部分和相同”的分配,得到与逐项枚举完全相同的精确 p 值；这只消除重复计算,不改变
       实际效应阈值、bootstrap、Holm 校正或判定出口。旧 0.5 报告仍按其 12-seed 合同解释。
+- [x] **执行 plan 本身 fail-closed。** runner 载入 JSON 时按登记 digest 还原 frozen primary/reserve，
+      重建六个 treatment 的 canonical cell/argv，并核对 144/48 形状、500 attempt、320k Token、
+      database 与 report directory。传输或手改造成任何漂移都会在 child process 启动前拒绝。
 - [x] 冻结 Target、Attacker、Controller、temperature、pricing、arena 与可靠性配置；不在本文或产物中记录密钥。
       **[2026-08-10]** Target=`glm-4.7-flashx`；Generator=`gemini-3.1-flash-lite` @1.0；
       Controller=`gemini-3.1-flash-lite` @0（作者定案的唯一提名候选，2026-08-14 contract controls 已通过）。
@@ -62,7 +71,8 @@
 
 > 上面两项的完成情况由 §2.1 的 `gate-preflight` 机器核对，不靠人工回忆勾选。
 > 2026-08-14 在正式空库与 billing evidence v2 上实跑为 **14/14 PASS**；evidence digest 前缀
-> `393185f3d8ee`。该结果只授权 controls/正式矩阵开跑，不是研究结论。
+> `393185f3d8ee`。2026-08-15 的开跑前修复 review 后用同一冻结配置复验仍为 **14/14 PASS**。
+> 该结果只说明配置门通过，不是研究结论，也不代替正式启动授权。
 
 任一项未完成都不得执行正式 seed。reserve 只在整个 paired block 因基础设施、未知 Token、
 可靠性或完整性失效时按冻结顺序补位；不得因 Finding 结果替换 seed。
@@ -191,7 +201,8 @@ Provider/base URL/model/thinking 配置。任一项失败即退出码 `4`，不�
 
 该命令只输出 144 个 primary cell 和 48 个默认禁用的 reserve cell，不打开数据库、不读取
 `.env`、不调用 Provider。每个 cell 都固定 `max_total_tokens=320000`，并把 argv 作为数组保存，
-避免 shell quoting 改写参数。生成后人工复核六种条件各出现一次：
+避免 shell quoting 改写参数。runner 再次加载时会重建规范计划逐项校验，人工复核仍保留为独立检查。
+生成后确认每个 seed 的六种条件各出现一次：
 
 1. Static × memory off
 2. Static × bounded-relevant-v1
@@ -284,6 +295,8 @@ OS 锁；第二个 runner 若指向同一 state 会在任何 Provider 调用前�
 
 状态每批落盘，崩溃最多丢一批。`--plan` 与 `--state` 不匹配（seed plan digest、数据库、
 seed×condition 集合任一不同）会被拒绝，避免把上一版计划的进度当成这一版的。
+未显式传 `--log-dir` 时，逐格日志写入 `<plan.report_directory>/logs`；当前 0.5b 即
+`runs/phase-0-5b/logs`，不会混入已失效 0.5 的目录。
 
 执行器会在每格结束后**立即核验**下面前三项(状态 / 停止原因 / Token 前缀,外加总账与
 三角色账守恒),不通过即当场按失败落账、整块退出 —— 而不是等到约 17 小时后的 `gate-report`
@@ -300,10 +313,13 @@ exit 0/1,却到不了 320k 前缀。
 
 发现单 cell 无效时，保留原记录，整组六条件 seed 都退出主要分析，再启用下一整个 reserve block。
 不要只重跑失败条件，也不要继续执行尚未需要的 reserve。
+历史 invalid block 永久保留在 state；runner 只在仍有“未被显式 reserve activation 补偿”的失效时
+返回失败。已启用的 reserve 若自身失败，会重新产生一个未补偿失效并要求按冻结顺序启用下一块。
 
 ## 6. 重放与最终 Gate
 
-144 个有效 cell 齐全后，重放 320k 前缀中实际观察到的攻击路径。该命令只加载 Target，
+进度摘要只有在 **24/24 可用 block、144 个有效 cell** 齐全后才显示可以进入 replay。随后重放
+320k 前缀中实际观察到的攻击路径。该命令只加载 Target，
 不会加载 Attacker 或 Controller，并拒绝不完整、重复、计划外或环境混杂的矩阵：
 
 ```powershell

@@ -285,6 +285,12 @@ class ExperimentConditions(RedCellModel):
             raise ValueError("Phase 0.5 Controller 必须冻结 usage_accounting_mode")
         if self.search.selector is not SearchSelector.LLM and self.controller is not None:
             raise ValueError("非 LLM search 不得携带 Controller 配置")
+        if self.online:
+            providers = [self.target, self.attacker]
+            if self.controller is not None:
+                providers.append(self.controller.provider)
+            if any(provider.usage_covers_billed_tokens is not True for provider in providers):
+                raise ValueError("在线 Phase 0.5 的所有参与角色必须声明 usage 覆盖全部计费 Token")
 
 
 class Run(RedCellModel):

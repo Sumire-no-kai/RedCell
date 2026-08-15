@@ -1,11 +1,10 @@
-"""72-cell 矩阵的调度决策层 —— 只决定"下一步跑哪些",不负责执行。
+"""Gate 矩阵的调度决策层 —— 只决定"下一步跑哪些",不负责执行。
 
 ## 为什么单独一层
 
-正式矩阵是 72 个长 Run、约 32 小时以上、Target 并发上限 2 的连续作业。这类作业里
-**真正容易出错的不是执行,是调度语义**:哪些格子还能跑、一个格子失败之后该停什么、
-中断之后从哪儿续、备用 seed 什么时候才允许上场。这些规则来自 runbook,
-一旦写进 shell 循环就再也没人能验证它们。
+正式矩阵是由版本化 plan 决定的长时间连续作业。这类作业里**真正容易出错的不是执行,
+是调度语义**:哪些格子还能跑、一个格子失败之后该停什么、中断之后从哪儿续、备用
+seed 什么时候才允许上场。这些规则来自 runbook,一旦写进 shell 循环就再也没人能验证它们。
 
 于是把决策做成纯函数、把执行留给薄脚本:**调度规则可以被测试,而外部调用不必被测试**。
 
@@ -367,7 +366,7 @@ def verify_cell_run(
     **为什么退出码不够。** `redcell run` 在预算耗尽时正常退出,而"耗尽的是哪一项"
     它不体现在退出码里:一格因**墙钟**或 **attempt 上限**停下,同样是 exit 0/1。
     那样的 Run 没有跑到 320k 前缀,却会被记成 `completed`、block 显示 usable ——
-    直到约 32 小时之后 `gate-report` 才拒绝它,而那时补位又要再花六个 cell。
+    直到整场长跑结束后 `gate-report` 才拒绝它,而那时补位又要再花六个 cell。
     **让坏 block 在第一时间暴露,是这个函数存在的全部理由。**
     """
     if run is None:
@@ -464,16 +463,29 @@ def progress_summary(plan: GatePlan, state: MatrixState) -> str:
         for cell in plan.cells
         if cell.seed_role is SeedRole.PRIMARY or cell.seed in state.enabled_reserve_seeds
     )
+    required_blocks = len({cell.seed for cell in plan.cells if cell.seed_role is SeedRole.PRIMARY})
     lines = [
         f"cells    {done}/{total_enabled} completed",
         f"blocks   {len(usable)} usable / {len(primary)} primary / {len(invalid)} invalid",
     ]
     if invalid:
-        lines.append(
-            "invalid  "
-            + ", ".join(f"seed {view.seed}" for view in invalid)
-            + "  ← 需人工判断是否补位"
+        outstanding = uncompensated_invalid_block_count(state)
+        suffix = (
+            f"  ← 尚有 {outstanding} 个需人工判断是否补位"
+            if outstanding
+            else "  ← 均已显式启用 reserve 补位"
         )
-    if len(usable) >= 12:
-        lines.append("已有 12 个可用 block —— 可以进入 validate-paths")
+        lines.append("invalid  " + ", ".join(f"seed {view.seed}" for view in invalid) + suffix)
+    if len(usable) >= required_blocks:
+        lines.append(f"可用 block 已达 {len(usable)}/{required_blocks} —— 可以进入 validate-paths")
     return "\n".join(lines)
+
+
+def uncompensated_invalid_block_count(state: MatrixState) -> int:
+    """Return active invalid blocks that do not yet have an explicit reserve replacement."""
+    active_invalid = sum(
+        view.invalid
+        for view in state.blocks()
+        if view.seed_role is SeedRole.PRIMARY or view.seed in state.enabled_reserve_seeds
+    )
+    return max(active_invalid - len(state.reserve_activations), 0)

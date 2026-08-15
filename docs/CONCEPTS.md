@@ -2612,7 +2612,7 @@ Static×off ASR 才是端到端漂移探针。②③④ 的 ASR 是处理结果,
 
 ### 14.30 正式 Gate 的三道“账”:测量、交付与并发 ⭐⭐
 
-Phase 0.5 不是把 72 个命令扔进终端就结束。它更像一场需要留好三类单据的耐力赛：
+Phase 0.5b 不是把 144 个命令扔进终端就结束。它更像一场需要留好三类单据的耐力赛：
 
 ```text
 测量账  → 花的资源有没有被完整、可比地量到？
@@ -2696,8 +2696,10 @@ runtime RPM 与并发，并由 preflight 和 `.env` 精确比对。它记录的�
 endpoint/model 总闸，并另加本地并发 3 防止单机瞬时洪峰。不同 Provider 不必硬套同一种限流单位，
 关键是每个真实存在的约束都被同一个跨进程账本执行。
 
-这也修正了工期估计：先前约 21 小时建立在 Target 并发 3 上；正式自限为 2 后，吞吐上界降为原来的
-三分之二，主矩阵应按约 32 小时以上准备，而不是为了守住旧工期把安全余量偷偷取消。
+这也修正了当时的工期估计：先前约 21 小时建立在 Target 并发 3 上；正式自限为 2 后，开跑前曾按
+吞吐上界保守准备 32 小时，而不是为了守住旧工期把安全余量偷偷取消。0.5 随后的真实 72-cell
+运行耗时 8 小时 32 分，当前 0.5b 才改用实测线性外推约 17 小时。保守容量规划与实测更新并不矛盾：
+前者在没有数据时防低估，后者出现后应替代旧猜测，但两者的来源都要留档。
 
 #### “thinking 已关闭”必须来自请求本身
 
@@ -2744,9 +2746,50 @@ child process 启动**之前**，父进程先把 exact `run_id` 写入 `DISPATCH
 备用 seed 也因此永不自动启用：必须按冻结顺序，由人确认失效属于 infrastructure / unknown token /
 reliability / integrity 中允许的类别，并保存启用前 state digest。这样备用不是结果不好时换一副骰子。
 
+#### 历史失效不等于当前仍未补位
+
+**类比：** 航班取消记录必须永久留在台账，但旅客已经换乘成功后，调度屏不能继续显示“尚未安排”。
+matrix state 里的 `invalid block` 是历史事实；`uncompensated invalid block` 才是当前动作状态。把两者
+混成一个布尔值会产生一个很隐蔽的结果：reserve 明明已按规则启用并跑完，runner 却永远返回失败，
+操作者只能在“忽略红灯”和“继续加 seed”之间猜。
+
+RedCell 用已激活的 invalid 数减去有完整人工摘要与前态 digest 的 reserve activation 数，得到仍需处理的
+数量。原 invalid 绝不删除；reserve 自身再失败时，失效数加一而 activation 不变，于是红灯重新亮起。
+这就是 event sourcing 常见的区分：**事实不可改写，当前状态由事实投影出来。**
+
+#### Plan JSON 是可执行合同，不是松散命令便签
+
+一份 frozen seed 文件像实验报名表，`GatePlan` 则像真正发给赛场的出场名单。过去 runner 只检查 JSON
+“字段类型像不像”，却不证明名单里的 seed、treatment 和 argv 真与报名表一致。这样 `--max-tokens`
+被手改、传输中某个 seed 漂移或 144 写成 72，都可能先启动付费 child，最后才由结果核验发现。
+
+现在 plan 在反序列化时根据登记 digest 找回实验身份，重建完整 canonical matrix，再逐项比较 cell 顺序、
+primary/reserve、六个 treatment、预算、数据库、输出目录和 argv。替代方案是给 plan/state 再加一层新
+digest；它也可行，但需要迁移已经归档的 v2 state。当前 canonical 重建能用已有信息证明同一事实，变化面
+更小。它在 RedCell 中扮演的是**付费入口前的供应链完整性检查**：文件能解析，不代表文件仍是获批计划。
+
+#### 同一个 `abandoned`，可能是失败，也可能是预算边界
+
+Controller 经过 repair 仍选不出合法 Strategy，是真正的 Selection Abandonment；Controller 已选出合法
+Strategy，但这次选择本身把 Token 花完，因而不再启动 Attempt，则是成功选择后的预算终止。两者都没有
+Attempt，早期实现因此共用了 `SELECTION_ABANDONED` event type，但可靠性含义相反。
+
+**类比：** “没有登机”可能是乘客证件不合格，也可能是航班在他办完手续后取消。只看“没有登机”会把
+后者错算成乘客连续两次违规。当前事件已有无歧义的结构：前者携带 `selection_abandonment`，后者携带
+已验证 `decision + stopped_by`。Gate report 依结构分类；未知第三种形状直接报完整性错误，不能宽松跳过。
+这保留历史协议兼容，又遵守原则：**可靠性分母只统计它声称统计的故障。**
+
+#### “全绿 preflight”之后，付费入口仍要复核关键声明
+
+preflight 是起飞前检查，但 `.env` 可能在检查后、child 启动前发生漂移。因而在线 Phase 0.5 的
+`ExperimentConditions.require_phase_0_5` 还会在首次 Provider 调用前确认 Target、Attacker 和 LLM
+Controller 都显式声明 usage 覆盖全部计费 Token。这个布尔值仍不等于证明：独立 billing evidence 负责
+证明，最终 Gate report 负责对实际 Run 再绑定。三层检查回答不同问题：现场声明是否允许启动、证明是否
+可信、实际产物是否来自那份配置。少任何一层，都可能让 Token 主预算在不知情下漏记。
+
 #### Shared SQLite rate limiter：每个进程守规矩，不等于全队守规矩
 
-单进程 semaphore 像每个房间各放一名保安：每间都只放 3 人，但 72 个房间同时开门时，
+单进程 semaphore 像每个房间各放一名保安：每间都只放 3 人，但很多房间同时开门时，
 同一 Provider 实际可能收到远多于 3 个请求。正式矩阵使用独立的 SQLite 协调器，按无凭据
 `base_url|model` 作为 key，在**所有** child process 之间共同实施最严格的 RPM 与并发上限。
 
@@ -2811,7 +2854,7 @@ unresolved = 0
   → 零成本 preflight
   → Controller contract controls（角色适任性）
   → Target/attacker/negative controls（测量链与漂移）
-  → 12 × 6 正式矩阵
+  → 24 × 6 正式矩阵（0.5b；归档 0.5 仍是 12 × 6）
   → replay validation + gate-report
 ```
 

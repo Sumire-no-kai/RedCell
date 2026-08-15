@@ -76,6 +76,51 @@ def test_phase_0_5_requires_explicit_usage_accounting_modes() -> None:
         incomplete.require_phase_0_5()
 
 
+def test_online_phase_0_5_requires_billed_token_coverage_before_execution() -> None:
+    conditions = _conditions(online=True, strategy_catalogue=_catalogue())
+
+    with pytest.raises(ValueError, match="usage 覆盖全部计费 Token"):
+        conditions.require_phase_0_5()
+
+    covered = conditions.model_copy(
+        update={
+            "target": conditions.target.model_copy(update={"usage_covers_billed_tokens": True}),
+            "attacker": conditions.attacker.model_copy(update={"usage_covers_billed_tokens": True}),
+        }
+    )
+
+    covered.require_phase_0_5()
+
+    uncovered_controller = ControllerRunConfiguration(
+        provider=_provider(),
+        connection_id="controller-test",
+        connection_fingerprint="sha256:abc",
+        prompt_version="controller-prompt-v1",
+        evidence_policy_version="controller-evidence-v1",
+        thinking_disabled=False,
+    )
+    llm = covered.model_copy(
+        update={
+            "search": SearchConfiguration(selector=SearchSelector.LLM),
+            "controller": uncovered_controller,
+        }
+    )
+    with pytest.raises(ValueError, match="usage 覆盖全部计费 Token"):
+        llm.require_phase_0_5()
+
+    llm.model_copy(
+        update={
+            "controller": uncovered_controller.model_copy(
+                update={
+                    "provider": uncovered_controller.provider.model_copy(
+                        update={"usage_covers_billed_tokens": True}
+                    )
+                }
+            )
+        }
+    ).require_phase_0_5()
+
+
 def test_llm_search_requires_controller_but_static_forbids_it() -> None:
     controller = ControllerRunConfiguration(
         provider=_provider(),

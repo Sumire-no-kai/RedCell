@@ -170,6 +170,121 @@ n=5 是同一个毛病:**判据定了,却没人算过样本量能不能支撑它
   变更、成本/工期与执行方式并再次明确下令后，才在 Termux 前台获取 wake lock、跑付费 controls，
   随后启动 144-cell 正式矩阵。
 
+### 2026-08-15 14:00 AEST · Step 112 · 正式重跑前从零 Code Review 与五类 fail-closed 修复
+
+- **范围与边界:** 作者要求在正式重跑前忘掉实现历史、重新挑刺，并授权发现问题后直接修复。本轮在
+  `fix/phase05b-pre-run-review` 分支进行；只执行代码/合成 state/既有准备产物的零成本检查，没有调用
+  Target、Attacker 或 Controller Provider，没有启动 controls、replay 或正式 seed。作者本次没有授权
+  合并，因此最多创建 PR，不能自行 merge。
+- **发现 ① — 进度提前一半宣告完成:** `progress_summary` 仍写死 `len(usable) >= 12`。0.5b 需要
+  24 个有效 paired block，所以 72/144 cell 时会错误打印“可以进入 validate-paths”。validator 最终仍会
+  拒绝，但操作者可能据此提前停止长跑。修为从已加载 plan 的 primary seed 数动态求门槛；新增 12/24
+  不得就绪、24/24 才就绪的回归，同时保留已归档 0.5 的 12-block 兼容。
+- **发现 ② — 新旧实验日志混目录:** matrix 脚本的 `--log-dir` 默认仍写死
+  `runs/phase-0-5/logs`，Runbook 又没有显式传该参数；0.5b 数据库/报告虽已隔离，逐格日志却会落入失效
+  0.5 的目录。修为默认从 `GatePlan.report_directory/logs` 推导，显式覆盖仍保留，并同时测试 0.5 与
+  0.5b。选择动态派生而不是把默认硬改成 `phase-0-5b`，因为前者不会反过来破坏历史计划。
+- **发现 ③ — 同名事件混算可靠性:** `SELECTION_ABANDONED` 同时承载“Controller 经过 repair 仍选不出
+  合法策略”和“已成功选择、但该次付费调用耗尽预算，故不再启动 attempt”。最终 report 过去按 event
+  type 一概计入连续失败；若真实失败后紧接 Token 边界 decision，会虚构第二次失败并使有效 Run 作废。
+  修为按既有 payload 判别：只有 `selection_abandonment` 进入失败 streak；携带合法 `decision + stopped_by`
+  的预算边界事件重置 streak；两种形状都不满足则新增完整性失败，避免宽松兼容变成 fail-open。没有新增
+  enum/协议版本，因为当前事件已可无歧义判别，临开跑再迁移 schema 的风险高于收益。
+- **发现 ④ — reserve 补位成功后 runner 永久失败:** runner 终局只要历史上存在 invalid block 就返回 1，
+  即使该 block 已经人工裁决、启用 reserve 并完成补位；摘要也继续提示“需判断是否补位”。但 invalid
+  是必须永久保留的审计事实，不能等同于“尚未处理”。新增纯函数计算
+  `active invalid - reserve activations`：历史失效仍显示，只有未补偿失效阻塞；若 reserve 自身再失效，
+  计数重新变为 1 并要求下一块补位。
+- **发现 ⑤ — plan 与 coverage 只在外围门检查:** `GatePlan.model_validate_json` 原先只做字段类型校验，
+  未重算 frozen seed、六条件次序、cell 数或 argv；文件传输/手改造成 seed、Token 或 treatment 漂移时，
+  runner 最早要等付费跑完一格才拒绝。现由 schema 依据登记 digest 重建 canonical matrix，逐项校验
+  seed allocation、144/48 形状、treatment、预算、DB/输出 argv 与 reserve 开关。采用现有 schema 内
+  canonical 校验，而不是给 plan/state 新增 digest 和迁移版本，避免破坏 0.5 归档 state。另将作者已冻结的
+  usage-coverage 规则放入在线 `ExperimentConditions.require_phase_0_5`：Target/Attacker/LLM Controller
+  任一角色没有显式 `True` 都在首次 Provider 调用前拒绝；preflight 的独立 billing evidence 与最终 report
+  复核仍保留，声明不替代证明。
+- **验证证据:** 五类缺陷均有定向回归，相关 gate/conditions 测试 **87 passed**；最终从第一道重跑
+  全仓四门为 **729 passed in 92.06s**、Ruff check 全绿、Ruff format **132 files already formatted**、
+  Black **120 files unchanged**。`git diff --check` 通过；逐字节检查本轮所有变更文件无混合行尾。
+  review 发现补 Markdown 时同样会在 CRLF 文件插入 LF，故把 `.gitattributes` 从 Python 扩到 Markdown，
+  并将本轮修改的三份公开文档和内部 PRD 统一为 LF，避免同类缺陷换一个扩展名复发。
+- **零成本实机配置复验:** 当前桌面 `.env` + billing evidence v2 的 preflight 再次 **14/14 PASS**；
+  当前代码生成的 plan 为 144 primary + 48 disabled reserve，canonical plan 载入成功；新 state `--dry-run`
+  为 **144 待执行 / 0/144 completed / 0 usable / 24 primary / 0 invalid**。全部准备产物在忽略目录，未调用
+  Provider、未启动正式 Run。
+- **剩余状态:** READY FOR COMMIT / PR — 提交并推送修复分支，创建未合并 PR；正式 controls、手机同步与
+  Phase 0.5b 重跑仍不得开始，merge 也等待作者另行授权。
+
+### 2026-08-15 14:09 AEST · Step 113 · 开跑前修复提交与推送前范围审计
+
+- **提交:** 五类 fail-closed 修复、回归测试、Runbook/CONCEPTS/DEVLOG 与 Markdown 行尾保护已提交为
+  `02a1eda`（`fix: harden phase 0.5b pre-run gates`），位于独立分支
+  `fix/phase05b-pre-run-review`；没有直接提交到受保护的 `master`。
+- **范围审计:** 提交精确包含 15 个预期受跟踪文件，`495 insertions / 49 deletions`；内部 `PRD.md`
+  已同步设计理由但继续被 ignore。作者原有未跟踪的 `docs/PHASE0_5_UTILITY_BASELINE.json` 与
+  `docs/RELATED_WORK.md` 未暂存、未修改。提交不含 `.env`、API key、SQLite、state、preflight、trace、
+  Finding 或其他 `runs/` 产物。
+- **合并权限:** 作者本轮只要求 review 与修复，没有明确授权 merge。下一步推送分支并创建 ready PR；
+  即使 PR 可合并也必须停在未合并状态，正式 Provider 重跑同样继续等待单独命令。
+- **剩余状态:** COMMITTED / PUSH + PR TODO / DO NOT MERGE / FORMAL RERUN NOT STARTED。
+
+### 2026-08-15 14:11 AEST · Step 114 · PR #47 创建并停在未合并边界
+
+- **远端结果:** 分支已推送到 origin，ready PR
+  [#47](https://github.com/Sumire-no-kai/RedCell/pull/47) 已创建；base=`master`、
+  head=`fix/phase05b-pre-run-review`，创建时 head=`7391b8c`，状态 `OPEN / CLEAN / MERGEABLE`。
+  远端没有配置 status checks，故只记录 `no checks reported`，不把它写成 CI 通过；合并依据仍是
+  Step 112 的本地 729 tests、四道格式门、14/14 preflight 与 144-cell dry-run。
+- **PR 讲解:** 描述已按核心协议要求说明“plan 是可执行合同”“历史 invalid 与未补位是两种状态”以及
+  “同名 abandonment 的两种可靠性语义”，并列出未采用的 plan/state 新 digest 与新 event enum 方案、
+  取舍理由、RedCell 中的职责、面试追问和局限。
+- **停止边界:** 本轮没有 merge 授权，所以 PR 保持未合并；没有同步手机、没有获取 wake lock、没有运行
+  付费 controls 或 144-cell 正式矩阵。需要作者另行明确授权 merge；合并并重新同步/复验手机后，正式
+  Provider 启动仍需要单独命令。
+- **剩余状态:** PR #47 OPEN / READY FOR REVIEW / DO NOT MERGE / FORMAL RERUN NOT STARTED。
+
+### 2026-08-15 14:20 AEST · Step 115 · PR #47 候选版本完成 Termux 末次零成本验收
+
+- **更新方式与边界:** 作者要求末次检查手机并在需要时更新。由于 PR #47 尚未获得合并授权，Termux
+  没有伪装成已同步主干，也没有改写手机 `master`；只从 origin 获取该 PR 分支，并以 detached HEAD
+  精确检出候选提交 `5303cb4` 做零成本实机验收。手机原有未跟踪
+  `docs/PHASE0_5_UTILITY_BASELINE.json` 保留，`.env` 内容和 API key 未读取、未打印或经过 Git。
+- **手机四道门:** Python 3.14.6 环境下全量 **729 passed in 119.25s**；Ruff check 全绿；Ruff format
+  为 **131 files already formatted**；Black 为 **120 files unchanged**；补跑 `git diff --check` 通过。
+  第一次串联命令只因旧 tmux shell 的 `PATH` 未包含 Termux `git` 而停在最后一步，定位后恢复
+  `/data/data/com.termux/files/usr/bin` 并单独补跑成功；这不是代码或格式失败。
+- **零成本 Gate 证据:** 使用手机私有现有 billing evidence 与配置，preflight **14/14 PASS**；三个参与
+  角色均声明 usage 覆盖全部计费 Token，billing digest 前缀为 `393185f3d8ee`；正式专用
+  `sqlite:///runs/phase-0-5b.db` 被确认为空。当前候选代码重建的 canonical plan 为 **144 primary +
+  48 disabled reserve**，新 state dry-run 为 **0/144 completed、0 usable / 24 primary / 0 invalid**。
+  preflight、plan、state 位于手机忽略目录 `runs/phase0-5b-pr47-ready-2026-08-15/`，SHA-256 分别为
+  `8ee37d90…bbfd`、`169ce1aa…073f`、`f51530cc…70371`；没有调用 Provider。
+- **设备持续运行状态:** ADB 设备在线，USB 供电、100% 电量、屏幕处于 Awake，`/data` 尚余 **9.1 GB**；
+  已通过 Termux 前台请求 `termux:service-wakelock`，系统确认 PARTIAL_WAKE_LOCK 由 Termux 进程持有。
+  `phase05-gate` 与 `phase05-verify` 两个 tmux shell 均存活且空闲，没有遗留 `run_gate_matrix.py` 或
+  `gate-run` 进程。唤醒锁用于避免锁屏/省电策略中断长跑，不代表正式测试已经开始。
+- **结论与停止边界:** PR #47 的**候选提交**已经通过手机末次零成本验收；但正式矩阵应运行可追溯的
+  已合并主干，而不是长期停留在 detached PR 提交。故当前还差作者明确授权合并 PR #47、手机切回并
+  fast-forward 到合并后的 `master`，再核对一次提交与 preflight/dry-run 身份。此后仍需作者另行明确下达
+  正式 Provider 重跑命令。当前没有运行付费 controls、replay 或 144-cell 矩阵。
+- **剩余状态:** PHONE CANDIDATE VERIFIED / PR #47 OPEN / MERGE NOT AUTHORIZED /
+  FORMAL RERUN NOT STARTED。
+
+### 2026-08-15 14:23 AEST · Step 116 · 手机准备证据回收与 PR 头对齐
+
+- **证据同步:** 将 Step 115 的 preflight、canonical plan、dry-run state 三份非敏感 JSON 同步到桌面
+  忽略目录 `runs/phase0-5b-pr47-ready-2026-08-15/`；桌面 SHA-256 与手机原件逐项一致，仍为
+  `8ee37d90…bbfd`、`169ce1aa…073f`、`f51530cc…70371`。没有复制 `.env`、API key、billing evidence、
+  SQLite、trace 或 Finding。手机共享存储中只为 ADB 传输创建的三个明确命名临时副本已删除并确认
+  不存在；Termux 私有目录原件与桌面证据保留。
+- **版本对齐:** Step 115 的验收日志作为 `d544361` 推到现有 PR #47 后，手机 detached HEAD 已同步到
+  `d544361`，原有未跟踪 utility baseline 仍在。PR 复核为 `OPEN / CLEAN / MERGEABLE`，无远端 status
+  checks；这表示 GitHub 未配置检查，不把它冒充为 CI 通过。手机测试针对的代码树与该提交相同，新增
+  内容只有验收日志，故没有重复运行 729 项测试。
+- **最终边界:** Termux wake lock 继续有效，手机没有正式 runner；PR 没有合并，Provider 没有调用。
+  下一步仍是作者明确授权合并后切回最新 `master`，随后等待单独的正式重跑命令。
+- **剩余状态:** EVIDENCE SYNCED / PR #47 OPEN / PHONE READY / FORMAL RERUN NOT STARTED。
+
 ---
 
 ## 2026-08-14 · Phase 0.5 正式 Gate 开跑前联网核验与零成本准备

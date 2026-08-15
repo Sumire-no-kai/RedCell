@@ -39,7 +39,7 @@ from redcell.gate_billing_evidence import (
     ProviderBillingEvidence,
     billing_subject_fingerprint,
 )
-from redcell.gate_report import GateVerdict, build_gate_report
+from redcell.gate_report import GateVerdict, _run_reliability_failures, build_gate_report
 from redcell.gate_runner import CellRecord, CellStatus, MatrixState
 from redcell.golden import evaluate_golden
 from redcell.protocols import (
@@ -429,6 +429,80 @@ def test_prefix_cost_includes_usage_that_did_not_form_an_attempt() -> None:
 
     assert prefix.committed_tokens == 150000
     assert prefix.selections_by_strategy == {run.strategy_ids[0]: 1}
+
+
+def test_budget_boundary_selection_does_not_extend_a_selection_failure_streak() -> None:
+    run = _formal_run(0, GateCondition.LLM_MEMORY)
+    prefix = _formal_prefixes(run, [320000])[0]
+    selection_failure = RunEvent(
+        run_id=run.id,
+        event_type=RunEventType.SELECTION_ABANDONED,
+        sequence=0,
+        payload={"selection_abandonment": {"failure": "invalid selection"}},
+    )
+    budget_boundary = RunEvent(
+        run_id=run.id,
+        event_type=RunEventType.SELECTION_ABANDONED,
+        sequence=1,
+        payload={
+            "decision": {"selected_strategy_id": run.strategy_ids[0]},
+            "stopped_by": BudgetLimit.TOKENS.value,
+        },
+    )
+
+    class EventStore:
+        def __init__(self, events: list[RunEvent]) -> None:
+            self.events = events
+
+        def events_for(self, _run_id: str) -> list[RunEvent]:
+            return self.events
+
+        def attempts_for(self, _run_id: str) -> list:
+            return []
+
+    boundary_failures = _run_reliability_failures(  # type: ignore[arg-type]
+        EventStore([selection_failure, budget_boundary]), [run], [prefix]
+    )
+    actual_failures = _run_reliability_failures(  # type: ignore[arg-type]
+        EventStore(
+            [
+                selection_failure,
+                selection_failure.model_copy(update={"sequence": 1}),
+            ]
+        ),
+        [run],
+        [prefix],
+    )
+    malformed_failures = _run_reliability_failures(  # type: ignore[arg-type]
+        EventStore(
+            [
+                RunEvent(
+                    run_id=run.id,
+                    event_type=RunEventType.SELECTION_ABANDONED,
+                    sequence=0,
+                    payload={},
+                )
+            ]
+        ),
+        [run],
+        [prefix],
+    )
+    inconsistent_boundary_failures = _run_reliability_failures(  # type: ignore[arg-type]
+        EventStore(
+            [
+                budget_boundary.model_copy(
+                    update={"payload": {**budget_boundary.payload, "stopped_by": "attempts"}}
+                )
+            ]
+        ),
+        [run],
+        [prefix],
+    )
+
+    assert f"consecutive_selection_abandonment:{run.id}" not in boundary_failures
+    assert f"consecutive_selection_abandonment:{run.id}" in actual_failures
+    assert f"selection_abandonment_event_invalid:{run.id}" in malformed_failures
+    assert f"selection_abandonment_event_invalid:{run.id}" in inconsistent_boundary_failures
 
 
 def test_prefix_projection_fails_closed_when_a_usage_event_has_no_snapshot() -> None:
