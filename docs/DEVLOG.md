@@ -389,6 +389,135 @@
   手机宿主与新代码提交已重新对齐；正式开跑仍需墙充、稳定 Wi-Fi、wake lock 和单一 tmux runner，
   且是需要单独确认的付费动作。
 
+### 2026-08-14 22:50 AEST · Step 103 · 作者授权并在 Termux 前台启动正式 72-cell Gate
+
+- **授权与边界:** 作者明确要求“用命令直接开始测试”，因此本步首次启动会产生真实
+  Provider 调用与费用的正式 Gate seed。没有启用 reserve seed，没有改变冻结 plan/state，也没有
+  启动第二个 runner。
+- **开跑前现场复核:** ADB 设备为 `STF_AL00`；Termux 在前台且仓库位于
+  `/data/data/com.termux/files/home/RedCell`。手机 `master...origin/master` 干净，HEAD 为仅文档收尾后的
+  `cf66f69`（代码树与 Step 102 的已验证版本相同）；电量 100%、USB 供电、温度 32.0°C，
+  可用空间 9.1 GiB，Termux 在 device-idle 白名单，网络/DNS 零成本探测通过，开跑前未发现
+  `run_gate_matrix.py` 进程。未读取或打印任何 API key 值。
+- **计划与状态核对:** 对
+  `gate-plan-termux-97e34ca.json` + `gate-matrix-state-termux-97e34ca.json` 重跑同一 runner 的
+  `--dry-run`，仍为 **72 格待执行、0/72 completed、0 usable / 12 primary / 0 invalid**；这与 Step 102
+  的 14/14 preflight、四道工程门和新建空库证据一致。
+- **电源与可见执行:** 新建单一 tmux 会话 `phase05-gate`，把 history limit 提高到 200,000 行，
+  并将 Termux 前台客户端附着到该会话。首次在新 pane 内调用 `termux-wake-lock` 因 Android shell
+  环境返回 2；改由同一 Termux UID 直接调用后返回 0，并用 Android `Wake Locks: size=1` 确认已
+  持有，而不是只信命令退出码。
+- **正式执行证据:** `2026-08-14 22:50:08 AEST` 显示 `FORMAL_GATE_START_20260814`，随后主
+  `run_gate_matrix.py` 进程与首批 3 个子进程已存活；前台输出为 `=== 本批 3 格 ===`，
+  首批是同一 primary seed 的 `static-memory`、`static-off` 与 `llm-memory`，每格都使用冻结的
+  `budget=500` / `max_total_tokens=320000`。
+- **剩余状态:** `FORMAL MATRIX RUNNING / 0 OF 72 CELLS COMPLETED AT LAUNCH`。不把“进程已启动”写成
+  Gate 已通过；需继续监视逐格结果、电源/网络/空间和 fail-closed 状态。如出现 invalid block，必须先核定
+  失效类型并取得人工 reserve 授权，不得自动换 seed；72/72 后仍须运行 replay / `validate-paths`
+  与 `gate-report` 才能得出 `SUPPORTED` 或 `NOT SUPPORTED`。
+
+### 2026-08-15 10:32 AEST · Step 104 · 手机正式矩阵完成性只读复核
+
+- **终端与进程证据:** `phase05-gate` 会话保留完整收尾输出：
+  `cells 72/72 completed`、`blocks 12 usable / 12 primary / 0 invalid`、
+  `已有 12 个可用 block —— 可以进入 validate-paths`。主 runner 与子进程均已退出，不是还在无输出地挂起。
+- **独立落盘证据:** state JSON 实际包含 120 格：72 个 primary 全部为 `completed`，48 个 reserve
+  仍为 `pending`；`enabled_reserve_seeds=0`、`reserve_activations=0`。72 个完成格的退出码全为 1，在
+  `redcell run` 契约中表示“正常完成且有 Finding”，不是运行故障。正式 SQLite 库已增长至
+  106 MiB，逐格日志正好 72 份且零份为空。
+- **时间线:** 矩阵于 `2026-08-14 22:50:08 AEST` 开始，state 最终原子落盘于
+  `2026-08-15 07:21:57 AEST`，连续运行约 8 小时 32 分。原先的 32 小时是按更慢 Provider/上限停止做的
+  保守预算，不是必须占满的时长。
+- **显示问题说明:** 主 runner 将每格 stdout/stderr 写入独立日志，tmux 主窗只在一格结束后打印一行；
+  因此手机在单格运行期看似“没变化”是粗粒度 UI，不是本次未执行。已刷新当前 tmux 客户端显示。
+- **电源收尾:** 矩阵完成后执行 `termux-wake-unlock`，Android 复核为 `Wake Locks: size=0`；没有修改
+  正式数据、没有启用 reserve，也没有开始 replay / `validate-paths` / `gate-report`。
+- **剩余状态:** `FORMAL MATRIX COMPLETE / FINAL GATE VERDICT NOT YET COMPUTED`。下一阶段是对 Finding 做
+  路径重放复现，再用冻结基线、配对 bootstrap/permutation/Holm 规则生成 `gate-report`；在此之前不得
+  宣称 Phase 0.5 为 `SUPPORTED`。
+
+### 2026-08-15 10:45 AEST · Step 105 · 正式输出审计发现系统性证据缺口
+
+- **审计顺序:** 先在手机上重生成零 Provider 的 Level-1 golden（正 10/10、负 11/11），再传入
+  controls/adjudication、attacker/controller controls、billing evidence、seed plan 和 matrix state 生成不含 validation 的
+  预报告。手机原先缺少本地冻结的 `PHASE0_5_UTILITY_BASELINE.json`，导致一条假性
+  `utility_baseline_not_established`；已经过 `/data/local/tmp` 短暂中转至 Termux 私有目录，两端
+  SHA-256 均为 `2cd6b7d1…c31327`，权限 `0600`，中转副本已删除。重跑后 utility 假缺口消失。
+- **核心发现 ① —— retry usage 没有落在 event:** 72 个 Run 中有 24 个共出现 45 条
+  `retry_scheduled` event，其 payload 全部缺少 `usage`。`orchestrator._execute_with_retry`虽先把失败请求用量
+  记入 BudgetManager，也用新 usage 构造了 Run 副本，但 `_event` 不会自动从 Run 复制 usage，而
+  retry payload 又只写了 retry 次数、延迟与 failure。因此最终报告无法从不可变事件流重建当时总账，
+  按冻结的“重试/失败请求只要有 Provider usage 就必须计入；未知 Token 使 block 失效”规则判无效。
+- **影响:** 160k 主检查点只剩 4 个有效 seed；8 个 paired block（`40398366`、`648339790`、
+  `743452918`、`1035477995`、`1439037854`、`1734252927`、`1748747635`、`1878163433`）因至少一格
+  `TokenPrefix.valid=false` 整块退出。这与 matrix state 的 `72 completed / 0 invalid` 不矛盾：后者只证明子进程
+  与当时的简化逐格核验通过，而该核验没检查 event-level usage 完整性，未能当场 fail-closed。
+- **核心发现 ② —— 跨 Token 上限的 Controller 成功调用没有 decision:** 24 个 LLM Run 中有 10 个
+  各多出 1 条 `status=succeeded` 且 `usage=known` 的 Controller invocation，但没有任何持久化 decision 引用。
+  原因是成功 selection 计费后恰好越过 Token 上限，orchestrator 在 `budget.exhausted()` 处直接完成 Run，
+  而 `commit_decision_selected` 发生在该分支之后。这违反“100% 成功 LLM selection 可追溯至 invocation、
+  evidence digest、合法 Strategy、usage 与持久化 decision”保护线。当前 4 个有效 block 中有 3 个
+  Run 因此出现 `controller_audit:<run_id>`；全矩阵范围则是 10 个 LLM Run 受影响。
+- **fail-closed 复核:** 实际执行 `validate-paths --repeats 5`；它在加载 Target 之前因
+  `replay validation requires exactly 12 valid paired seed blocks` 以退出码 4 拒绝，未调用 Provider、
+  未产生 validation JSON。这证明 replay 入口没有用 matrix state 的表面 12/12 绕过事件级审计。
+- **当前报告:** 补齐 utility 基线后预报告仍为 `INCOMPLETE`，原因是 validation 在无效矩阵上根本不能生成。
+  其他前置中，golden、controls 三态裁决、utility、Static×off ASR 漂移（`55/394=13.96%`，单侧
+  95% 下界 `11.33%`）与漏洞类别 coverage 通过。尚存 controller audit、strategy coverage、
+  cost-per-path 保护失败与 `missing_validation`。
+- **只作诊断的 4-block 方向:** `LLM×memory` 对 Static / Random / Thompson 的 160k 平均路径差为
+  `-1.75 / -1.75 / -0.25`，三个 Holm 校正 p 值均为 1.0；Selector 主效应 `-3.0`，memory 主效应
+  `+1.25`但 CI 跨 0。Treatment 单路径 Token 约 `85,093`，最强对照 Static 约 `51,343`；4 个
+  treatment Run 只有 1 个通过 6/7 + 40% 策略 coverage。这些数据明显不利于完整配置，但 8 个
+  block 的删失与 retry 发生相关，可能非随机；因此不得把 4-block 结果升级为预注册的
+  `NOT_SUPPORTED`。
+- **恢复阻塞:** 当前 state 只在 child/runner 故障时把 block 标 invalid；它没有事后将“completed 但 event/audit
+  不合格”的 block 核定为 invalid 的命令，所以 reserve activation 仍会因 state 显示 0 invalid 而拒绝。
+  在启用 8 个冻结 reserve 前，必须先修复 retry event usage、Token 边界 decision 持久化、runner 的终局
+  event/controller 审计，并设计保留旧 state digest 的显式事后失效/补位记录。
+- **剩余状态:** `EXPERIMENT EVIDENCE INVALID / MACHINE VERDICT INCOMPLETE / HUMAN RECOVERY DECISION REQUIRED`。
+  这不是 Controller 效果的 `NOT_SUPPORTED`，也不能表述为 Phase 0.5 已完成。不自动修补原始事件、
+  不删除旧 Run、不在未修复系统性问题前启用 reserve。
+
+### 2026-08-15 10:48 AEST · Step 106 · 失效 block 并集复核与当前 Gate 最终裁定
+
+- **并集而非简单相加:** retry event usage 缺失影响 8 个 primary seed；Controller audit 缺口影响
+  9 个 primary seed，其中 6 个与 retry 问题重叠。两类完整性问题的 seed 并集是 **11/12**，
+  唯一同时通过 event usage 与 Controller audit 的 primary seed 为 `1004746553`。
+- **冻结 reserve 不足:** 预注册只有 8 个 reserve block。即使修复代码且 8 个 reserve 全部一次成功，
+  也只能将 1 个干净 primary 补到 9 个有效 block，达不到冻结的 12。在看到结果后追加 3 个 seed、
+  重跑已观察的 primary seed，或把缺失 usage 回填为 0，都违反本轮预注册与未知 Token
+  fail-closed 规则。因此**当前 Phase 0.5 Gate 在原冻结 seed plan 内已无法恢复为 12-block 有效实验**。
+- **保护线已不可支持:** 唯一干净 block 的 `LLM×memory` Run 虽覆盖 6/7 策略，但单一策略占比
+  `69.23%`，已超过每个有效 treatment Run 均必须满足的 40% 上限。这一观测不能被 reserve
+  替换，因为“结果不好看”不是合法失效原因。所以当前 Gate 既不具备有效的 12-block 证据，
+  也已没有达到 `SUPPORTED` 的合法路径。
+- **裁定语义:** 机器 JSON 因 `missing_validation` 的优先级显示 `INCOMPLETE`；但 validation 之所以缺失，
+  是因为它正确地拒绝了不足 12 个有效 block 的矩阵。从冻结的完整性/未知 Token/审计规则看，
+  本轮研究裁定应记为 **`EXPERIMENT_INVALID`（不是 `NOT_SUPPORTED`）**。必须保留机器原值与这条
+  因果说明，不得手改 JSON 伪造一个新 verdict。
+- **后续两条合法路径:** (A) 停止，保留本轮为“实验基础设施失效，无效果结论”；
+  (B) 先修复两个落盘缺陷、逐格终局审计与机器 verdict 优先级，升协议/实验版本，在不读新
+  运行结果的前提下新建、冻结一份 seed plan，作为独立 Phase 0.5b 全矩阵重跑。旧 72 Run、
+  state、数据库、预报告和失败的 validation 命令证据全部保留，不与新实验混库。
+- **剩余状态:** `PHASE 0.5 FORMAL GATE = EXPERIMENT_INVALID`。待作者决定是停在无效实验结论，
+  还是授权修复并建立全新的 Phase 0.5b 预注册。
+
+### 2026-08-15 10:51 AEST · Step 107 · 证据备份、日志提交与文档分支四道门
+
+- **本地备份:** 手机正式 SQLite 通过 ADB `exec-out` 二进制流复制到 gitignored
+  `runs/phase0-5-phone-2026-08-15/phase-0-5.db`；两端大小 110,530,560 bytes，SHA-256 均为
+  `3afc642e1f5da892d09e9e8a9620052c81fbc29c024f8fc22f79ffa9edc56bd7`。另复制 billing/controls/
+  adjudication/preflight/plan/state/golden/两份预报告到同一忽略目录；plan、state、golden 和最终
+  预报告的手机/电脑摘要逐项一致。没有复制 `.env`、API key、虚拟环境或缓存。
+- **日志提交:** `docs/phase-0-5-gate-start` 分支先以 `3c95cfb` 记录正式启动/完成，再以
+  `d875c9b` 记录完整性失效、机器/human verdict 边界与不可在原 seed plan 内恢复的原因。
+  两份作者既有未跟踪文档仍未暂存。
+- **合并前工程门:** 全量 `pytest -p no:cacheprovider` 为 **708 passed in 46.14s**；Ruff check 通过，
+  Ruff format 为 131 files already formatted，Black 为 119 files unchanged。本步没有 Provider 调用。
+- **剩余状态:** DOCUMENTATION READY FOR PUSH / PR。代码修复与 Phase 0.5b 是另一个需要作者授权的
+  核心协议任务，不与本步的实验裁定文档混在一个 PR。
+
 ---
 
 ## 2026-08-13 · Phase 0.5 Gate 合并后深度代码审阅
