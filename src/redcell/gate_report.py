@@ -55,6 +55,7 @@ from redcell.protocols.run import (
     ExperimentConditions,
     ProviderRunConfiguration,
     Run,
+    RunEvent,
     RunEventType,
 )
 from redcell.search import ControllerDecisionOutcome
@@ -680,14 +681,42 @@ def _run_reliability_failures(
         consecutive = 0
         maximum = 0
         for event in sorted(store.events_for(run.id), key=lambda item: item.sequence):
-            if event.event_type is RunEventType.SELECTION_ABANDONED:
+            if _is_failed_selection_event(event):
                 consecutive += 1
                 maximum = max(maximum, consecutive)
+            elif event.event_type is RunEventType.SELECTION_ABANDONED:
+                if not _is_budget_boundary_selection_event(event, run.stopped_by):
+                    failures.append(f"selection_abandonment_event_invalid:{run.id}")
+                consecutive = 0
             elif event.event_type is RunEventType.DECISION_SELECTED:
                 consecutive = 0
         if maximum >= 2:
             failures.append(f"consecutive_selection_abandonment:{run.id}")
     return failures
+
+
+def _is_failed_selection_event(event: RunEvent) -> bool:
+    """Separate Controller selection failure from a selected decision stopped by budget.
+
+    Both are persisted as ``selection_abandoned`` for backwards compatibility. Only the
+    former carries ``selection_abandonment`` and belongs in the reliability failure streak;
+    the latter carries a valid ``decision`` and is a successful selection whose attempt was
+    intentionally not started after the Token boundary.
+    """
+    return event.event_type is RunEventType.SELECTION_ABANDONED and isinstance(
+        event.payload.get("selection_abandonment"), dict
+    )
+
+
+def _is_budget_boundary_selection_event(event: RunEvent, expected_stop: BudgetLimit | None) -> bool:
+    decision = event.payload.get("decision")
+    return (
+        event.event_type is RunEventType.SELECTION_ABANDONED
+        and isinstance(decision, dict)
+        and isinstance(decision.get("selected_strategy_id"), str)
+        and expected_stop is not None
+        and event.payload.get("stopped_by") == expected_stop.value
+    )
 
 
 def _asr_drift(prefixes_320: list[TokenPrefix]) -> AsrDriftResult | None:

@@ -1,6 +1,6 @@
 """开跑前的零成本环境自检 —— 不调用任何 Provider。
 
-Runbook §4 之后的每一步都要花钱:controls 消耗配额,72 个正式 cell 是一天量级的
+Runbook §4 之后的每一步都要花钱:controls 消耗配额,正式矩阵是小时级长作业,
 连续外部调用。而此刻**能确定性判定的失败原因几乎全是配置**:少填一个价格、
 Controller 连接没建、沿用了开发数据库。让这些错误在第一次付费调用**之前**暴露,
 是本模块存在的唯一理由。
@@ -208,7 +208,7 @@ def _golden_check(fixtures: Path) -> PreflightCheck:
 def _database_check(database_url: str) -> PreflightCheck:
     """正式矩阵必须写进一个专属且当前为空的库。
 
-    不是洁癖:Gate 要求 72 个 cell 恰好各出现一次,而重复或残留的 Run 会让
+    不是洁癖:Gate 要求 plan 中每个 cell 恰好各出现一次,而重复或残留的 Run 会让
     「这个 seed×condition 到底跑过几次」失去唯一答案。
     """
     for marker in DEVELOPMENT_DATABASE_MARKERS:

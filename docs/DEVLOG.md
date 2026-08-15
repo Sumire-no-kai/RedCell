@@ -170,6 +170,51 @@ n=5 是同一个毛病:**判据定了,却没人算过样本量能不能支撑它
   变更、成本/工期与执行方式并再次明确下令后，才在 Termux 前台获取 wake lock、跑付费 controls，
   随后启动 144-cell 正式矩阵。
 
+### 2026-08-15 14:00 AEST · Step 112 · 正式重跑前从零 Code Review 与五类 fail-closed 修复
+
+- **范围与边界:** 作者要求在正式重跑前忘掉实现历史、重新挑刺，并授权发现问题后直接修复。本轮在
+  `fix/phase05b-pre-run-review` 分支进行；只执行代码/合成 state/既有准备产物的零成本检查，没有调用
+  Target、Attacker 或 Controller Provider，没有启动 controls、replay 或正式 seed。作者本次没有授权
+  合并，因此最多创建 PR，不能自行 merge。
+- **发现 ① — 进度提前一半宣告完成:** `progress_summary` 仍写死 `len(usable) >= 12`。0.5b 需要
+  24 个有效 paired block，所以 72/144 cell 时会错误打印“可以进入 validate-paths”。validator 最终仍会
+  拒绝，但操作者可能据此提前停止长跑。修为从已加载 plan 的 primary seed 数动态求门槛；新增 12/24
+  不得就绪、24/24 才就绪的回归，同时保留已归档 0.5 的 12-block 兼容。
+- **发现 ② — 新旧实验日志混目录:** matrix 脚本的 `--log-dir` 默认仍写死
+  `runs/phase-0-5/logs`，Runbook 又没有显式传该参数；0.5b 数据库/报告虽已隔离，逐格日志却会落入失效
+  0.5 的目录。修为默认从 `GatePlan.report_directory/logs` 推导，显式覆盖仍保留，并同时测试 0.5 与
+  0.5b。选择动态派生而不是把默认硬改成 `phase-0-5b`，因为前者不会反过来破坏历史计划。
+- **发现 ③ — 同名事件混算可靠性:** `SELECTION_ABANDONED` 同时承载“Controller 经过 repair 仍选不出
+  合法策略”和“已成功选择、但该次付费调用耗尽预算，故不再启动 attempt”。最终 report 过去按 event
+  type 一概计入连续失败；若真实失败后紧接 Token 边界 decision，会虚构第二次失败并使有效 Run 作废。
+  修为按既有 payload 判别：只有 `selection_abandonment` 进入失败 streak；携带合法 `decision + stopped_by`
+  的预算边界事件重置 streak；两种形状都不满足则新增完整性失败，避免宽松兼容变成 fail-open。没有新增
+  enum/协议版本，因为当前事件已可无歧义判别，临开跑再迁移 schema 的风险高于收益。
+- **发现 ④ — reserve 补位成功后 runner 永久失败:** runner 终局只要历史上存在 invalid block 就返回 1，
+  即使该 block 已经人工裁决、启用 reserve 并完成补位；摘要也继续提示“需判断是否补位”。但 invalid
+  是必须永久保留的审计事实，不能等同于“尚未处理”。新增纯函数计算
+  `active invalid - reserve activations`：历史失效仍显示，只有未补偿失效阻塞；若 reserve 自身再失效，
+  计数重新变为 1 并要求下一块补位。
+- **发现 ⑤ — plan 与 coverage 只在外围门检查:** `GatePlan.model_validate_json` 原先只做字段类型校验，
+  未重算 frozen seed、六条件次序、cell 数或 argv；文件传输/手改造成 seed、Token 或 treatment 漂移时，
+  runner 最早要等付费跑完一格才拒绝。现由 schema 依据登记 digest 重建 canonical matrix，逐项校验
+  seed allocation、144/48 形状、treatment、预算、DB/输出 argv 与 reserve 开关。采用现有 schema 内
+  canonical 校验，而不是给 plan/state 新增 digest 和迁移版本，避免破坏 0.5 归档 state。另将作者已冻结的
+  usage-coverage 规则放入在线 `ExperimentConditions.require_phase_0_5`：Target/Attacker/LLM Controller
+  任一角色没有显式 `True` 都在首次 Provider 调用前拒绝；preflight 的独立 billing evidence 与最终 report
+  复核仍保留，声明不替代证明。
+- **验证证据:** 五类缺陷均有定向回归，相关 gate/conditions 测试 **87 passed**；最终从第一道重跑
+  全仓四门为 **729 passed in 92.06s**、Ruff check 全绿、Ruff format **132 files already formatted**、
+  Black **120 files unchanged**。`git diff --check` 通过；逐字节检查本轮所有变更文件无混合行尾。
+  review 发现补 Markdown 时同样会在 CRLF 文件插入 LF，故把 `.gitattributes` 从 Python 扩到 Markdown，
+  并将本轮修改的三份公开文档和内部 PRD 统一为 LF，避免同类缺陷换一个扩展名复发。
+- **零成本实机配置复验:** 当前桌面 `.env` + billing evidence v2 的 preflight 再次 **14/14 PASS**；
+  当前代码生成的 plan 为 144 primary + 48 disabled reserve，canonical plan 载入成功；新 state `--dry-run`
+  为 **144 待执行 / 0/144 completed / 0 usable / 24 primary / 0 invalid**。全部准备产物在忽略目录，未调用
+  Provider、未启动正式 Run。
+- **剩余状态:** READY FOR COMMIT / PR — 提交并推送修复分支，创建未合并 PR；正式 controls、手机同步与
+  Phase 0.5b 重跑仍不得开始，merge 也等待作者另行授权。
+
 ---
 
 ## 2026-08-14 · Phase 0.5 正式 Gate 开跑前联网核验与零成本准备

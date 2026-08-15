@@ -6,7 +6,12 @@ import sys
 from pathlib import Path
 
 import pytest
-from scripts.run_gate_matrix import _command_for, _exclusive_state_lock, _save
+from scripts.run_gate_matrix import (
+    _command_for,
+    _exclusive_state_lock,
+    _resolve_log_directory,
+    _save,
+)
 
 from redcell.gate_analysis import GateCondition, SeedPlan
 from redcell.gate_plan import SeedRole, build_gate_plan
@@ -21,6 +26,7 @@ from redcell.gate_runner import (
     progress_summary,
     record_dispatch,
     require_matching_state,
+    uncompensated_invalid_block_count,
     verify_cell_run,
 )
 from redcell.gate_runner import (
@@ -29,6 +35,9 @@ from redcell.gate_runner import (
 
 FROZEN_PLAN = SeedPlan.model_validate_json(
     (Path(__file__).parents[1] / "docs" / "PHASE0_5_SEED_PLAN.json").read_text(encoding="utf-8")
+)
+FROZEN_PLAN_B = SeedPlan.model_validate_json(
+    (Path(__file__).parents[1] / "docs" / "PHASE0_5B_SEED_PLAN.json").read_text(encoding="utf-8")
 )
 
 
@@ -40,6 +49,16 @@ def _plan(**updates):
     }
     payload.update(updates)
     return build_gate_plan(FROZEN_PLAN, **payload)
+
+
+def _plan_b(**updates):
+    payload = {
+        "max_attempts": 500,
+        "database_url": "sqlite:///runs/phase-0-5b.db",
+        "report_directory": "runs/phase-0-5b",
+    }
+    payload.update(updates)
+    return build_gate_plan(FROZEN_PLAN_B, **payload)
 
 
 def test_matrix_dry_run_survives_legacy_windows_output_encoding(tmp_path) -> None:
@@ -112,6 +131,12 @@ def test_matrix_script_invokes_the_redcell_cli_module() -> None:
 
     assert argv[1:4] == ["-m", "redcell.cli", "run"]
     assert argv[4:] == cell.argv[2:]
+
+
+def test_matrix_logs_default_to_the_loaded_plans_report_directory() -> None:
+    assert _resolve_log_directory(None, _plan()) == Path("runs/phase-0-5/logs")
+    assert _resolve_log_directory(None, _plan_b()) == Path("runs/phase-0-5b/logs")
+    assert _resolve_log_directory(Path("custom/logs"), _plan_b()) == Path("custom/logs")
 
 
 def test_only_primary_cells_are_dispatched_before_a_reserve_is_enabled() -> None:
@@ -245,6 +270,30 @@ def test_reserve_activation_records_reason_and_prior_state_digest() -> None:
     assert activated.reserve_activations[0].reason is ReserveInvalidationReason.INFRASTRUCTURE
     assert activated.reserve_activations[0].summary == "provider outage reviewed"
     assert activated.reserve_activations[0].state_digest_before == before
+
+
+def test_completed_reserve_compensates_invalid_block_without_erasing_its_evidence() -> None:
+    plan = _plan()
+    primary_seed = next(cell.seed for cell in plan.cells if cell.seed_role is SeedRole.PRIMARY)
+    reserve_seed = next(cell.seed for cell in plan.cells if cell.seed_role is SeedRole.RESERVE)
+    activated = enable_reserve_block(
+        _fail_block(initial_state(plan), primary_seed),
+        reserve_seed,
+        reason=ReserveInvalidationReason.INFRASTRUCTURE,
+        summary="provider outage reviewed",
+    )
+
+    assert uncompensated_invalid_block_count(activated) == 0
+    failed_replacement = _fail_block(activated, reserve_seed)
+    assert uncompensated_invalid_block_count(failed_replacement) == 1
+
+    state = _complete_block(activated, reserve_seed)
+    summary = progress_summary(plan, state)
+
+    assert state.block(primary_seed).invalid
+    assert uncompensated_invalid_block_count(state) == 0
+    assert "已显式启用 reserve 补位" in summary
+    assert "需人工判断是否补位" not in summary
 
 
 def test_a_normal_run_with_findings_keeps_its_block_usable() -> None:
@@ -450,6 +499,29 @@ def test_twelve_usable_blocks_are_reported_as_ready_for_replay() -> None:
     assert "72/72 completed" in summary
 
 
+def test_phase_0_5b_requires_all_twenty_four_blocks_before_replay() -> None:
+    plan = _plan_b()
+    state = initial_state(plan)
+    for seed in FROZEN_PLAN_B.primary[:12]:
+        state = _complete_block(state, seed)
+
+    halfway = progress_summary(plan, state)
+
+    assert len(state.usable_blocks) == 12
+    assert "可以进入 validate-paths" not in halfway
+    assert "72/144 completed" in halfway
+
+    for seed in FROZEN_PLAN_B.primary[12:]:
+        state = _complete_block(state, seed)
+
+    complete = progress_summary(plan, state)
+
+    assert len(state.usable_blocks) == 24
+    assert "可用 block 已达 24/24" in complete
+    assert "可以进入 validate-paths" in complete
+    assert "144/144 completed" in complete
+
+
 # ── 逐格核验 ─────────────────────────────────────────────────────────────
 
 
@@ -560,7 +632,7 @@ def test_a_run_stopped_by_something_other_than_tokens_is_refused() -> None:
     """⭐ 退出码看不出"耗尽的是哪一项"。
 
     墙钟或 attempt 上限停下的 Run 同样 exit 0/1,却到不了 320k 前缀 ——
-    不当场拦下,它会一路装成 usable 直到约 32 小时后的 gate-report。
+    不当场拦下,它会一路装成 usable 直到整场长跑结束后的 gate-report。
     """
     from redcell.budget import BudgetLimit
 

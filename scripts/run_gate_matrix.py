@@ -1,11 +1,11 @@
-"""执行 Phase 0.5 的 72-cell 矩阵 —— 薄执行壳,调度规则在 `redcell.gate_runner`。
+"""执行已注册 Gate 矩阵 —— 薄执行壳,调度规则在 `redcell.gate_runner`。
 
     python scripts/run_gate_matrix.py --plan runs/gate-plan.json --state runs/gate-matrix-state.json
     python scripts/run_gate_matrix.py ... --dry-run          # 只打印将要执行什么
     python scripts/run_gate_matrix.py ... --enable-reserve <seed>
 
-约 72 个长 Run；Target 自限并发从 3 降为 2 后预计 32 小时以上，
-所以**必须可中断续跑**：每格结束立即落 state，重启后已完成的格子不再派发。
+正式计划包含很多个长 Run，所以**必须可中断续跑**：每格结束立即落 state，重启后
+已完成的格子不再派发。实际格数与运行时间以所加载的版本化 plan / runbook 为准。
 
 ⚠️ **本脚本不做判断,只做执行。** 一个 cell 失败之后要不要启用备用 block、
 那次失效是不是"允许补位"的类型(基础设施 / 未知 Token / 可靠性 / 完整性),
@@ -41,6 +41,7 @@ from redcell.gate_runner import (
     record_dispatch,
     record_outcome,
     require_matching_state,
+    uncompensated_invalid_block_count,
     verify_cell_run,
 )
 from redcell.storage import RunStore
@@ -179,12 +180,22 @@ def _inherited_env() -> dict[str, str]:
     return dict(os.environ)
 
 
+def _resolve_log_directory(requested: Path | None, plan: GatePlan) -> Path:
+    """Keep per-cell logs beside the plan's other run artifacts unless explicitly overridden."""
+    return requested if requested is not None else Path(plan.report_directory) / "logs"
+
+
 def main() -> int:
     ensure_utf8_output()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", type=Path, required=True)
     parser.add_argument("--state", type=Path, default=Path("runs/gate-matrix-state.json"))
-    parser.add_argument("--log-dir", type=Path, default=Path("runs/phase-0-5/logs"))
+    parser.add_argument(
+        "--log-dir",
+        type=Path,
+        default=None,
+        help="逐格日志目录；默认使用 <plan.report_directory>/logs",
+    )
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     parser.add_argument("--dry-run", action="store_true", help="只打印将要执行的格子")
     parser.add_argument(
@@ -221,6 +232,7 @@ def _run_matrix(args: argparse.Namespace) -> int:
 
     try:
         plan = GatePlan.model_validate_json(args.plan.read_text(encoding="utf-8"))
+        log_directory = _resolve_log_directory(args.log_dir, plan)
         state = _load_state(args.state, plan)
         if args.enable_reserve and (
             args.reserve_reason is None or not args.reserve_summary.strip()
@@ -276,7 +288,7 @@ def _run_matrix(args: argparse.Namespace) -> int:
                 pool.map(
                     lambda cell, run_ids=dispatched_ids: _run_cell(
                         cell,
-                        args.log_dir,
+                        log_directory,
                         run_ids[(cell.seed, cell.condition)],
                     ),
                     batch,
@@ -321,10 +333,11 @@ def _run_matrix(args: argparse.Namespace) -> int:
         print()
 
     print(progress_summary(plan, state))
-    invalid = [view for view in state.blocks() if view.invalid]
-    if invalid:
+    outstanding_invalid = uncompensated_invalid_block_count(state)
+    if outstanding_invalid:
         print()
-        print("⚠️ 有 block 失效。先看日志判断失效类型,再决定是否 --enable-reserve;")
+        print(f"⚠️ 尚有 {outstanding_invalid} 个 block 未补位。先看日志判断失效类型,")
+        print("   再决定是否 --enable-reserve;")
         print("   不得因为 Finding 结果不好看而换 seed。")
         return 1
     return 0

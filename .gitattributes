@@ -1,2 +1,4 @@
 # Keep Python formatter input deterministic across Windows and POSIX checkouts.
+.gitattributes text eol=lf
 *.py text eol=lf
+*.md text eol=lf

@@ -30,7 +30,7 @@ class ValidationEvidence:
 
 
 def select_validation_evidence(store: RunStore, seed_plan: SeedPlan) -> ValidationEvidence:
-    """Select the 320k paths from the same twelve valid paired blocks as the Gate."""
+    """Select 320k paths from every valid paired block required by the frozen seed plan."""
     require_frozen_seed_plan(seed_plan)
     runs = [run for run in store.list_runs() if _is_phase_0_5_run(run)]
     prefixes: list[TokenPrefix] = []
