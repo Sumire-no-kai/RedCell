@@ -359,6 +359,19 @@ n=5 是同一个毛病:**判据定了,却没人算过样本量能不能支撑它
 - **剩余状态:** CONTROLLER PASS / ATTACKER PASS / TARGET RAW PASS / **UTILITY FAILED** /
   MATRIX 0/144 NOT STARTED。下一步应先分析并决定 utility 保护线失败的处置，不能静默继续正式 seed。
 
+### 2026-08-15 15:38 AEST · Step 120 · PR #48 获授权合并并同步手机审计身份
+
+- **作者授权与合并:** 作者在确认 controls 已运行、矩阵未运行后明确授权合并当前日志 PR。PR #48 合并前
+  head=`1df8b99`、状态 `OPEN / CLEAN / MERGEABLE`，随后以 merge commit `0312cab` 合入 `master` 并
+  删除完成分支。GitHub 最终显示 `MERGED`；桌面 `master` 与 `origin/master` 精确对齐该提交。
+- **手机同步:** Termux 在没有正式 runner 的空闲状态下从 `b72f925` fast-forward 到
+  `master=0312cab`；只有 `docs/DEVLOG.md` 变化，测试代码、冻结基线、controls、plan、state 与正式数据库
+  均未修改。手机原有未跟踪 utility baseline 保留，矩阵仍为 0/144。
+- **权限与结论边界:** 本次授权只用于 PR #48；它没有授权把后续纯日志 PR 自动合并，也没有改变
+  `utility_failed` 的裁定。合并审计记录不能把 137/200 变成通过，正式矩阵继续保持未启动。
+- **剩余状态:** PR #48 MERGED / DESKTOP + PHONE MASTER `0312cab` / UTILITY BLOCKED /
+  MATRIX 0/144 NOT STARTED。
+
 ---
 
 ## 2026-08-14 · Phase 0.5 正式 Gate 开跑前联网核验与零成本准备
