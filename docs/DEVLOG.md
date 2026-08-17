@@ -5,11 +5,123 @@
 
 ---
 
+## 2026-08-17 · 开跑前零成本复验:装置就绪,矩阵仍不该启动
+
+### 2026-08-17 · Step 126 · 四道门 / 14 道 preflight / 0-of-144 dry-run 全绿,但两件事仍挡在前面
+
+**本轮只做零成本复验:没有调用任何 Provider,没有写入正式数据库,矩阵仍是 `0/144`。**
+距上次记录隔了两天,先确认「这两天代码没坏」,再回答「现在能不能开跑」——这是两个问题,
+第一个通过**不蕴含**第二个。
+
+#### 装置这一侧:全绿
+
+| 门 | 结果 |
+|---|---|
+| pytest | **733 passed** |
+| ruff check | 全绿(ruff 0.16.1) |
+| ruff format --check | 132 files already formatted |
+| black --check | 120 files unchanged |
+| `gate-preflight` | **14/14 PASS**;billing digest 前缀仍 `393185f3d8ee`,`runs/phase-0-5b.db` 仍为空 |
+| `gate-plan` | **144 primary + 48 disabled reserve** |
+| `run_gate_matrix --dry-run` | **0/144 completed、0 usable / 24 primary / 0 invalid** |
+
+产物写在忽略目录 `runs/phase0-5b-readiness-2026-08-17/`,与历史准备产物分开,没有覆盖任何既有证据。
+
+#### 但答案是「还不能跑」：执行器已就绪，但正式 Gate 缺少 fail-closed 代码
+
+**① 合并 utility 仍然只是一份人写的 JSON,没有任何代码读它。**
+
+Step 122 已把「机器化消费两批 controls」列为开跑前提,今天核实它仍未落地:全仓 grep 不到任何
+读取 `utility-confirmation-assessment.json` 的地方;`build_gate_report()` 只收**一份**
+`ControlsReport`,`_utility_failures()` 也只拿这一份跟 `138/200` 比。于是手上三份 controls,
+交哪一份都不合法:
+
+| 交给 Gate 的那份 | 机器结果 | 为什么不合法 |
+|---|---|---|
+| 手机首轮 `137/200` | `utility_failed` | —— |
+| 手机第二轮 `160/200` | 通过 | 违反「137 与 160 必须一起消费」的冻结修订 |
+| 桌面诊断轮 `156/200` | 通过 | 它在开跑前就被声明为诊断轮,不是过门轮 |
+
+**第三行是最危险的一行。** 它的 `utility_context_fingerprint` 与基线一致、阳性 3/3、零 raw
+Finding,`gate-report` 的 utility 判据**不会拦它**。机器分辨不出「这是诊断轮」——那句声明只存在于
+DEVLOG 里。也就是说,此刻挡住「换台机器再试」的是纪律,不是 fail-closed。
+
+**② 执行主机仍不在 utility context,也不在实验指纹里。** Step 124/125 的结论没变:同一天、
+同一份代码、同一个模型,手机低 19 次(p=0.32%),而机制未查明。0.5b 无论在哪台机器跑,
+这个未知都还在。
+
+#### 顺带核实的第三件:CLI 假绿灯还在
+
+`ControlsReport.passed` 只由阳性与 raw Finding 决定,**utility 不参与**;下限只写在
+`gate_report._utility_failures()` 里。因此一轮 `137/200` 的 controls 会打印
+「✅ 阳性健康且阴性没有 raw Finding。」并 `exit 0`。Gate 侧确实 fail-closed,但操作者第一眼看的是
+CLI —— 长跑现场正是最不该被误导的时刻。Step 121 预告要修的两件事里,逐次失败诊断已在 Step 123
+落地,假绿灯这半边没动。
+
+#### 仓库状态
+
+本地 `docs/utility-confirmation-result` 领先 `origin` 两个提交(诊断轮与延迟数据两条记录),
+尚未推送;`origin/master=5369a2d` 已含 PR #50/#51,但不含这两条。本步骤不动远端。
+
+#### 编号更正
+
+`Step 120/121/122` 各被用过两次:15:38 以前的一组属于 PR #48 合并线,之后的一组属于诊断线。
+本次把后一组改为 **123/124/125**,并同步正文里的一处交叉引用,此后接 126。步骤号是这份日志里
+唯一的稳定标识,重号会让「见 Step 121」变成一句无法解析的话。
+
+- **剩余状态:** ZERO-COST READY / MATRIX 0/144 NOT STARTED / BLOCKED ON COMBINED-UTILITY MACHINE
+  CONSUMPTION + UNRESOLVED HOST VARIABLE。待作者决定的三项仍与 Step 124 相同:① 0.5b 在哪台机器跑;
+  ② 是否在手机补跑一轮带诊断的 controls 以查明那 19 次;③ 桌面正式过门轮何时跑。
+
+---
+
+### 2026-08-17 23:23 AEST · Step 127 · Phase 0.5b 合并 utility 已由 preflight / Gate 机器化消费
+
+- **范围与作者决定:** 在 `fix/combined-utility-gate` 上只补开跑前 Gate 证据消费，不调用
+  Provider、不派发任何 matrix cell。作者已选择**桌面**作为后续 144-cell 的执行主机；手机差异仍是
+  诊断问题，不再作为选择主机或补齐这条代码门的前提。
+- **实现:** 新增版本化 `utility-confirmation-assessment-v2` 契约与 raw-evidence loader。它同时读取首轮
+  `137/200`、确认轮 `160/200` 的 controls 与各自独立 adjudication，按原始字节重算四个 SHA；再从
+  结构化 outcome 重算 positive、raw Finding 三态、utility context、`297/400 >= 276` 和十项
+  Fisher + Bonferroni。assessment 的人工声明与任一重算值不一致都拒绝。
+- **fail-closed 边界:** 对 `phase-0.5b`，`gate-preflight` 与 `gate-report` 现均要求完整五件套
+  （assessment、两份 controls、两份 adjudication）。传入单份 controls（包括桌面诊断 `156/200` 或
+  确认轮 `160/200`）会得到 `utility_confirmation_missing` 与
+  `utility_confirmation_legacy_controls_input_forbidden`，不能再走旧的单份 `>=138/200` 路径。
+- **产物与不改写历史:** 原 `utility-confirmation-assessment.json` 保持不动；新增
+  `runs/phase0-5b-utility-confirmation-2026-08-15/utility-confirmation-assessment-v2.json`，补入首轮空
+  adjudication 的 SHA，作为机器消费用的下游裁定，不修改任一 raw controls 或旧 assessment。
+- **验证证据:** 定向 `pytest -p no:cacheprovider tests/test_utility_confirmation.py
+  tests/test_gate_preflight.py tests/test_gate_report.py` 为 **32 passed**；Ruff 对改动文件全绿。对真实历史
+  产物跑新的零成本 preflight 得到 **15/15 PASS**，其中 `utility_confirmation: 297/400 >= 276`；新
+  gate-report 实测单传 `160/200` 被拒绝，而合并输入的 utility result 为 `passed=true,297/400,floor=276`。
+  最终 Gate report 仍为 `INCOMPLETE`，仅因矩阵仍 `0/144`、以及本来只能在跑后产生的 validation 等
+  证据不存在；没有任何 combined-utility failure。
+- **验证补充与计数更正:** 上述 `32 passed` 是新增两条 preflight / Gate 消费覆盖**之前**的首轮定向
+  验证；补齐该覆盖后同一组定向测试为 **34 passed**，再跑完整套件为 **739 passed**。四道质量门最终均
+  通过：`ruff check .` 全绿、`ruff format --check .` 为 134 files already formatted、
+  `black --check src tests` 为 122 files unchanged。没有把中间 32 的记录静默改成最终数。
+- **剩余状态:** COMBINED-UTILITY MACHINE CONSUMPTION DONE / MATRIX 0/144 NOT STARTED。正式启动仍须在
+  桌面复跑本条 preflight、确认 plan/state/dry-run 未漂移，并由作者发出明确启动命令；本步骤不提交、不推送。
+
+### 2026-08-17 23:33 AEST · Step 128 · 合并 Gate 修复的本地提交准备
+
+- **作者授权:** 作者要求创建本地 Git 提交，以固定通过验证的 combined-utility Gate 版本；本步骤没有
+  推送或创建 PR 授权。
+- **提交边界:** 仅 stage `utility_confirmation` 实现、`gate-report` / `gate-preflight` / CLI 接线、
+  专项测试与本 DEVLOG。显式排除既有未跟踪的 utility baseline、related-work 文档、测试临时目录及所有
+  run/trace 产物。
+- **提交前证据:** 沿用 Step 127 的 739 passed、Ruff/Black 全绿及真实历史证据的 15/15 preflight；
+  `git diff --check` 未发现空白错误。
+- **剩余状态:** LOCAL COMMIT REQUESTED / PUSH NOT AUTHORIZED / MATRIX 0/144 NOT STARTED。
+
+---
+
 ## 2026-08-15 · 排查手机与桌面的差异:排除了四条,包括我自己的主假说
 
-### 2026-08-15 · Step 122 · 延迟数据推翻「网络抖动」解释,机制仍未查明
+### 2026-08-15 · Step 125 · 延迟数据推翻「网络抖动」解释,机制仍未查明
 
-**先收窄 Step 121 的措辞。** 那条写的是「执行主机就是那个变量」——
+**先收窄 Step 124 的措辞。** 那条写的是「执行主机就是那个变量」——
 作为「两轮之间的差异」它仍成立,但**不该被读成「网络问题」**,下面的数据否掉了那个机制。
 
 #### 已排除
@@ -62,7 +174,7 @@
 
 ## 2026-08-15 · 桌面诊断轮:执行主机就是那个变量
 
-### 2026-08-15 19:40 AEST · Step 121 · 桌面 156/200 重现基线,手机 137/200 是异常的那一个
+### 2026-08-15 19:40 AEST · Step 124 · 桌面 156/200 重现基线,手机 137/200 是异常的那一个
 
 **跑之前先定死了性质,记录在此:这是诊断轮,不是候选基线,也不能当过门轮。**
 理由是若不事先声明,一个高于下限的结果就会被自然地采纳,而那与「手机没过所以换台
@@ -116,7 +228,7 @@ two_step_request     1/20   6 次缺预期工具;11 次证据不全          重
 
 ## 2026-08-15 · 补上「任务为什么没办成」的诊断缺口
 
-### 2026-08-15 · Step 120 · utility 掉 21 次却答不出原因,先补记录再谈处置
+### 2026-08-15 · Step 123 · utility 掉 21 次却答不出原因,先补记录再谈处置
 
 **背景:** 0.5b 的 controls 除 utility 外全部通过,utility **137/200**,比冻结下限
 138 少 1。作者要求先补诊断能力,重跑与否稍后再定。

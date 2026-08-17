@@ -108,6 +108,7 @@ from redcell.utility_baseline import (
     freeze_utility_baseline,
     utility_baseline_json,
 )
+from redcell.utility_confirmation import load_utility_confirmation_evidence
 from redcell.validator import ValidationReport, validate_attack_paths
 from redcell.versions import EXPERIMENT_CONDITIONS_SCHEMA_VERSION
 
@@ -703,6 +704,26 @@ def gate_report(
         Path | None,
         typer.Option(help="绑定 raw controls 的独立阴性 Finding 裁决；有未决时保持 INCOMPLETE"),
     ] = None,
+    utility_confirmation_assessment_json: Annotated[
+        Path | None,
+        typer.Option(help="Phase 0.5b post-failure amendment 的版本化合并裁定 JSON"),
+    ] = None,
+    utility_confirmation_batch_1_controls_json: Annotated[
+        Path | None,
+        typer.Option(help="Phase 0.5b 首轮 137/200 的 raw controls JSON"),
+    ] = None,
+    utility_confirmation_batch_1_adjudication_json: Annotated[
+        Path | None,
+        typer.Option(help="Phase 0.5b 首轮 controls 的独立裁决 JSON"),
+    ] = None,
+    utility_confirmation_batch_2_controls_json: Annotated[
+        Path | None,
+        typer.Option(help="Phase 0.5b 确认轮 160/200 的 raw controls JSON"),
+    ] = None,
+    utility_confirmation_batch_2_adjudication_json: Annotated[
+        Path | None,
+        typer.Option(help="Phase 0.5b 确认轮 controls 的独立裁决 JSON"),
+    ] = None,
     validation_json: Annotated[
         Path | None, typer.Option(help="冻结 replay validation JSON；缺失时报告保持 INCOMPLETE")
     ] = None,
@@ -729,6 +750,31 @@ def gate_report(
     ] = None,
 ) -> None:
     """从已落盘的 Run/Event/Finding 重建冻结的 Phase 0.5 Gate 分析。"""
+    confirmation_paths = (
+        utility_confirmation_assessment_json,
+        utility_confirmation_batch_1_controls_json,
+        utility_confirmation_batch_1_adjudication_json,
+        utility_confirmation_batch_2_controls_json,
+        utility_confirmation_batch_2_adjudication_json,
+    )
+    if any(confirmation_paths) and not all(confirmation_paths):
+        typer.secho(
+            "合并 utility 证据必须同时提供 assessment、两份 controls 与两份 adjudication。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(ExitCode.BAD_CONFIG)
+    utility_confirmation = (
+        load_utility_confirmation_evidence(
+            assessment_json=utility_confirmation_assessment_json,
+            batch_1_controls_json=utility_confirmation_batch_1_controls_json,
+            batch_1_adjudication_json=utility_confirmation_batch_1_adjudication_json,
+            batch_2_controls_json=utility_confirmation_batch_2_controls_json,
+            batch_2_adjudication_json=utility_confirmation_batch_2_adjudication_json,
+        )
+        if all(confirmation_paths)
+        else None
+    )
     controls_result = (
         ControlsReport.from_report_json(controls_json.read_text(encoding="utf-8"))
         if controls_json is not None
@@ -783,6 +829,7 @@ def gate_report(
             store,
             controls=controls_result,
             controls_adjudication=controls_adjudication_result,
+            utility_confirmation=utility_confirmation,
             golden=golden_result,
             attacker_control=attacker_control_result,
             controller_controls=controller_controls_result,
@@ -844,6 +891,26 @@ def gate_preflight(
         Path | None,
         typer.Option(help="三角色计费 Token coverage 的非凭据证据 JSON；缺失即拒绝正式 Gate"),
     ] = None,
+    utility_confirmation_assessment_json: Annotated[
+        Path | None,
+        typer.Option(help="Phase 0.5b post-failure amendment 的版本化合并裁定 JSON"),
+    ] = None,
+    utility_confirmation_batch_1_controls_json: Annotated[
+        Path | None,
+        typer.Option(help="Phase 0.5b 首轮 137/200 的 raw controls JSON"),
+    ] = None,
+    utility_confirmation_batch_1_adjudication_json: Annotated[
+        Path | None,
+        typer.Option(help="Phase 0.5b 首轮 controls 的独立裁决 JSON"),
+    ] = None,
+    utility_confirmation_batch_2_controls_json: Annotated[
+        Path | None,
+        typer.Option(help="Phase 0.5b 确认轮 160/200 的 raw controls JSON"),
+    ] = None,
+    utility_confirmation_batch_2_adjudication_json: Annotated[
+        Path | None,
+        typer.Option(help="Phase 0.5b 确认轮 controls 的独立裁决 JSON"),
+    ] = None,
     out: Annotated[Path | None, typer.Option(help="自检报告 JSON 输出路径")] = None,
 ) -> None:
     """开跑前的零成本环境自检 —— **不调用任何 Provider**。
@@ -856,6 +923,28 @@ def gate_preflight(
     阶段结论仍然只看 `gate-report.json` 的 verdict。
     """
     try:
+        confirmation_paths = (
+            utility_confirmation_assessment_json,
+            utility_confirmation_batch_1_controls_json,
+            utility_confirmation_batch_1_adjudication_json,
+            utility_confirmation_batch_2_controls_json,
+            utility_confirmation_batch_2_adjudication_json,
+        )
+        if any(confirmation_paths) and not all(confirmation_paths):
+            raise ValueError(
+                "合并 utility 证据必须同时提供 assessment、两份 controls 与两份 adjudication"
+            )
+        utility_confirmation = (
+            load_utility_confirmation_evidence(
+                assessment_json=utility_confirmation_assessment_json,
+                batch_1_controls_json=utility_confirmation_batch_1_controls_json,
+                batch_1_adjudication_json=utility_confirmation_batch_1_adjudication_json,
+                batch_2_controls_json=utility_confirmation_batch_2_controls_json,
+                batch_2_adjudication_json=utility_confirmation_batch_2_adjudication_json,
+            )
+            if all(confirmation_paths)
+            else None
+        )
         billing_evidence = (
             BillingEvidenceBundle.model_validate_json(
                 billing_evidence_json.read_text(encoding="utf-8")
@@ -868,6 +957,7 @@ def gate_preflight(
             database_url=db,
             golden_fixtures=golden_fixtures,
             billing_evidence=billing_evidence,
+            utility_confirmation=utility_confirmation,
         )
     except (OSError, ValueError) as exc:
         typer.secho(f"Gate preflight 配置被拒绝:{exc}", fg=typer.colors.RED, err=True)

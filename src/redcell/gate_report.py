@@ -64,6 +64,13 @@ from redcell.utility_baseline import (
     load_frozen_utility_baseline,
     per_task_regressions,
 )
+from redcell.utility_confirmation import (
+    PHASE_0_5B_EXPERIMENT,
+    UtilityConfirmationAssessment,
+    UtilityConfirmationEvidence,
+    UtilityConfirmationResult,
+    validate_utility_confirmation,
+)
 from redcell.validator import ValidationReport
 
 PRIMARY_CHECKPOINT = 160000
@@ -93,6 +100,7 @@ _MISSING_EVIDENCE_FAILURES = {
     "missing_attacker_control",
     "missing_controller_controls",
     "missing_controls",
+    "utility_confirmation_missing",
     "missing_level1_golden",
     "missing_matrix_state",
     "missing_primary_seed",
@@ -161,6 +169,7 @@ class ReproductionResult(RedCellModel):
 
 class GateProtectionMetrics(RedCellModel):
     controls: ControlsAssessment | None = None
+    utility_confirmation: UtilityConfirmationResult | None = None
     asr_drift: AsrDriftResult | None = None
     strategy_coverage: list[StrategyCoverageRun] = Field(default_factory=list)
     all_categories: list[str] = Field(default_factory=list)
@@ -177,6 +186,7 @@ class GateReport(RedCellModel):
     analysis: GateAnalysis
     controls: ControlsReport | None = None
     controls_adjudication: ControlsAdjudicationReport | None = None
+    utility_confirmation: UtilityConfirmationAssessment | None = None
     golden: GoldenReport | None = None
     attacker_control: AttackerControlReport | None = None
     controller_controls: ControllerContractReport | None = None
@@ -242,6 +252,7 @@ def build_gate_report(
     checkpoint_tokens: int = PRIMARY_CHECKPOINT,
     controls: ControlsReport | None = None,
     controls_adjudication: ControlsAdjudicationReport | None = None,
+    utility_confirmation: UtilityConfirmationEvidence | None = None,
     golden: GoldenReport | None = None,
     attacker_control: AttackerControlReport | None = None,
     controller_controls: ControllerContractReport | None = None,
@@ -314,10 +325,26 @@ def build_gate_report(
     failures.extend(_run_reliability_failures(store, selected_runs, selected_320))
 
     failures.extend(_golden_failures(golden, reference))
-    controls_assessment, controls_failures = _controls_assessment(
-        controls, controls_adjudication, reference
-    )
-    failures.extend(controls_failures)
+    controls_assessment: ControlsAssessment | None = None
+    utility_confirmation_result: UtilityConfirmationResult | None = None
+    if seed_plan is not None and seed_plan.experiment == PHASE_0_5B_EXPERIMENT:
+        # The post-failure amendment is part of this experiment's frozen Gate:
+        # accepting a standalone 160/200 report would silently discard 137/200.
+        if controls is not None or controls_adjudication is not None:
+            failures.append("utility_confirmation_legacy_controls_input_forbidden")
+        if utility_confirmation is None:
+            failures.append("utility_confirmation_missing")
+        else:
+            utility_confirmation_result = validate_utility_confirmation(
+                utility_confirmation,
+                expected_target=reference.target if reference is not None else None,
+            )
+            failures.extend(utility_confirmation_result.failures)
+    else:
+        controls_assessment, controls_failures = _controls_assessment(
+            controls, controls_adjudication, reference
+        )
+        failures.extend(controls_failures)
     failures.extend(_attacker_control_failures(attacker_control, reference))
     failures.extend(_controller_control_failures(controller_controls, controller_reference))
     if seed_plan is None:
@@ -373,6 +400,9 @@ def build_gate_report(
         analysis=analysis,
         controls=controls,
         controls_adjudication=controls_adjudication,
+        utility_confirmation=(
+            utility_confirmation.assessment if utility_confirmation is not None else None
+        ),
         golden=golden,
         attacker_control=attacker_control,
         controller_controls=controller_controls,
@@ -384,6 +414,7 @@ def build_gate_report(
         billing_evidence_digest=billing_evidence.digest() if billing_evidence is not None else None,
         metrics=GateProtectionMetrics(
             controls=controls_assessment,
+            utility_confirmation=utility_confirmation_result,
             asr_drift=asr,
             strategy_coverage=strategy_coverage,
             all_categories=all_categories,
