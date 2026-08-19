@@ -44,6 +44,7 @@ from redcell.gate_runner import (
     uncompensated_invalid_block_count,
     verify_cell_run,
 )
+from redcell.host_wakelock import HostWakelockError, host_wakelock
 from redcell.storage import RunStore
 
 # worker 最多并行 3 个 cell；Provider 共享 limiter 会进一步执行 Target=2 等更严格的角色上限。
@@ -219,8 +220,17 @@ def main() -> int:
 
     try:
         with _exclusive_state_lock(args.state):
-            return _run_matrix(args)
+            if args.dry_run:
+                return _run_matrix(args)
+            # 唤醒锁必须罩住整个派发过程。2026-08-18 的矩阵正是死在无人看管时段的主机
+            # 睡眠上,而当时这条防线只写在 Runbook 里 —— 没有任何进程真的持有它。
+            with host_wakelock() as detail:
+                print(f"主机唤醒锁   {detail}")
+                return _run_matrix(args)
     except StateLockUnavailableError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except HostWakelockError as exc:
         print(str(exc), file=sys.stderr)
         return 2
 
