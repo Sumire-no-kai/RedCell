@@ -5,6 +5,343 @@
 
 ---
 
+## 2026-08-20 · 六篇全文读完:定位活着,但我们对它的描述有三处是错的
+
+### 2026-08-20 09:30 AEST · Step 133 · 相关工作 v2 —— 收窄一条、出局一条、收回一个押注
+
+**边界:** 作者授权读完 `RELATED_WORK.md` §5 的六项全文并更新文档。本轮**没有改动任何冻结判据**
+(§0 的规矩),没有碰矩阵、没有跑任何 Provider,没有提交。
+
+#### 处理方式:v1 一个字都没改
+
+按 §0「追加新版本,不静默改写」,v1 的 §2–§5 原文完整保留,新增 **§7** 承载全文裁决,
+顶部加一条指路牌说明冲突时以 §7 为准,§6 补一行修订记录。
+
+**为什么不把 v1 的错误抹掉:** 它是一份现成的样本 —— **只读摘要就下结论会错成什么样**。
+下面 ① 那条错误正是这样产生的,留着比删掉有用。
+
+#### ① 「没人测授权层」被推翻 —— 差异化 ① 收窄但存活
+
+v1 据摘要推断 AutoDojo「只打 prompt 层与过滤层,没有独立授权层」,并由此认为授权层无人涉足。
+全文推翻了这个前提:
+
+- **REDAgentBench** 的 Vulnerability 分类里**有 Authorization 类,2 个 case 类型共 497 个实例**;
+- **AutoDojo 的「系统级防御」是真的执行期强制** —— Progent 与 DRIFT 从用户请求推导许可的
+  工具调用轨迹并阻止偏离的调用(原文:constrain what the agent may *do* rather than what it may *read*)。
+
+**但三篇都没做同一件事:把防御拆成可独立开关的层,再把自适应攻击者的增益归因到某一层。**
+REDAgentBench 把 authorization 当**目标的漏洞类别**测、唯一的干预实验只有提示词层;AutoDojo 的
+强制执行是**轨迹约束**而非**基于归属**的访问控制,且没有等预算;ToolPrivacyBench 干脆**没有攻击者**
+(benign 请求、全员满权限、policy KB 只做事后审计)。
+
+所以差异化 ① 的正确说法从「测了授权层」收窄为「**在同一套装置上分别开关措辞层与强制执行层,
+用 Intent/Attempt/Impact 观测增益被哪一层吃掉**」。
+
+#### ② 确定性 ground truth 出局 —— 从卖点降级为入场券
+
+REDAgentBench 从 service receipts 与 final-state changes 验证效果、明确拒绝单一 ASR;
+ToolPrivacyBench 用确定性检测器 `D(p,a)∈{0,1}` 加别名/语义变体匹配。**两篇独立工作都做了,
+规模还各大一个量级。** 对外材料里不得再把「确定性 ground truth、不用 LLM judge」列为贡献。
+
+连带一条:REDAgentBench 对「把 exposure / execution / observation / adjudication 坍缩成单一
+ASR」的批评,与我们提出 Intent/Attempt/Impact 的动机是**同一条批评**。三分法的具体形式没被占,
+但**提出这条批评的优先权不在我们这里**,引用时必须归属。
+
+#### ③ 收回一个押注:等 Token 那条不能再说「增益会消失」
+
+三篇确实都没有等成本比较(AutoRedTeamer 未归一、AutoDojo "asymmetric by design"、
+Red-Bandit 按 attempts)。**但 AutoRedTeamer 的具体数字要求我们收回一个隐含期待:**
+
+| 变体 | ASR | queries |
+|---|---:|---:|
+| full | 最高 | **16** |
+| no memory | 0.43 | 24 |
+| random selection | 0.12 | 20 |
+
+**完整系统用更少的 query 拿到更高的 ASR** —— 按 query 归一化不会翻转方向,只会让差距更大。
+因此正确表述是:**从来没有人用一个能反映记忆真实代价的单位量过**(带记忆的 controller 每次
+query 的 prompt 长得多,按 query 计价恰好把记忆的成本藏起来),等 Token 下还剩多少
+**方向未知**。这是一个开放问题,不是一个我们已经知道答案的赌注。
+
+#### ④ Phase 0 分歧的解释升级为有证据
+
+v1 标注「⚠️ 推断,零证据」的那条现在有全文支撑:**AutoDojo 的攻击者优化注入文本本身**
+(LLM optimizer 逐轮生成候选、可切换策略类别),而 **Phase 0 优化的是七个预定义臂之间的分配**。
+动作空间不同,所以两边结论不构成矛盾。⚠️ 这**只解释分歧,不改判** Phase 0 的 `NOT SUPPORTED`,
+写进对外材料时必须同时给出两者动作空间的描述,让读者自己判断 —— 否则就是给负结果找台阶。
+
+#### ⑤ ⭐ 本轮最有价值的产出:一个被两篇论文夹出来的空隙
+
+- **REDAgentBench**:一个 training-free 的**提示词层** policy reminder 在 510-case cohort 上
+  把 ASR 降了 **74.19 点**(95% CI [69.85, 78.41]),阻止 434 次基线有害执行中的 368 次,
+  对照组是 character-matched placebo。**但它评测期没有自适应攻击者。**
+- **AutoDojo**:自适应攻击者把静态 ASR 已被压到 **0%** 的过滤器恢复到整体 **28%**、
+  action-open 任务 **64%**。
+
+于是有一个具体、可引用、没人回答的问题:
+
+> **那 74 点在自适应攻击者面前还剩多少?同一个攻击者面对强制执行层时又剩多少?**
+
+修订版论题从此不再是一句泛泛的「防御该建在哪一层」,**它有了两个明确的锚点。**
+
+#### 一处对 v1 的低估
+
+SIRAJ 被 v1 归进「攻击者多样性方向」。全文显示它是**工具型 agent 的黑盒红队框架**,
+基于历史执行轨迹迭代精炼攻击,并用蒸馏让 8B 模型的 ASR 超过 671B DeepSeek-R1。
+它比原归类更靠近我们的攻击侧 —— 但不做层归因、也没有等成本口径,不威胁修订论题。
+
+#### 待办与边界
+
+- **检索本身仍停在 2026-08-13,此后没有重检。** REDAgentBench 是 **08-11** 才提交的,
+  说明这块地正在被快速占据。正式投稿前必须重跑一次检索,否则今天这轮结论也会过期。
+- §5 的「读完 ①② 之前不得对外讲 novelty」限制解除,替换为 §7.8 的新限制:
+  **不得再讲**「没人测授权层」「确定性 ground truth 是我们的贡献」「等成本会让增益消失」。
+
+- **剩余状态:** RELATED_WORK v2 DONE(366 行,v1 未改写)/ 矩阵仍停在 24/144 /
+  未提交未推送。定位这条线现在**不再阻塞于阅读**,而阻塞于「投稿前重检」与 Phase 0.5 的结果本身。
+
+---
+
+## 2026-08-19 · 把「主机别睡」从文档搬进进程
+
+### 2026-08-19 21:30 AEST · Step 132 · 唤醒锁落地、Runbook 被事故改写、残留清理
+
+**边界:** 作者要求把上一条列出的 C 组三件做掉。本轮**没有派发任何 cell、没有修改系统电源
+设置、没有提交、没有推送**;正式 state 未被触碰(复核 sha256 前缀 `f5584463`,
+仍为 24 completed / 6 failed / 3 skipped / 3 dispatched / 156 pending)。
+
+#### ① 唤醒锁:新增 `redcell.host_wakelock`,并罩住整个派发
+
+`SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)`,
+在 `run_gate_matrix.main()` 里包住 `_run_matrix`。四个设计选择各有理由:
+
+- **为什么连 `ES_DISPLAY_REQUIRED` 一起钉。** 08-18 实测的进入触发点是**关屏**;
+  只钉 system 是在赌某一位标志在 connected standby 下的语义,钉 display 是**消掉触发条件本身**。
+  代价是长跑期间屏幕常亮 —— 和烧掉一个正式 seed block 相比不值一提。
+- **为什么拿不到锁就拒绝派发。** 「少一条防线但照跑」正是 08-18 那次的形状:配置看着没问题,
+  失败发生在无人看管的凌晨。宁可当场拒绝。
+- **为什么 `--dry-run` 不要求它。** 空跑几秒、零外部调用,没有理由拿它当门。
+- **为什么非 Windows 是显式空操作。** Termux 侧有自己的 `termux-wake-lock`(Runbook 独立步骤);
+  在别的平台返回一句「不适用」,好过给出一个并不存在的保证。
+
+#### ② 验证 —— 以及验证到不了哪里
+
+- **定向回归 7 个**(`test_host_wakelock.py` 5 个 + `test_gate_runner.py` 2 个):钉住
+  「system+display 一起要」「正常与异常路径都释放」「被拒即阻塞、不进正文」
+  「非 Windows 不调用 API」「派发全程持锁而 `--dry-run` 不持锁」「拿不到锁时退出码 2 且零派发」。
+- **实机:** `SetThreadExecutionState` 在本机返回非 0(接受请求);持锁 25 秒的探针进程正常
+  获取并释放。
+- ⚠️ **说到这里为止。** `powercfg /requests` 需要管理员权限,本会话**无法确认操作系统侧
+  确实登记了这条请求**。因此现在能主张的只有「Win32 API 接受了请求」,**不能主张
+  「已证明不会再进 Modern Standby」** —— 真正的证据只能是下一轮无人值守长跑的
+  Kernel-Power 日志里不再出现 506。
+
+#### ③ Runbook §1.1 被改写,而不是被补充
+
+旧文本让人查完 `powercfg /query SCHEME_CURRENT SUB_SLEEP` 就以为安全,还明说「关闭屏幕不影响
+运行」—— **在只有 S0 Low Power Idle 的机器上这两句都是错的,而 08-18 我正是照它做的。**
+新文本先要求用 `powercfg /a` 判断机器属于哪一种睡眠模型,再分两条给检查项;并写明
+**进程持锁不替代电源检查**(锁只在 runner 活着时有效)。事故经过与后果一并写进该节的引述块。
+
+#### ④ 残留清理与一处自我更正
+
+`.tmp-tests/full-pytest.xml`(88 KB)已删。`.tmp-tests/pytest-of-lee20` 权限拒绝、本会话删不掉,
+只在 ruff 与 git 里各留一条 warning,**不影响任何一道门**;留给作者一条命令自行清理。
+
+**自我更正:** 删除中途曾观察到 `ruff format --check .` 直接 panic,当时准备把它记成
+「Runbook 第三道门在本机跑不过」。复测后确认那是删文件过程中的**瞬态**,当前四道门按 Runbook
+原样全部通过。**没有把一个瞬态写成结论。**
+
+#### 四道门(按 Runbook §2 原样执行)
+
+| 门 | 结果 |
+|---|---|
+| pytest | **747 passed**;今日实测 HEAD 基线为 **740**,本轮 **+7** |
+| `ruff check .` | All checks passed |
+| `ruff format --check .` | 136 files already formatted |
+| `black --check src tests` | 124 files unchanged |
+| `git diff --check` | 无空白错误;改动文件均为纯 LF,无混合行尾 |
+
+⚠️ **一处对不上的数字,如实记下:** Step 127 记录的全量是 **739**,而今天在同一个 `342e286`
+上实测为 **740**。差 1 的来源查不出(两次都用同一种统计方式),因此**不把 739 静默改写成 740**,
+也不假装两者一致 —— 只记录「今天的基线是 740,增量是 7」。
+
+- **剩余状态:** C 组 DONE / MATRIX 仍停在 24/144 / RESERVE 未动 / 未提交未推送。
+  续跑仍卡在作者的四项判断:① `182049180` 保留还是整块作废重跑;② 系统电源设置
+  (`monitor-timeout-ac 0`,唤醒锁只覆盖 runner 存活期间);③ 执行主机电源状态是否入指纹;
+  ④ 硬编码的 60 s Target 超时是否入指纹。
+
+---
+
+## 2026-08-18 · 矩阵中断:七小时的「Provider 降级」其实是本机 Modern Standby
+
+### 2026-08-18 10:28 AEST · Step 131 · 更正一次错误归因,并记下它已经污染了什么
+
+**先说更正,因为它比中断本身重要。** Step 130 之后我曾把矩阵的 7× 延迟判给
+「Z.AI 服务端降级」,并附了一张按小时的延迟表。**延迟表是真的,归因是错的。**
+
+#### 事件
+
+后台 runner 于 **2026-08-18 10:28:10 AEST**(UTC `00:28:10`)退出,退出码 1,
+`runner.log` 里**没有 traceback** —— 它不是抛异常崩的。系统日志给出了原因:
+
+```
+02:15:18  ENTER Modern Standby
+09:19:25  exit  Modern Standby        ← 连续 7 小时 04 分
+10:11 起  反复进出(10 次)
+10:28:17  Connectivity: Disconnected, Reason: Adaptive Connected Standby
+```
+
+数据库最后一个事件是 `10:28:10`。**网络在进程脚下被切断,整棵进程树随之死亡。**
+
+#### 归因错在哪里
+
+那七小时(延迟中位 2.1 s → 15.9 s,09:00 后回落到 7.6 s)与 standby 窗口
+(`02:15`–`09:19`)**逐格对齐**。机器在 connected standby 里跑:CPU 被压、网络被
+Adaptive Connected Standby 周期性切断。于是:
+
+> 7× 延迟 → 越过我们硬编码的 60 s Target 超时 → 放弃 → 单 Run 放弃率 >10% → block 作废。
+
+链条没变,**只是链条的第一环是这台机器,不是 Z.AI。**
+
+#### 为什么开跑前那道电源检查没挡住
+
+`powercfg /a` 显示本机**只有 `Standby (S0 Low Power Idle) Network Connected`,S3 已被禁用**。
+开跑前执行的 `powercfg /change standby-timeout-ac 0` 改的是传统 S3 空闲睡眠 ——
+**对 Modern Standby 无效**。Runbook §1.1 的「关闭屏幕不影响运行,但系统睡眠会暂停进程」
+在这类机器上是错的:**关屏正是进入 connected standby 的触发点**。这条必须改写。
+
+#### 已经被污染了什么
+
+| Block | 结果 | 落在 standby 窗口内 |
+|---|---|---|
+| `237477125` | 有效 6/6 | 否(干净) |
+| `161148591` | 有效 6/6 | 否(干净) |
+| `145333514` | **失效** | 失败那 3 格 98% |
+| `182049180` | 有效 6/6 | **100%** ⚠️ |
+| `1302957381` | **失效** | 100% |
+| `727800525` | **失效** | 完成 3 格 37–66%;失败那格发生在 10:11 起的抖动期 |
+
+三条随之改变:
+
+1. **两个失效 block 是本机弄死的,不是 Provider。** 因此上一条据 2/5 推出的
+   「损耗率 30–40%、8 个 reserve 不够用」**作废** —— 那是坏配置的属性,不是实验的属性。
+2. **`182049180` 可疑。** 六格全过、机器核验全过、指纹一致 —— **因为执行主机的电源状态
+   根本不在指纹里**。它整段跑在 standby 窗口内,单格 60–120 分钟,而干净窗口是 15–30 分钟。
+3. **真正干净的只有 2 个 block。**
+
+这是 Step 124 那个缺口(执行主机不在冻结条件也不在指纹里)第三次咬人:先是手机 vs 桌面
+的 19 次,再是今天的两个 block,以及一个通过了但不可比的 block。
+
+#### 主机现在仍然不适合长跑
+
+关屏超时已被改到 `0x1c20`(2 小时),但**这挡不住 Modern Standby**:`10:34`–`10:48`
+之间又发生 6 次进出。续跑前必须先解决「进入 connected standby」本身,而不是延后触发点。
+对症的两条是:关屏超时设为 0,以及给 runner 加一个执行状态锁
+(`SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)`)—— 后者正是 Runbook 已经
+要求手机做的 `termux-wake-lock` 在桌面侧一直缺的对应物。
+
+#### 本轮没有做的事
+
+没有重启矩阵、没有启用任何 reserve、没有修改系统电源设置、没有改动代码、没有提交。
+残留的 `.lock` 是死进程留下的文件,OS 锁已随进程释放。续跑时最后一批 3 格会按
+「交付状态未知」作废;但 `727800525` 在崩溃前就已因 `random-off` 失败而失效,
+**崩溃本身没有额外多害死一个 block**。
+
+#### 一个未经证实的连带怀疑
+
+Step 124/125 排除四条后仍答不出手机为什么少办成约 10% 的正常任务。Android 的 doze/省电
+与本次的 Modern Standby 属于同一类机制。**没有证据,只是假说** —— 但如果成立,那笔悬案与
+今天这笔同根,而 Runbook 早就为手机写了 wake lock、唯独桌面没有。
+
+- **当前状态:** MATRIX HALTED at 24/144 · 2 clean blocks / 1 suspect / 3 invalid ·
+  RESERVE UNTOUCHED · 花费约 \$2.1。
+- **待作者决定:** ① `182049180` 保留还是整块作废重跑;② 主机修法(关屏 0 + runner 执行状态锁);
+  ③ 是否把执行主机电源状态纳入 utility context 与实验指纹;④ 60 s Target 超时是否入指纹。
+  这四项定下来之前不续跑。
+
+---
+
+## 2026-08-17 · 桌面 144-cell:准备、放行与派发
+
+### 2026-08-17 23:53 AEST · Step 130 · 144-cell 正式矩阵已派发
+
+- **授权与前置:** 作者明确下令「启动」。派发前复查电源策略,`Sleep after` 的 AC 值已由
+  `0x2a30`(3 小时)改为 **`0x00000000`(从不)**;DC 仍为 240 秒,按 Runbook 桌面长跑只走交流电。
+  电源由作者本人修改,本轮只复核。
+- **派发前最后三项:** state 192 条全部 `pending`、`enabled_reserve_seeds=[]`;`runs/phase-0-5b.db`
+  的 `runs`/`attempts` 均为 0;没有其它 Python 进程持有 state 锁。
+- **一项额外的开跑前核查:** 先用**纯 TCP/443 连通性**确认 `api.z.ai` 与
+  `generativelanguage.googleapis.com` 可达,再派发。理由是执行环境若在网络层不通,第一格会以
+  fail-closed 失败并**连带作废整个 seed block** —— 那会白烧一个正式 seed 去发现一件本可零成本
+  查明的事。该检查不发任何 API 请求、不产生费用,也没有碰 Gate seed。
+- **执行:** `scripts/run_gate_matrix.py --plan runs/phase0-5b-desktop-2026-08-17/gate-plan.json
+  --state runs/phase0-5b-desktop-2026-08-17/gate-matrix-state.json`,后台托管,stdout 落
+  `runs/phase0-5b-desktop-2026-08-17/runner.log`,逐格日志落 `runs/phase-0-5b/logs`。
+- **首批已确认落地:** 并发 3 格(`static-off` / `static-memory` / `llm-memory`,seed `237477125`),
+  数据库出现 3 个 Run、3 条 attempt,三份逐格日志已创建。
+- **仍然成立的边界:** 单格失败即整个 seed block 记 `skipped_block_invalid`,不得只重跑失败那格;
+  reserve 不会自动上场,需人工按四类原因点名启用;已完成的格子永不重跑。中断后重跑同一命令续跑。
+- **剩余状态:** MATRIX RUNNING / 预计约 17 小时、约 \$11 / 完成后仍需 `validate-paths` 与
+  `gate-report`,阶段结论只看后者的 fail-closed verdict。
+
+---
+
+### 2026-08-17 · Step 129 · 新版 preflight 15/15,plan/state 仍为 0/144,未派发任何 cell
+
+**边界先说死:本轮没有派发任何一格,没有调用 Provider,正式库仍是空的。**作者要求准备完成后
+等明确的「启动」再实际开跑,因此本步骤停在可启动状态,不越线。
+
+#### 使用的版本与证据
+
+在 `fix/combined-utility-gate` 的 `342e286` 上执行。**没有单独传 `160/200`**——也没有单独传桌面
+诊断轮的 `156/200`;这次交给 Gate 的是 Step 127 定义的完整五件套:
+
+| 角色 | 文件 | SHA-256 前缀 |
+|---|---|---|
+| 合并裁定 | `utility-confirmation-assessment-v2.json` | —— |
+| 首轮 raw controls `137/200` | `phase0-5b-master-ready-2026-08-15/controls.json` | `4ee08b6d…` |
+| 首轮裁决 | `phase0-5b-master-ready-2026-08-15/adjudication.json` | `393cff8a…` |
+| 确认轮 raw controls `160/200` | `phase0-5b-utility-confirmation-2026-08-15/controls.json` | `aaf25580…` |
+| 确认轮裁决 | `phase0-5b-utility-confirmation-2026-08-15/adjudication.json` | `0be7f10c…` |
+
+四份 raw 证据的 SHA 由本轮独立复算,与 v2 assessment 的声明逐字节一致。单份 controls 会被拒绝
+这条**没有实跑反例**——按作者「不要单独传」的指令不去构造它,该行为由
+`test_phase_0_5b_gate_refuses_the_legacy_single_controls_path` 覆盖,断言
+`utility_confirmation_missing` 与 `utility_confirmation_legacy_controls_input_forbidden` 同时出现。
+
+#### 零成本结果
+
+| 门 | 结果 |
+|---|---|
+| pytest | **739 passed** |
+| ruff check / format --check | 全绿 / 134 files already formatted |
+| black --check | 122 files unchanged |
+| `gate-preflight` | **15/15 PASS**,新增一行 `utility_confirmation: 297/400 >= 276` |
+| `gate-plan` | **144 primary + 48 disabled reserve**;`max_attempts=500`、`max_total_tokens=320000` 全格一致;六条件各 24 格 |
+| `run_gate_matrix --dry-run` | **0/144 completed、0 usable / 24 primary / 0 invalid**;state 192 条全部 `pending`,`enabled_reserve_seeds=[]` |
+| 正式库 | `runs/phase-0-5b.db` 六张表**全部 0 行** |
+
+产物在 `runs/phase0-5b-desktop-2026-08-17/`;初始 state 的 SHA-256 前缀为 `f51530cc…`,
+**与 Step 111 手机准备时的初始 state 一致** —— 同一份 canonical 计划在两个宿主上重建出同一个起点。
+
+#### 唯一挡在启动前的:电源策略
+
+按 Runbook §1.1,桌面正式 runner 启动前必须确认交流电自动睡眠为「从不」。实测当前方案
+(`Performance`)为:
+
+- **AC `Sleep after` = 0x2a30 = 10,800 秒 = 3 小时**
+- DC = 240 秒
+
+17 小时的长跑会在第 3 小时被系统睡眠打断;恢复逻辑把睡眠时尚未确认交付的 cell 按 fail-closed 处理,
+所以这不是「暂停一下」,是**会作废正在跑的那一格并连带整个 seed block**。修改系统电源策略属于
+作者本人的操作,本轮只记录原值以便跑完恢复,不代改。
+
+- **剩余状态:** DESKTOP PREPARED / POWER POLICY PENDING(AC=10800s 需改为 0)/
+  MATRIX 0/144 NOT STARTED / AWAITING EXPLICIT 启动。本步骤未提交、未推送、未派发。
+
+---
+
 ## 2026-08-17 · 开跑前零成本复验:装置就绪,矩阵仍不该启动
 
 ### 2026-08-17 · Step 126 · 四道门 / 14 道 preflight / 0-of-144 dry-run 全绿,但两件事仍挡在前面
