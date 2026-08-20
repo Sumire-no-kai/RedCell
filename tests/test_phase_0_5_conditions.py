@@ -9,11 +9,13 @@ from redcell.budget import BudgetLimits
 from redcell.protocols import (
     ArenaRunConfiguration,
     ControllerRunConfiguration,
+    ExecutionHostConfiguration,
     ExperimentConditions,
     GenerationMemoryConfiguration,
     GenerationMemoryLimits,
     GenerationMemoryMode,
     ProviderRunConfiguration,
+    RequestTimeoutConfiguration,
     Run,
     SearchConfiguration,
     SearchSelector,
@@ -64,6 +66,21 @@ def test_phase_0_5_requires_new_treatment_fields_and_catalogue() -> None:
     conditions = _conditions()
     with pytest.raises(ValueError, match="strategy_catalogue"):
         conditions.require_phase_0_5()
+
+
+def test_execution_host_and_request_timeouts_change_the_comparison_context() -> None:
+    baseline = _conditions(strategy_catalogue=_catalogue())
+    frozen = baseline.model_copy(
+        update={
+            "request_timeouts": RequestTimeoutConfiguration(
+                target_seconds=60.0, attacker_seconds=60.0
+            ),
+            "execution_host": ExecutionHostConfiguration.windows_wakelock_v1(),
+        }
+    )
+
+    assert baseline.fingerprint() != frozen.fingerprint()
+    assert baseline.regression_context_fingerprint() != frozen.regression_context_fingerprint()
 
 
 def test_phase_0_5_requires_explicit_usage_accounting_modes() -> None:
@@ -204,6 +221,8 @@ def test_regression_context_omits_optional_legacy_provider_fields() -> None:
         "target": conditions.target.model_dump(mode="json", exclude_none=True),
         "attacker": conditions.attacker.model_dump(mode="json", exclude_none=True),
         "arena": conditions.arena.model_dump(mode="json"),
+        "request_timeouts": None,
+        "execution_host": None,
         "strategy_catalogue": None,
         "scorer_version": conditions.scorer_version,
         "finding_signature_version": conditions.finding_signature_version,

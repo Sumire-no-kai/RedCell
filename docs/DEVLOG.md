@@ -5,6 +5,52 @@
 
 ---
 
+## 2026-08-20 · 重启 Phase 0.5b 前把真正影响交付的条件写进机器可验的合同
+
+### 2026-08-20 18:21 AEST · Step 134 · 作者授权新的 144-cell 全量重跑；冻结 Windows 唤醒锁与 60 s 超时
+
+**作者决定:** 不恢复受 Modern Standby 污染的旧 state；按 `60 s + Windows 唤醒锁 v1` 建立一套
+独立的 144-cell primary 矩阵。60 秒维持既有行为，不以延长超时“救”旧数据。
+
+**为什么需要代码而不只是日志:** 08-18 证明执行主机的睡眠/网络状态和 HTTP 硬超时会改变
+`reliability_budget_exceeded`，因此会改变一个 Run 是否能进入 Gate。若只记在 DEVLOG，Gate 无法
+拒绝把不同运行条件混进同一分析；新条件必须进入 `experiment_fingerprint` 与 Gate context。
+
+**实现中:** 新 schema 将记录 Target/Attacker/Controller 的实际 HTTP timeout，以及
+`windows-wakelock-v1`（Windows、system+display required）。matrix plan v2 会把该 profile 明写进
+每个 child argv；runner 持锁后才把对应环境标记交给 child。旧 `24/144` 目录、DB、state 和日志
+保持不动，只作为 `HALTED / CONTAMINATED / NO GATE VERDICT` 的历史证据。
+
+**未做:** 尚未调用 Provider、尚未生成新 plan/state/DB、尚未启用 reserve、未覆盖旧产物。
+
+### 2026-08-20 18:26 AEST · Step 135 · v3 条件合同、隔离 preflight 与 dry-run 全绿
+
+**实现完成:**
+
+- `RequestTimeoutConfiguration` 记录 Target/Attacker/Controller 实际交给 HTTPX 的 timeout；默认仍为
+  **60.0 s**，没有延长或改变 retry/reliability 阈值。
+- `ExecutionHostConfiguration.windows_wakelock_v1()` 记录 `Windows + system/display required`；计划升级为
+  `phase-0.5-gate-plan-v2`，每个 child argv 都携带 `--execution-host-profile windows-wakelock-v1`。child
+  只有收到持锁 runner 注入的环境标记才接受该 profile，避免手工命令伪称持锁。
+- experiment schema 升至 `v3`，Gate context 升至 `v2`；旧 v1 plan 仍可只读加载，新 v2 plan 必须带宿主
+  profile。timeout 位于实验运行条件而非 utility 投影，既有 297/400 合并证据继续有效。
+
+**验证证据:** 定向 **68 passed**；全量 pytest 退出码 **0**；Ruff check、Ruff format、Black 与
+`git diff --check` 全绿。实际 Windows 探针返回「已获取(system + display)」后正常释放。
+
+**全新、隔离的零成本产物:**
+
+- `runs/phase0-5b-windows-wakelock-v1-2026-08-20/preflight.json`：**15/15 PASS**，完整合并 utility
+  `297/400 >= 276`、billing digest `393185f3d8ee`、新的 SQLite 均通过；
+- `gate-plan.json`：`phase-0.5-gate-plan-v2`、**144 primary + 48 disabled reserve**、每格 profile 已冻结；
+- `gate-matrix-state.json`：**0/144 completed、0 usable / 24 primary / 0 invalid**；
+- 正式库为 `runs/phase-0-5b-windows-wakelock-v1-2026-08-20.db`，与旧的 24/144 库、state、日志没有重叠。
+
+**剩余状态:** READY TO COMMIT AND START —— 下一步只提交代码/测试/DEVLOG（不提交任何 `runs/` 产物），
+随后在可见终端启动新 primary matrix。运行期间不做自动轮询；由作者查看终端并在完成后通知。
+
+---
+
 ## 2026-08-20 · 六篇全文读完:定位活着,但我们对它的描述有三处是错的
 
 ### 2026-08-20 09:30 AEST · Step 133 · 相关工作 v2 —— 收窄一条、出局一条、收回一个押注

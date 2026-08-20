@@ -59,3 +59,13 @@ async def test_usage_accounting_mode_reaches_snapshot_and_provider() -> None:
         assert provider.usage_accounting_mode is UsageAccountingMode.TOTAL_MINUS_PROMPT_V1
     finally:
         await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_request_timeout_reaches_the_actual_http_provider() -> None:
+    settings = _settings(request_timeout_seconds=60.0)
+    provider = settings.build(name="test")
+    try:
+        assert provider.timeout_seconds == 60.0
+    finally:
+        await provider.aclose()

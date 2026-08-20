@@ -73,6 +73,9 @@ class ProviderSettings(BaseSettings):
     没被截断；Gemini 3 的 thinking 不能关闭，不能由此推断 `completion_tokens` 已覆盖全部计费输出。
     """
 
+    request_timeout_seconds: float = Field(default=60.0, gt=0.0)
+    """单次 HTTP 请求的硬超时；它是可靠性判据的一部分，不得只藏在客户端默认值里。"""
+
     # 未填价格 = 不知道，不能伪装成免费。免费档也要把三项都显式填 0。
     input_usd_per_mtok: float | None = Field(default=None, ge=0.0)
     output_usd_per_mtok: float | None = Field(default=None, ge=0.0)
@@ -140,6 +143,7 @@ class ProviderSettings(BaseSettings):
             api_key=self.api_key,
             name=name,
             pricing=pricing,
+            timeout_seconds=self.request_timeout_seconds,
             min_interval_seconds=(60.0 / self.rpm) if self.rpm > 0 else 0.0,
             max_concurrency=self.max_concurrency,
             extra_body=self.extra_body,
