@@ -62,6 +62,25 @@
 **正式证据边界:** 启动的仅是 144 个 primary cell；48 个 reserve 仍默认禁用，不能自动消耗。新 runner
 全程持有 Windows system+display 唤醒锁，并把 `windows-wakelock-v1` 传给每个 child。
 
+### 2026-08-20 23:41 AEST · Step 137 · 首次 v2 启动宿主提前退出；弃用不完整 state，迁移执行主机为 OPEN
+
+**现象与证据:** 用户可见 PowerShell 窗口在启动后消失。复核显示 runner 进程已不存在，state 最后写入
+时间为 `18:29:31 AEST`；144 个 primary 中仅首个 seed 的 3 个 child 被标为 `dispatched`，**0 个完成**，
+其余 141 个仍为 `pending`。没有 `runner.log`、没有存活 Python child，故这不是半程结果、也不能判断为
+Provider 正常返回后的失败。
+
+**处置:** 不恢复、不覆盖、不统计该 state；原 state/plan/DB 保留原样，并以同目录 `ABANDONED.md` 明确
+禁止恢复。此次中断发生在可见启动宿主退出时，Windows 唤醒锁也随该宿主释放；尚未证明为 Provider 或测试代码
+故障。后续必须从**新的** plan/state/DB 重启。
+
+**执行主机迁移:** 作者考虑转移到另一台电脑以承载长时运行。现有 v3 合同冻结的是
+`windows-wakelock-v1` 逻辑 profile 与 60 s timeout，而非某一物理设备身份；因此另一台 Windows 主机可作为
+新的执行环境，但须在该机重新做零成本 preflight/dry-run、使用同一已提交代码与配置，并产生新的隔离产物。
+不允许复制或恢复本次 `dispatched` state。是否在新主机补做付费 utility 诊断仍为 **OPEN**；只有预先声明为
+同一 profile 的正式矩阵才可使用既有 297/400 合并 utility 证据。
+
+**剩余状态:** ABANDONED（此次启动）；READY FOR FRESH HOST-SCOPED PRECHECK（尚未启动）。
+
 ---
 
 ## 2026-08-20 · 六篇全文读完:定位活着,但我们对它的描述有三处是错的
