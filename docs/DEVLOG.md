@@ -49,6 +49,19 @@
 **剩余状态:** READY TO COMMIT AND START —— 下一步只提交代码/测试/DEVLOG（不提交任何 `runs/` 产物），
 随后在可见终端启动新 primary matrix。运行期间不做自动轮询；由作者查看终端并在完成后通知。
 
+### 2026-08-20 18:29 AEST · Step 136 · 启动前提交与可见执行交接
+
+**提交:** `f5c5eeb fix: freeze host and timeout conditions for matrix rerun`，只含 Step 134/135 的实现、
+测试和 DEVLOG。`runs/`、旧 `24/144` 证据、`PHASE0_5_UTILITY_BASELINE.json`、`RELATED_WORK.md` 与
+`.tmp-tests/` 均未暂存、未提交、未推送。
+
+**启动方式:** 将在一个用户可见的 PowerShell 窗口运行新 v2 plan，并把 stdout/stderr 同时写入
+`runs/phase0-5b-windows-wakelock-v1-2026-08-20/runner.log`。该窗口保留在结束状态，便于作者查看
+完整进度和最终退出码；本会话不轮询、不读取运行日志，等待作者完成后通知。
+
+**正式证据边界:** 启动的仅是 144 个 primary cell；48 个 reserve 仍默认禁用，不能自动消耗。新 runner
+全程持有 Windows system+display 唤醒锁，并把 `windows-wakelock-v1` 传给每个 child。
+
 ---
 
 ## 2026-08-20 · 六篇全文读完:定位活着,但我们对它的描述有三处是错的
