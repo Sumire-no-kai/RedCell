@@ -146,6 +146,21 @@
 - 剩余状态：READY TO COMMIT / INTEGRATE —— 先向作者列清单，再精确暂存本次跟踪文件、提交、合并最新
   master、复验、推送、创建非 draft PR 并合并。
 
+### 2026-08-22 21:03 AEST · Step 145 · 本地提交完成并吸收最新 master
+
+- 进度：按已向作者列出的清单精确暂存 23 个跟踪文件，创建提交
+  `495d572 fix: harden repository execution invariants`；三个既有未跟踪路径未暂存。随后将
+  `origin/master@5369a2d` 合入当前分支，生成 merge commit `cda6fa7`，ort 自动合并且无冲突。
+- 决策与理由：当前审查代码依赖此前尚未进入远端 master 的 combined utility、唤醒锁和 v3 实验条件提交，
+  不能只 cherry-pick 最新修复；先吸收远端两项已合并工作，再由一个 PR 审核完整分支，避免丢历史或重复实现。
+- 遇到的问题：无内容冲突。PR diff 因此同时包含当前分支此前的 8 个 Phase 0.5b 提交和本次 code-review
+  提交；这不是意外扩大暂存，而是当前可运行代码的真实依赖链，已在提交前向作者说明。
+- 验证证据：合并最新 master 后再次全量 **763 passed in 63.58s**；`ruff check .`、
+  `ruff format --check .`、`black --check src tests`、`compileall`、相对 master 的 `git diff --check` 与
+  Git Bash `bash -n` 全绿。
+- 剩余状态：READY TO PUSH / PR / MERGE —— 补交本步骤 DEVLOG 后推送当前分支，创建非 draft PR，等待
+  GitHub checks；checks 通过后按作者授权合并 master。
+
 ---
 
 ## 2026-08-20 · 重启 Phase 0.5b 前把真正影响交付的条件写进机器可验的合同
