@@ -161,6 +161,17 @@
 - 剩余状态：READY TO PUSH / PR / MERGE —— 补交本步骤 DEVLOG 后推送当前分支，创建非 draft PR，等待
   GitHub checks；checks 通过后按作者授权合并 master。
 
+### 2026-08-22 21:09 AEST · Step 146 · PR #52 合并并关闭本轮 code review
+
+- 进度：推送 `fix/repository-code-review` 后创建非 draft PR #52
+  `fix: harden experiment execution and evidence ordering`。GitHub 报告 `MERGEABLE / CLEAN`，仓库未配置
+  远端 checks；本地与合入 master 后的完整门禁证据已写在 Step 144/145。按作者授权使用 merge commit 合并。
+- 合并证据：PR #52 状态 `MERGED`，合并时间 `2026-08-22 21:08 AEST`，master merge commit
+  `fa40451008185c4133c4e2599c8f6dc8193c5b14`；`origin/master` 已 fetch 并确认包含 head `e21d0c2`。
+- 边界：本轮没有 Provider 调用、正式矩阵执行或冻结证据重算；三个既有未跟踪路径仍未提交。预算账本、
+  Gate 损坏证据容错和 CLI/Store 收缩仍保持 OPEN，不因 code review PR 合并而宣称解决。
+- 剩余状态：DONE —— 本文档合并记录单独走小型 PR；完成后删除远端工作分支，不留开放 PR。
+
 ---
 
 ## 2026-08-20 · 重启 Phase 0.5b 前把真正影响交付的条件写进机器可验的合同
