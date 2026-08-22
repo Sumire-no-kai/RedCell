@@ -11,6 +11,8 @@ Controller / Store / Orchestrator),然后把结果交给用户。
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
 from enum import IntEnum
 from pathlib import Path
 from typing import Annotated
@@ -80,11 +82,14 @@ from redcell.orchestrator import (
 from redcell.protocols.run import (
     ArenaRunConfiguration,
     ControllerRunConfiguration,
+    ExecutionHostConfiguration,
+    ExecutionHostProfile,
     ExperimentConditions,
     GenerationMemoryConfiguration,
     GenerationMemoryLimits,
     GenerationMemoryMode,
     ProviderRunConfiguration,
+    RequestTimeoutConfiguration,
     Run,
     RunStatus,
     SearchConfiguration,
@@ -108,6 +113,7 @@ from redcell.utility_baseline import (
     freeze_utility_baseline,
     utility_baseline_json,
 )
+from redcell.utility_confirmation import load_utility_confirmation_evidence
 from redcell.validator import ValidationReport, validate_attack_paths
 from redcell.versions import EXPERIMENT_CONDITIONS_SCHEMA_VERSION
 
@@ -228,6 +234,7 @@ def _experiment_conditions(
     defense: DefenseLevel,
     enforce_permissions: bool,
     enforce_confirmation: bool,
+    execution_host: ExecutionHostConfiguration | None = None,
 ) -> ExperimentConditions:
     """把会影响结论的配置冻结进 Run；绝不把凭据写入 SQLite。"""
     if providers is None:
@@ -257,9 +264,14 @@ def _experiment_conditions(
             cached_input_usd_per_mtok=0.0,
             usage_accounting_mode=UsageAccountingMode.PROMPT_COMPLETION_V1,
         )
+        request_timeouts = None
     else:
         target = providers.target_configuration
         attacker = providers.attacker_configuration
+        request_timeouts = RequestTimeoutConfiguration(
+            target_seconds=providers.target.timeout_seconds,
+            attacker_seconds=providers.attacker.timeout_seconds,
+        )
     return ExperimentConditions(
         online=online,
         actor=actor,
@@ -270,6 +282,8 @@ def _experiment_conditions(
             enforce_permissions=enforce_permissions,
             enforce_confirmation=enforce_confirmation,
         ),
+        request_timeouts=request_timeouts,
+        execution_host=execution_host,
         # 新 Run 必须自带 schema 版本,否则它的摘要日后也只能"保留但验不了"。
         conditions_schema_version=EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
     )
@@ -322,6 +336,10 @@ def run(
             help="接真实模型跑(target=GLM / attacker=Gemini,从 .env 读)。默认离线,只验证流水线。"
         ),
     ] = False,
+    execution_host_profile: Annotated[
+        str | None,
+        typer.Option(help="正式矩阵宿主档案；windows-wakelock-v1 仅可由持锁 matrix runner 派发"),
+    ] = None,
     max_tokens: Annotated[int | None, typer.Option(help="token 上限(两侧合计)")] = None,
     max_cost: Annotated[
         float | None,
@@ -349,6 +367,20 @@ def run(
         raise typer.BadParameter("非法 search 或 cross-attempt-memory 值") from exc
     if selector is SearchSelector.LLM and max_tokens is None:
         raise typer.BadParameter("--search llm 必须设置 --max-tokens，Controller 需要总 Token 预算")
+    execution_host = None
+    if execution_host_profile is not None:
+        try:
+            profile = ExecutionHostProfile(execution_host_profile)
+        except ValueError as exc:
+            raise typer.BadParameter("不支持的 execution-host-profile") from exc
+        if profile is ExecutionHostProfile.WINDOWS_WAKELOCK_V1:
+            if sys.platform != "win32":
+                raise typer.BadParameter("windows-wakelock-v1 只能在 Windows 主机执行")
+            if os.environ.get("REDCELL_MATRIX_WAKELOCK_PROFILE") != profile.value:
+                raise typer.BadParameter(
+                    "windows-wakelock-v1 必须由持有唤醒锁的 matrix runner 派发"
+                )
+            execution_host = ExecutionHostConfiguration.windows_wakelock_v1()
 
     limits = BudgetLimits(
         max_attempts=budget,
@@ -393,6 +425,7 @@ def run(
         defense=defense,
         enforce_permissions=enforce_permissions,
         enforce_confirmation=enforce_confirmation,
+        execution_host=execution_host,
     )
     conditions = conditions.model_copy(
         update={
@@ -420,6 +453,13 @@ def run(
                 )
                 if controller_configuration is not None
                 else None
+            ),
+            "request_timeouts": (
+                conditions.request_timeouts.model_copy(
+                    update={"controller_seconds": controller_provider.timeout_seconds}
+                )
+                if controller_provider is not None and conditions.request_timeouts is not None
+                else conditions.request_timeouts
             ),
         }
     )
@@ -562,6 +602,7 @@ def resume(
             defense=defense,
             enforce_permissions=conditions.arena.enforce_permissions,
             enforce_confirmation=conditions.arena.enforce_confirmation,
+            execution_host=conditions.execution_host,
         )
         controller_configuration = None
         if conditions.search is not None and conditions.search.selector is SearchSelector.LLM:
@@ -586,6 +627,14 @@ def resume(
                     )
                     if controller_configuration is not None
                     else None
+                ),
+                "request_timeouts": (
+                    current_conditions.request_timeouts.model_copy(
+                        update={"controller_seconds": controller_provider.timeout_seconds}
+                    )
+                    if controller_provider is not None
+                    and current_conditions.request_timeouts is not None
+                    else current_conditions.request_timeouts
                 ),
             }
         )
@@ -703,6 +752,26 @@ def gate_report(
         Path | None,
         typer.Option(help="绑定 raw controls 的独立阴性 Finding 裁决；有未决时保持 INCOMPLETE"),
     ] = None,
+    utility_confirmation_assessment_json: Annotated[
+        Path | None,
+        typer.Option(help="Phase 0.5b post-failure amendment 的版本化合并裁定 JSON"),
+    ] = None,
+    utility_confirmation_batch_1_controls_json: Annotated[
+        Path | None,
+        typer.Option(help="Phase 0.5b 首轮 137/200 的 raw controls JSON"),
+    ] = None,
+    utility_confirmation_batch_1_adjudication_json: Annotated[
+        Path | None,
+        typer.Option(help="Phase 0.5b 首轮 controls 的独立裁决 JSON"),
+    ] = None,
+    utility_confirmation_batch_2_controls_json: Annotated[
+        Path | None,
+        typer.Option(help="Phase 0.5b 确认轮 160/200 的 raw controls JSON"),
+    ] = None,
+    utility_confirmation_batch_2_adjudication_json: Annotated[
+        Path | None,
+        typer.Option(help="Phase 0.5b 确认轮 controls 的独立裁决 JSON"),
+    ] = None,
     validation_json: Annotated[
         Path | None, typer.Option(help="冻结 replay validation JSON；缺失时报告保持 INCOMPLETE")
     ] = None,
@@ -729,6 +798,31 @@ def gate_report(
     ] = None,
 ) -> None:
     """从已落盘的 Run/Event/Finding 重建冻结的 Phase 0.5 Gate 分析。"""
+    confirmation_paths = (
+        utility_confirmation_assessment_json,
+        utility_confirmation_batch_1_controls_json,
+        utility_confirmation_batch_1_adjudication_json,
+        utility_confirmation_batch_2_controls_json,
+        utility_confirmation_batch_2_adjudication_json,
+    )
+    if any(confirmation_paths) and not all(confirmation_paths):
+        typer.secho(
+            "合并 utility 证据必须同时提供 assessment、两份 controls 与两份 adjudication。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(ExitCode.BAD_CONFIG)
+    utility_confirmation = (
+        load_utility_confirmation_evidence(
+            assessment_json=utility_confirmation_assessment_json,
+            batch_1_controls_json=utility_confirmation_batch_1_controls_json,
+            batch_1_adjudication_json=utility_confirmation_batch_1_adjudication_json,
+            batch_2_controls_json=utility_confirmation_batch_2_controls_json,
+            batch_2_adjudication_json=utility_confirmation_batch_2_adjudication_json,
+        )
+        if all(confirmation_paths)
+        else None
+    )
     controls_result = (
         ControlsReport.from_report_json(controls_json.read_text(encoding="utf-8"))
         if controls_json is not None
@@ -783,6 +877,7 @@ def gate_report(
             store,
             controls=controls_result,
             controls_adjudication=controls_adjudication_result,
+            utility_confirmation=utility_confirmation,
             golden=golden_result,
             attacker_control=attacker_control_result,
             controller_controls=controller_controls_result,
@@ -844,6 +939,26 @@ def gate_preflight(
         Path | None,
         typer.Option(help="三角色计费 Token coverage 的非凭据证据 JSON；缺失即拒绝正式 Gate"),
     ] = None,
+    utility_confirmation_assessment_json: Annotated[
+        Path | None,
+        typer.Option(help="Phase 0.5b post-failure amendment 的版本化合并裁定 JSON"),
+    ] = None,
+    utility_confirmation_batch_1_controls_json: Annotated[
+        Path | None,
+        typer.Option(help="Phase 0.5b 首轮 137/200 的 raw controls JSON"),
+    ] = None,
+    utility_confirmation_batch_1_adjudication_json: Annotated[
+        Path | None,
+        typer.Option(help="Phase 0.5b 首轮 controls 的独立裁决 JSON"),
+    ] = None,
+    utility_confirmation_batch_2_controls_json: Annotated[
+        Path | None,
+        typer.Option(help="Phase 0.5b 确认轮 160/200 的 raw controls JSON"),
+    ] = None,
+    utility_confirmation_batch_2_adjudication_json: Annotated[
+        Path | None,
+        typer.Option(help="Phase 0.5b 确认轮 controls 的独立裁决 JSON"),
+    ] = None,
     out: Annotated[Path | None, typer.Option(help="自检报告 JSON 输出路径")] = None,
 ) -> None:
     """开跑前的零成本环境自检 —— **不调用任何 Provider**。
@@ -856,6 +971,28 @@ def gate_preflight(
     阶段结论仍然只看 `gate-report.json` 的 verdict。
     """
     try:
+        confirmation_paths = (
+            utility_confirmation_assessment_json,
+            utility_confirmation_batch_1_controls_json,
+            utility_confirmation_batch_1_adjudication_json,
+            utility_confirmation_batch_2_controls_json,
+            utility_confirmation_batch_2_adjudication_json,
+        )
+        if any(confirmation_paths) and not all(confirmation_paths):
+            raise ValueError(
+                "合并 utility 证据必须同时提供 assessment、两份 controls 与两份 adjudication"
+            )
+        utility_confirmation = (
+            load_utility_confirmation_evidence(
+                assessment_json=utility_confirmation_assessment_json,
+                batch_1_controls_json=utility_confirmation_batch_1_controls_json,
+                batch_1_adjudication_json=utility_confirmation_batch_1_adjudication_json,
+                batch_2_controls_json=utility_confirmation_batch_2_controls_json,
+                batch_2_adjudication_json=utility_confirmation_batch_2_adjudication_json,
+            )
+            if all(confirmation_paths)
+            else None
+        )
         billing_evidence = (
             BillingEvidenceBundle.model_validate_json(
                 billing_evidence_json.read_text(encoding="utf-8")
@@ -868,6 +1005,7 @@ def gate_preflight(
             database_url=db,
             golden_fixtures=golden_fixtures,
             billing_evidence=billing_evidence,
+            utility_confirmation=utility_confirmation,
         )
     except (OSError, ValueError) as exc:
         typer.secho(f"Gate preflight 配置被拒绝:{exc}", fg=typer.colors.RED, err=True)

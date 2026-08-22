@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -11,6 +12,7 @@ from scripts.run_gate_matrix import (
     _exclusive_state_lock,
     _resolve_log_directory,
     _save,
+    _subprocess_env,
 )
 
 from redcell.gate_analysis import GateCondition, SeedPlan
@@ -32,6 +34,7 @@ from redcell.gate_runner import (
 from redcell.gate_runner import (
     record_outcome as _persist_outcome,
 )
+from redcell.host_wakelock import HostWakelockError
 
 FROZEN_PLAN = SeedPlan.model_validate_json(
     (Path(__file__).parents[1] / "docs" / "PHASE0_5_SEED_PLAN.json").read_text(encoding="utf-8")
@@ -86,6 +89,22 @@ def test_matrix_dry_run_survives_legacy_windows_output_encoding(tmp_path) -> Non
 
     assert completed.returncode == 0, completed.stderr.decode("utf-8", errors="replace")
     assert "待执行 72 格" in completed.stdout.decode("utf-8")
+    assert not state_path.exists()
+    assert not state_path.with_name(f"{state_path.name}.lock").exists()
+
+
+def test_matrix_child_environment_forces_utf8_after_inheriting_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PYTHONUTF8", "0")
+    monkeypatch.setenv("PYTHONIOENCODING", "cp1252")
+    monkeypatch.setenv("REDCELL_TEST_SENTINEL", "preserved")
+
+    environment = _subprocess_env()
+
+    assert environment["PYTHONUTF8"] == "1"
+    assert environment["PYTHONIOENCODING"] == "utf-8"
+    assert environment["REDCELL_TEST_SENTINEL"] == "preserved"
 
 
 def record_outcome(state: MatrixState, **kwargs) -> MatrixState:
@@ -707,3 +726,80 @@ def test_exact_run_id_is_required_instead_of_treatment_matching() -> None:
     run = _finished_run(static_memory)
 
     assert "Run ID" in (verify_cell_run(run, static_off, expected_run_id="the-dispatched-id") or "")
+
+
+def _wakelock_probe(events: list[str]):
+    """替身唤醒锁,记录获取/释放时刻,便于断言它罩住了整个派发。"""
+
+    @contextlib.contextmanager
+    def _fake():
+        events.append("acquired")
+        try:
+            yield "test-lock"
+        finally:
+            events.append("released")
+
+    return _fake
+
+
+def test_dispatch_is_wrapped_in_a_host_wakelock_but_dry_run_is_not(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """2026-08-18 的矩阵死于主机睡眠;派发必须由进程自己持锁,空跑则不该要求它。"""
+    import scripts.run_gate_matrix as runner
+
+    events: list[str] = []
+
+    def fake_run_matrix(_args: object) -> int:
+        events.append("dispatched")
+        return 0
+
+    monkeypatch.setattr(runner, "host_wakelock", _wakelock_probe(events))
+    monkeypatch.setattr(runner, "_run_matrix", fake_run_matrix)
+    argv = [
+        "run_gate_matrix.py",
+        "--plan",
+        str(tmp_path / "plan.json"),
+        "--state",
+        str(tmp_path / "state.json"),
+    ]
+
+    monkeypatch.setattr(sys, "argv", [*argv, "--dry-run"])
+    assert runner.main() == 0
+    assert events == ["dispatched"]
+
+    events.clear()
+    monkeypatch.setattr(sys, "argv", argv)
+    assert runner.main() == 0
+    assert events == ["acquired", "dispatched", "released"]
+
+
+def test_a_refused_wakelock_stops_the_matrix_before_any_cell(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """拿不到锁就退出,而不是打条警告继续跑到凌晨再作废整块。"""
+    import scripts.run_gate_matrix as runner
+
+    dispatched: list[str] = []
+
+    @contextlib.contextmanager
+    def refuse():
+        raise HostWakelockError("拒绝")
+        yield  # pragma: no cover - 使函数成为生成器
+
+    monkeypatch.setattr(runner, "host_wakelock", refuse)
+    monkeypatch.setattr(runner, "_run_matrix", lambda _args: dispatched.append("x"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_gate_matrix.py",
+            "--plan",
+            str(tmp_path / "plan.json"),
+            "--state",
+            str(tmp_path / "state.json"),
+        ],
+    )
+
+    assert runner.main() == 2
+    assert dispatched == []

@@ -402,6 +402,7 @@ def test_findings_produce_a_nonzero_exit(workspace) -> None:
     )
     attempt = build_attempt(
         run_id=run_record.id,
+        attempt_index=0,
         strategy_id="cross_user_resource_access",
         actor="customer_a",
         attack_prompt="...",

@@ -38,8 +38,14 @@ from redcell.gate_billing_evidence import (
 )
 from redcell.golden import evaluate_golden
 from redcell.protocols.common import RedCellModel
+from redcell.protocols.run import ProviderRunConfiguration
 from redcell.shared_rate_limit import SQLiteRateLimiter
 from redcell.storage import RunStore
+from redcell.utility_confirmation import (
+    PHASE_0_5B_EXPERIMENT,
+    UtilityConfirmationEvidence,
+    validate_utility_confirmation,
+)
 
 PREFLIGHT_VERSION = "phase-0.5-preflight-v1"
 
@@ -193,6 +199,46 @@ def _seed_plan_check(seed_plan_json: Path) -> PreflightCheck:
     )
 
 
+def _requires_utility_confirmation(seed_plan_json: Path) -> bool:
+    """Only Phase 0.5b is governed by the frozen post-failure amendment."""
+    try:
+        seed_plan = SeedPlan.model_validate_json(seed_plan_json.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return seed_plan.experiment == PHASE_0_5B_EXPERIMENT
+
+
+def _utility_confirmation_check(
+    evidence: UtilityConfirmationEvidence | None,
+    *,
+    target: ProviderRunConfiguration,
+) -> PreflightCheck:
+    if evidence is None:
+        return PreflightCheck(
+            name="utility_confirmation_missing",
+            passed=False,
+            detail="Phase 0.5b 必须同时消费 137/200 与 160/200 的原始 controls 和独立裁决",
+        )
+    result = validate_utility_confirmation(
+        evidence,
+        expected_target=target,
+    )
+    if result.passed:
+        return PreflightCheck(
+            name="utility_confirmation",
+            passed=True,
+            detail=(
+                f"{result.completed}/{result.runs} >= {result.floor}; "
+                "两批 SHA、裁决、context 与逐任务统计均已复算"
+            ),
+        )
+    return PreflightCheck(
+        name="utility_confirmation",
+        passed=False,
+        detail="; ".join(result.failures),
+    )
+
+
 def _golden_check(fixtures: Path) -> PreflightCheck:
     try:
         report = evaluate_golden(fixtures)
@@ -251,6 +297,7 @@ def run_preflight(
     roles: list[tuple[str, ProviderSettings]] | None = None,
     shared_rate_limit_db: str | None = None,
     billing_evidence: BillingEvidenceBundle | None = None,
+    utility_confirmation: UtilityConfirmationEvidence | None = None,
 ) -> PreflightReport:
     """跑完全部零成本检查;任何一项失败都不应进入付费步骤。
 
@@ -259,6 +306,19 @@ def run_preflight(
     那不是回归,只是测试在观察开发机的状态。
     """
     roles = load_role_settings() if roles is None else roles
+    expected_roles = {role.value for role in BillingRole}
+    role_names = [name for name, _settings in roles]
+    if len(role_names) != len(expected_roles) or set(role_names) != expected_roles:
+        role_detail = f"必须且只能提供 target / attacker / controller 各一个；实际为 {role_names}"
+        return PreflightReport(
+            checks=[
+                PreflightCheck(
+                    name="role_configuration",
+                    passed=False,
+                    detail=role_detail,
+                )
+            ]
+        )
     checks: list[PreflightCheck] = []
     for name, settings in roles:
         checks.append(_connection_check(name, settings))
@@ -285,6 +345,11 @@ def run_preflight(
             )
         )
     checks.append(_seed_plan_check(seed_plan_json))
+    if _requires_utility_confirmation(seed_plan_json):
+        target = next(settings for name, settings in roles if name == "target")
+        checks.append(
+            _utility_confirmation_check(utility_confirmation, target=target.run_configuration())
+        )
     checks.append(_golden_check(golden_fixtures))
     checks.append(_database_check(database_url))
     checks.append(

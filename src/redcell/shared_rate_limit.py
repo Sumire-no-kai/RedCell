@@ -24,6 +24,14 @@ class SQLiteRateLimiter:
     ) -> None:
         if not database_url.startswith("sqlite:///"):
             raise ValueError("共享速率协调器只支持 sqlite:/// 数据库 URL")
+        if not provider_key.strip():
+            raise ValueError("共享速率协调器需要非空 provider_key")
+        if min_interval_seconds < 0:
+            raise ValueError("min_interval_seconds 不得为负数")
+        if max_concurrency < 0:
+            raise ValueError("max_concurrency 不得为负数")
+        if lease_timeout_seconds <= 0:
+            raise ValueError("lease_timeout_seconds 必须大于 0")
         self._path = database_url.removeprefix("sqlite:///")
         self._provider_key = provider_key
         self._min_interval = min_interval_seconds
@@ -54,7 +62,10 @@ class SQLiteRateLimiter:
             )
 
     def _try_acquire(self, lease_id: str) -> float:
-        now = time.monotonic()
+        # 这两个时间戳会写进 SQLite，供另一个进程乃至重启后的进程读取。
+        # monotonic 时钟只适合单次开机内比较；机器重启后它会从较小值重新开始，
+        # 旧 lease 会因此看起来要很久以后才过期。持久化值必须使用 epoch 时间。
+        now = time.time()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(

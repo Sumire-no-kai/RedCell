@@ -17,9 +17,10 @@ from redcell.gate_analysis import (
     seed_plan_digest,
 )
 from redcell.protocols.common import RedCellModel
-from redcell.protocols.run import GenerationMemoryMode, SearchSelector
+from redcell.protocols.run import ExecutionHostProfile, GenerationMemoryMode, SearchSelector
 
-GATE_PLAN_VERSION = "phase-0.5-gate-plan-v1"
+GATE_PLAN_VERSION = "phase-0.5-gate-plan-v2"
+LEGACY_GATE_PLAN_VERSION = "phase-0.5-gate-plan-v1"
 
 
 class SeedRole(StrEnum):
@@ -58,10 +59,11 @@ class GatePlanCell(RedCellModel):
 
 
 class GatePlan(RedCellModel):
-    plan_version: Literal["phase-0.5-gate-plan-v1"] = GATE_PLAN_VERSION
+    plan_version: Literal["phase-0.5-gate-plan-v1", "phase-0.5-gate-plan-v2"] = GATE_PLAN_VERSION
     seed_plan_digest: str
     database_url: str
     report_directory: str
+    execution_host_profile: ExecutionHostProfile | None = None
     max_attempts: int = Field(ge=1)
     primary_cells: int
     reserve_cells: int
@@ -90,11 +92,19 @@ class GatePlan(RedCellModel):
         )
         seed_plan = SeedPlan(experiment=frozen.experiment, primary=primary, reserve=reserve)
         require_frozen_seed_plan(seed_plan)
+        if self.plan_version == GATE_PLAN_VERSION and self.execution_host_profile is None:
+            raise ValueError("v2 Gate plan 必须冻结 execution_host_profile")
+        if (
+            self.plan_version == LEGACY_GATE_PLAN_VERSION
+            and self.execution_host_profile is not None
+        ):
+            raise ValueError("v1 Gate plan 不得携带 execution_host_profile")
         expected = _build_cells(
             seed_plan,
             max_attempts=self.max_attempts,
             database_url=self.database_url,
             report_directory=self.report_directory,
+            execution_host_profile=self.execution_host_profile,
         )
         if self.primary_cells != len(primary) * len(_TREATMENTS):
             raise ValueError("Gate plan primary_cells does not match its frozen allocation")
@@ -111,6 +121,7 @@ def _build_cells(
     max_attempts: int,
     database_url: str,
     report_directory: str,
+    execution_host_profile: ExecutionHostProfile | None,
 ) -> list[GatePlanCell]:
     cells: list[GatePlanCell] = []
     for role, seeds in (
@@ -138,6 +149,8 @@ def _build_cells(
                     "--out",
                     report_directory,
                 ]
+                if execution_host_profile is not None:
+                    argv.extend(["--execution-host-profile", execution_host_profile.value])
                 cells.append(
                     GatePlanCell(
                         seed=seed,
@@ -159,6 +172,7 @@ def build_gate_plan(
     max_attempts: int,
     database_url: str,
     report_directory: str,
+    execution_host_profile: ExecutionHostProfile = ExecutionHostProfile.WINDOWS_WAKELOCK_V1,
 ) -> GatePlan:
     """Build commands without executing a Provider or touching the run database."""
     if max_attempts != FORMAL_MAX_ATTEMPTS:
@@ -173,11 +187,13 @@ def build_gate_plan(
         max_attempts=max_attempts,
         database_url=database_url,
         report_directory=report_directory,
+        execution_host_profile=execution_host_profile,
     )
     return GatePlan(
         seed_plan_digest=seed_plan_digest(seed_plan),
         database_url=database_url,
         report_directory=report_directory,
+        execution_host_profile=execution_host_profile,
         max_attempts=max_attempts,
         primary_cells=len(seed_plan.primary) * len(_TREATMENTS),
         reserve_cells=len(seed_plan.reserve) * len(_TREATMENTS),

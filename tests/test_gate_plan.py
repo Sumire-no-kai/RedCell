@@ -9,7 +9,8 @@ from redcell.gate_analysis import (
     SeedPlan,
     seed_plan_digest,
 )
-from redcell.gate_plan import GatePlan, build_gate_plan
+from redcell.gate_plan import GATE_PLAN_VERSION, GatePlan, build_gate_plan
+from redcell.protocols.run import ExecutionHostProfile
 
 SEED_PLAN_PATH = Path(__file__).parents[1] / "docs" / "PHASE0_5_SEED_PLAN.json"
 
@@ -32,6 +33,9 @@ def test_gate_plan_freezes_500_attempts_and_disables_reserves() -> None:
     )
 
     assert len(plan.cells) == 120
+    assert plan.plan_version == GATE_PLAN_VERSION
+    assert plan.execution_host_profile is ExecutionHostProfile.WINDOWS_WAKELOCK_V1
+    assert all("--execution-host-profile" in cell.argv for cell in plan.cells)
     assert all(cell.enabled_initially for cell in plan.cells[:72])
     assert not any(cell.enabled_initially for cell in plan.cells[72:])
 

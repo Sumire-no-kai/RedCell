@@ -15,6 +15,7 @@ def _attempt(index: int, strategy_id: str, reward: float):
     return build_attempt(
         attempt_id=f"attempt-{index}",
         run_id="run",
+        attempt_index=index,
         strategy_id=strategy_id,
         actor="customer_a",
         attack_prompt="ignored",

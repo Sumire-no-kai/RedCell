@@ -139,6 +139,12 @@ class Attempt(RedCellModel):
 
     id: str = Field(default_factory=new_id)
     run_id: str
+    attempt_index: int | None = Field(default=None, ge=0)
+    """Run 内的权威 0-based 逻辑 Attempt 序号。
+
+    旧协议 payload 没有该字段，所以读取模型允许 `None`；新执行与新落盘必须提供。
+    它与 ControllerDecision.attempt_index 是同一个编号，不另造第二套计数器。
+    """
     strategy_id: str
     actor: str
     attack_prompt: str
@@ -200,6 +206,7 @@ def build_attempt(
     *,
     attempt_id: str | None = None,
     run_id: str,
+    attempt_index: int | None = None,
     strategy_id: str,
     actor: str,
     attack_prompt: str,
@@ -214,6 +221,7 @@ def build_attempt(
     signals = signals or []
     payload: dict[str, Any] = {
         "run_id": run_id,
+        "attempt_index": attempt_index,
         "strategy_id": strategy_id,
         "actor": actor,
         "attack_prompt": attack_prompt,

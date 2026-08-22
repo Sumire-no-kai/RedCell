@@ -44,6 +44,8 @@ from redcell.gate_runner import (
     uncompensated_invalid_block_count,
     verify_cell_run,
 )
+from redcell.host_wakelock import HostWakelockError, host_wakelock
+from redcell.protocols.run import ExecutionHostProfile
 from redcell.storage import RunStore
 
 # worker 最多并行 3 个 cell；Provider 共享 limiter 会进一步执行 Target=2 等更严格的角色上限。
@@ -166,7 +168,7 @@ def _run_cell(cell, log_dir: Path, run_id: str) -> tuple[int, str]:
             stdout=handle,
             stderr=subprocess.STDOUT,
             check=False,
-            env={"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", **_inherited_env()},
+            env=_subprocess_env(),
         )
     minutes = (time.time() - started) / 60
     print(
@@ -176,8 +178,9 @@ def _run_cell(cell, log_dir: Path, run_id: str) -> tuple[int, str]:
     return completed.returncode, str(log_path)
 
 
-def _inherited_env() -> dict[str, str]:
-    return dict(os.environ)
+def _subprocess_env() -> dict[str, str]:
+    """Inherit the host environment while forcing deterministic UTF-8 child output."""
+    return {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
 
 
 def _resolve_log_directory(requested: Path | None, plan: GatePlan) -> Path:
@@ -218,9 +221,27 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        with _exclusive_state_lock(args.state):
+        if args.dry_run:
             return _run_matrix(args)
+        # 唤醒锁必须罩住整个派发过程。2026-08-18 的矩阵正是死在无人看管时段的主机
+        # 睡眠上,而当时这条防线只写在 Runbook 里 —— 没有任何进程真的持有它。
+        with _exclusive_state_lock(args.state), host_wakelock() as detail:
+            print(f"主机唤醒锁   {detail}")
+            previous_profile = os.environ.get("REDCELL_MATRIX_WAKELOCK_PROFILE")
+            os.environ["REDCELL_MATRIX_WAKELOCK_PROFILE"] = (
+                ExecutionHostProfile.WINDOWS_WAKELOCK_V1.value
+            )
+            try:
+                return _run_matrix(args)
+            finally:
+                if previous_profile is None:
+                    os.environ.pop("REDCELL_MATRIX_WAKELOCK_PROFILE", None)
+                else:
+                    os.environ["REDCELL_MATRIX_WAKELOCK_PROFILE"] = previous_profile
     except StateLockUnavailableError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except HostWakelockError as exc:
         print(str(exc), file=sys.stderr)
         return 2
 
@@ -255,7 +276,6 @@ def _run_matrix(args: argparse.Namespace) -> int:
     if recovered != state:
         state = recovered
         print("检测到中断前已派发但未确认的 cell；该 seed block 已按未知交付失效。")
-    _save(args.state, state)
 
     if args.dry_run:
         ready = pending_cells(plan, state, limit=len(plan.cells))
@@ -267,6 +287,8 @@ def _run_matrix(args: argparse.Namespace) -> int:
         print()
         print(progress_summary(plan, state))
         return 0
+
+    _save(args.state, state)
 
     while True:
         batch = pending_cells(plan, state, limit=args.concurrency)

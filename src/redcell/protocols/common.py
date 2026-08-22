@@ -12,7 +12,7 @@ from enum import StrEnum
 
 from redcell._base import RedCellModel
 
-REDCELL_PROTOCOL_VERSION = "0.4.0"
+REDCELL_PROTOCOL_VERSION = "0.5.0"
 
 
 # ── ID ───────────────────────────────────────────────────────────────────────

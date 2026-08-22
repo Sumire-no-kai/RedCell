@@ -92,10 +92,29 @@
 工期而非成本才是约束。Target 账户上限为 3、正式自限为 2，因此必须按分片执行并准备中断续跑；
 reserve block 若被启用，时间与成本按 6 cell 为单位递增。
 
-Windows 正式 runner 必须接通交流电，并在启动前用 `powercfg /query SCHEME_CURRENT SUB_SLEEP`
-确认交流电自动睡眠为“从不”。关闭屏幕不影响运行，但系统睡眠会暂停进程与网络；恢复逻辑会把睡眠时
-尚未确认交付的 cell 按 fail-closed 处理，因此断点续跑不能把主动睡眠变成无损暂停机制。修改电源策略
-前记录原值，矩阵结束后恢复；不要依赖电池模式完成长跑。
+Windows 正式 runner 必须接通交流电。启动前**先用 `powercfg /a` 确认这台机器属于哪一种睡眠模型**，
+再决定检查什么——两种机器要查的东西不一样：
+
+- **传统机器**（`powercfg /a` 列出 `Standby (S3)` 为可用）：用
+  `powercfg /query SCHEME_CURRENT SUB_SLEEP` 确认交流电自动睡眠为“从不”。关闭屏幕不影响运行。
+- **Modern Standby 机器**（只列出 `Standby (S0 Low Power Idle)`，S3 显示为
+  “disabled when S0 low power idle is supported”）：**上面那条检查是死的。**
+  `standby-timeout-ac` 设成 0 也不会阻止系统进入 Modern Standby，而它的触发点是**关闭屏幕**——
+  所以“关屏不影响运行”这句话在这类机器上是**错的**。必须另外设
+  `powercfg /change monitor-timeout-ac 0`。
+
+> **[2026-08-18] 这一段是被一次事故改写的，不是补充说明。** 当时按旧文本只查了 `SUB_SLEEP`，
+> 得到“全绿”的结论；机器仍在 `02:15` 进入 Modern Standby 并停留七小时。后果不是“暂停一下”：
+> Target 延迟中位数从 2.1 s 涨到 15.9 s，越过客户端 60 s 超时；超时→重试→放弃，两个 seed block
+> 因单 Run 放弃率越过 10% 判据作废；最后一次 `Adaptive Connected Standby` 断网把整棵进程树带走。
+> **一条只写在文档里、依赖人记得执行的防线，等于没有防线**，所以
+> `scripts/run_gate_matrix.py` 现在自己持有唤醒锁（`SetThreadExecutionState`，system + display
+> 一起钉），拿不到就拒绝派发任何 cell；`--dry-run` 不要求它。它是手机侧 `termux-wake-lock`
+> 在桌面一直缺的对应物。⚠️ 进程持锁**不替代**上面的电源检查：锁只在 runner 活着时有效。
+
+系统睡眠会暂停进程与网络；恢复逻辑会把睡眠时尚未确认交付的 cell 按 fail-closed 处理，因此断点
+续跑不能把主动睡眠变成无损暂停机制。修改电源策略前记录原值，矩阵结束后恢复；不要依赖电池模式
+完成长跑。
 
 ### 1.2 原生 Termux runner（不使用 proot/Ubuntu）
 

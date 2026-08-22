@@ -25,13 +25,22 @@ SEEDS=(5000 5001 5002)
 for budget in 20 100; do
   for algo in static random thompson; do
     echo "=== budget=$budget algo=$algo  (3 seeds in parallel) ==="
+    pids=()
     for seed in "${SEEDS[@]}"; do
       PYTHONUTF8=1 "$PY" -m redcell.cli run \
         --online --algorithm "$algo" --budget "$budget" --seed "$seed" \
         --out "$OUT" \
         >"$LOG_DIR/${algo}-b${budget}-s${seed}.log" 2>&1 &
+      pids+=("$!")
     done
-    wait
+    failed=0
+    for pid in "${pids[@]}"; do
+      wait "$pid" || failed=1
+    done
+    if (( failed != 0 )); then
+      echo "    failed: budget=$budget algo=$algo; inspect $LOG_DIR" >&2
+      exit 1
+    fi
     echo "    done: budget=$budget algo=$algo"
   done
 done

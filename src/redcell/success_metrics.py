@@ -57,9 +57,10 @@ def derive_success_metrics(
     Finding 必须能与输入 Attempt 一一关联,否则直接报错,不静默污染分母或策略归属。
     """
 
+    ordered_attempts = authoritative_attempt_order(attempts)
     attempts_by_id: dict[str, Attempt] = {}
     attempt_counts: Counter[str] = Counter()
-    for attempt in attempts:
+    for attempt in ordered_attempts:
         if attempt.id in attempts_by_id:
             raise ValueError(f"重复 Attempt id: {attempt.id}")
         attempts_by_id[attempt.id] = attempt
@@ -98,9 +99,23 @@ def derive_success_metrics(
 
     return SuccessMetrics(
         by_strategy=by_strategy,
-        queries_to_first_attempt_success=_first_hit_position(attempts, attempt_hit_ids),
-        queries_to_first_impact_success=_first_hit_position(attempts, impact_hit_ids),
+        queries_to_first_attempt_success=_first_hit_position(ordered_attempts, attempt_hit_ids),
+        queries_to_first_impact_success=_first_hit_position(ordered_attempts, impact_hit_ids),
     )
+
+
+def authoritative_attempt_order(attempts: Sequence[Attempt]) -> list[Attempt]:
+    """Return Attempts in their explicit logical order or reject unverifiable evidence."""
+    indexes: set[int] = set()
+    for attempt in attempts:
+        if attempt.attempt_index is None:
+            raise ValueError(
+                f"Attempt {attempt.id} 缺少权威 attempt_index，不能计算依赖先后顺序的指标"
+            )
+        if attempt.attempt_index in indexes:
+            raise ValueError(f"重复 Attempt attempt_index: {attempt.attempt_index}")
+        indexes.add(attempt.attempt_index)
+    return sorted(attempts, key=lambda attempt: attempt.attempt_index)  # type: ignore[arg-type]
 
 
 def _first_hit_position(attempts: Sequence[Attempt], hit_ids: set[str]) -> int | None:

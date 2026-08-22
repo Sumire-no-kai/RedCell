@@ -112,6 +112,36 @@ class ProviderRunConfiguration(RedCellModel):
     """`None` preserves historical snapshots; only explicit `True` permits a formal Gate."""
 
 
+class RequestTimeoutConfiguration(RedCellModel):
+    """实际 HTTP 超时；它会改变一次 Run 能否通过可靠性判据。"""
+
+    target_seconds: float = Field(gt=0.0)
+    attacker_seconds: float = Field(gt=0.0)
+    controller_seconds: float | None = Field(default=None, gt=0.0)
+
+
+class ExecutionHostProfile(StrEnum):
+    """正式矩阵使用的、可复核的执行主机运行档案。"""
+
+    WINDOWS_WAKELOCK_V1 = "windows-wakelock-v1"
+
+
+class ExecutionHostConfiguration(RedCellModel):
+    """不含机器标识、但会改变长跑交付语义的宿主条件。"""
+
+    profile: ExecutionHostProfile
+    os_family: Literal["windows"]
+    wakelock: Literal["system-display-required"]
+
+    @classmethod
+    def windows_wakelock_v1(cls) -> ExecutionHostConfiguration:
+        return cls(
+            profile=ExecutionHostProfile.WINDOWS_WAKELOCK_V1,
+            os_family="windows",
+            wakelock="system-display-required",
+        )
+
+
 class SearchSelector(StrEnum):
     """本次 Run 实际使用的策略选择机制。
 
@@ -203,6 +233,10 @@ class ExperimentConditions(RedCellModel):
     target: ProviderRunConfiguration
     attacker: ProviderRunConfiguration
     arena: ArenaRunConfiguration
+    request_timeouts: RequestTimeoutConfiguration | None = None
+    """运行时 HTTP 超时；Phase 0.5b v3 起必须随实验条件落盘。"""
+    execution_host: ExecutionHostConfiguration | None = None
+    """长跑宿主档案；避免把不同睡眠/网络交付语义混成一组数据。"""
     strategy_catalogue: StrategyCatalogueSummary | None = None
     """Phase 0.5 起的新实验必须提供；None 仅用于复现 Phase 0 既有条件指纹。"""
 
@@ -253,6 +287,16 @@ class ExperimentConditions(RedCellModel):
             "target": self.target.model_dump(mode="json", exclude_none=True),
             "attacker": self.attacker.model_dump(mode="json", exclude_none=True),
             "arena": self.arena.model_dump(mode="json"),
+            "request_timeouts": (
+                self.request_timeouts.model_dump(mode="json")
+                if self.request_timeouts is not None
+                else None
+            ),
+            "execution_host": (
+                self.execution_host.model_dump(mode="json")
+                if self.execution_host is not None
+                else None
+            ),
             "strategy_catalogue": (
                 self.strategy_catalogue.model_dump(mode="json")
                 if self.strategy_catalogue is not None
@@ -396,7 +440,7 @@ class Run(RedCellModel):
         if self.experiment_conditions is None:
             raise ValueError("Gate context requires experiment_conditions")
         payload = {
-            "version": "phase-0.5-gate-context-v1",
+            "version": "phase-0.5-gate-context-v2",
             "target_name": self.target_name,
             "policy_version": self.policy_version,
             "adapter_type": self.adapter_type,

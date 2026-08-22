@@ -133,7 +133,7 @@ def one_sided_worse_pvalue(
     denominator = comb(total, observed_runs)
     tail = sum(
         comb(successes, i) * comb(failures, observed_runs - i)
-        for i in range(0, observed_hits + 1)
+        for i in range(observed_hits + 1)
         if 0 <= observed_runs - i <= failures
     )
     return tail / denominator

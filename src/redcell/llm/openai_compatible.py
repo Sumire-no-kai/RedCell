@@ -287,6 +287,11 @@ class OpenAICompatibleProvider(LLMProvider):
             self._client = httpx.AsyncClient(timeout=self._timeout)
         return self._client
 
+    @property
+    def timeout_seconds(self) -> float:
+        """Return the timeout actually supplied to HTTPX, for the Run condition snapshot."""
+        return self._timeout
+
     async def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
         client = self._ensure_client()
         try:

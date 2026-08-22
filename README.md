@@ -136,7 +136,9 @@ redcell report <run-id>
 
 `run` writes a self-contained HTML report plus machine-readable JSON under
 `runs/<run-id>/`, and stores the full trace in SQLite so any attempt can be
-replayed later.
+replayed later. Completed attempts carry an explicit logical sequence number;
+time-to-first metrics use that sequence rather than timestamps or database return
+order, so equal timestamps and clock adjustments cannot silently reorder evidence.
 
 ### Calibration knobs and sample integrity
 

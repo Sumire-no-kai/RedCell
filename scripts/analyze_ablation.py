@@ -20,6 +20,7 @@ from redcell.protocols.finding import Finding
 from redcell.protocols.run import Run, RunStatus
 from redcell.protocols.trace import Attempt
 from redcell.storage import DEFAULT_URL, RunStore
+from redcell.success_metrics import authoritative_attempt_order
 
 ALGORITHMS = ("static", "random", "thompson")
 BUDGETS = (20, 100)
@@ -58,11 +59,12 @@ def queries_to_first_finding(
     metric is any Finding, not a new threshold over shaped reward or triad fields.
     """
 
+    ordered_attempts = authoritative_attempt_order(attempts)
     finding_attempt_ids = {finding.attempt_id for finding in findings}
     return next(
         (
             index
-            for index, attempt in enumerate(attempts, start=1)
+            for index, attempt in enumerate(ordered_attempts, start=1)
             if attempt.id in finding_attempt_ids
         ),
         None,
