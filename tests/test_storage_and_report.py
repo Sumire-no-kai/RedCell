@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 import pytest
 
@@ -31,6 +32,7 @@ from redcell.protocols.run import Run, RunEvent, RunEventType, RunStatus
 from redcell.report import DISCLAIMER, ReportData, to_html, to_json, write_report
 from redcell.search import ControllerDecision, ControllerDecisionOutcome
 from redcell.storage import RunStore
+from redcell.storage.models import AttemptRow
 
 
 @pytest.fixture
@@ -53,10 +55,18 @@ def run() -> Run:
     )
 
 
-def _attempt(run_id: str, strategy_id: str, reward: float, *, turns: int = 1):
+def _attempt(
+    run_id: str,
+    strategy_id: str,
+    reward: float,
+    *,
+    turns: int = 1,
+    attempt_index: int = 0,
+):
     signals = [SignalScore(channel=SignalChannel.TOOL, score=reward, tier="t", evidence="e")]
     return build_attempt(
         run_id=run_id,
+        attempt_index=attempt_index,
         strategy_id=strategy_id,
         actor="customer_a",
         attack_prompt="...",
@@ -140,6 +150,77 @@ def test_attempt_round_trips_with_nested_trace(store: RunStore, run: Run) -> Non
     assert loaded[0].turn_count == 3
 
 
+def test_new_attempt_write_requires_an_authoritative_index(store: RunStore, run: Run) -> None:
+    store.save_run(run)
+    legacy_shaped = _attempt(run.id, "s1", 1.0).model_copy(update={"attempt_index": None})
+
+    with pytest.raises(ValueError, match="必须提供权威 attempt_index"):
+        store.save_attempt(legacy_shaped)
+
+
+def test_attempt_query_uses_index_instead_of_timestamp_or_uuid(store: RunStore, run: Run) -> None:
+    store.save_run(run)
+    same_time = datetime(2026, 8, 22, tzinfo=UTC)
+    attempts = [
+        _attempt(run.id, "s1", 0.0, attempt_index=index).model_copy(
+            update={"created_at": same_time}
+        )
+        for index in (2, 0, 1)
+    ]
+
+    store.save_attempts(attempts)
+
+    assert [attempt.attempt_index for attempt in store.attempts_for(run.id)] == [0, 1, 2]
+
+
+def test_v04_attempt_payload_backfills_index_from_its_decision(store: RunStore, run: Run) -> None:
+    store.save_run(run)
+    attempt = _attempt(run.id, "s1", 1.0, attempt_index=0)
+    event = RunEvent(
+        run_id=run.id,
+        attempt_id=attempt.id,
+        event_type=RunEventType.ATTEMPT_COMMITTED,
+        sequence=0,
+    )
+    store.commit_attempt_outcome(
+        run=run,
+        attempt=attempt,
+        findings=[],
+        decision=_completed_decision(attempt_index=0),
+        run_event=event,
+    )
+    with store._open() as session, session.begin():
+        row = session.get(AttemptRow, attempt.id)
+        assert row is not None
+        legacy_payload = dict(row.payload)
+        legacy_payload.pop("attempt_index")
+        row.payload = legacy_payload
+
+    loaded = store.attempts_for(run.id)
+
+    assert loaded[0].attempt_index == 0
+
+
+def test_attempt_and_decision_indexes_must_match(store: RunStore, run: Run) -> None:
+    store.save_run(run)
+    attempt = _attempt(run.id, "s1", 1.0, attempt_index=1)
+    event = RunEvent(
+        run_id=run.id,
+        attempt_id=attempt.id,
+        event_type=RunEventType.ATTEMPT_COMMITTED,
+        sequence=0,
+    )
+
+    with pytest.raises(ValueError, match="attempt_index 不一致"):
+        store.commit_attempt_outcome(
+            run=run,
+            attempt=attempt,
+            findings=[],
+            decision=_completed_decision(attempt_index=0),
+            run_event=event,
+        )
+
+
 def test_finding_round_trips(store: RunStore, run: Run) -> None:
     store.save_run(run)
     attempt = _attempt(run.id, "s1", 1.0)
@@ -178,9 +259,9 @@ def test_controller_invocation_round_trips_without_becoming_a_decision(
     assert store.decisions_for(run.id) == []
 
 
-def _completed_decision(strategy_id: str = "s1") -> ControllerDecision:
+def _completed_decision(strategy_id: str = "s1", attempt_index: int = 0) -> ControllerDecision:
     return ControllerDecision(
-        attempt_index=0,
+        attempt_index=attempt_index,
         controller="static",
         available_strategy_ids=[strategy_id],
         selected_strategy_id=strategy_id,
@@ -262,17 +343,18 @@ def test_attempts_per_strategy_shows_allocation(store: RunStore, run: Run) -> No
     """bandit 把预算分给了谁 —— 自适应是否真在分配的直接证据。"""
     store.save_run(run)
     store.save_attempts(
-        [_attempt(run.id, "s1", 0.0) for _ in range(3)] + [_attempt(run.id, "s2", 0.0)]
+        [_attempt(run.id, "s1", 0.0, attempt_index=index) for index in range(3)]
+        + [_attempt(run.id, "s2", 0.0, attempt_index=3)]
     )
     assert store.attempts_per_strategy(run.id) == {"s1": 3, "s2": 1}
 
 
 def test_success_rates_come_from_triad_not_numeric_score(store: RunStore, run: Run) -> None:
     store.save_run(run)
-    blocked = _attempt(run.id, "s1", 0.7)
-    realized = _attempt(run.id, "s1", 1.0)
-    numeric_only = _attempt(run.id, "s2", 1.0)
-    unknown = _attempt(run.id, "s2", 0.4)
+    blocked = _attempt(run.id, "s1", 0.7, attempt_index=0)
+    realized = _attempt(run.id, "s1", 1.0, attempt_index=1)
+    numeric_only = _attempt(run.id, "s2", 1.0, attempt_index=2)
+    unknown = _attempt(run.id, "s2", 0.4, attempt_index=3)
     store.save_attempts([blocked, realized, numeric_only, unknown])
     store.save_findings(
         [
@@ -295,16 +377,16 @@ def test_queries_to_first_successes_return_none_when_never_successful(
     """
     store.save_run(run)
     # 即使数字是 1.0,没有 triad 证据也不是成功。
-    store.save_attempts([_attempt(run.id, "s1", 1.0) for _ in range(5)])
+    store.save_attempts([_attempt(run.id, "s1", 1.0, attempt_index=index) for index in range(5)])
     assert store.queries_to_first_attempt_success(run.id) is None
     assert store.queries_to_first_impact_success(run.id) is None
 
 
 def test_queries_to_first_successes_have_explicit_semantics(store: RunStore, run: Run) -> None:
     store.save_run(run)
-    none = _attempt(run.id, "s1", 1.0)
-    blocked = _attempt(run.id, "s1", 0.7)
-    realized = _attempt(run.id, "s1", 0.2)
+    none = _attempt(run.id, "s1", 1.0, attempt_index=0)
+    blocked = _attempt(run.id, "s1", 0.7, attempt_index=1)
+    realized = _attempt(run.id, "s1", 0.2, attempt_index=2)
     store.save_attempts([none, blocked, realized])
     store.save_findings(
         [
@@ -322,9 +404,9 @@ def test_queries_to_first_successes_have_explicit_semantics(store: RunStore, run
 
 def _report(run: Run) -> ReportData:
     attempts = [
-        _attempt(run.id, "s1", 1.0),
-        _attempt(run.id, "s1", 0.7),
-        _attempt(run.id, "s2", 0.4),
+        _attempt(run.id, "s1", 1.0, attempt_index=0),
+        _attempt(run.id, "s1", 0.7, attempt_index=1),
+        _attempt(run.id, "s2", 0.4, attempt_index=2),
     ]
     findings = [
         _finding(attempts[1], ImpactStatus.REALIZED),

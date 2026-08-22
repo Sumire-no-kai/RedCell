@@ -21,9 +21,10 @@ from redcell.scoring import ScoringResult
 from redcell.success_metrics import derive_success_metrics
 
 
-def _attempt(strategy_id: str, score: float):
+def _attempt(strategy_id: str, score: float, attempt_index: int = 0):
     return build_attempt(
         run_id="run_1",
+        attempt_index=attempt_index,
         strategy_id=strategy_id,
         actor="customer_a",
         attack_prompt="test",
@@ -83,8 +84,8 @@ def _finding(
 
 
 def test_metrics_deduplicate_findings_and_ignore_numeric_score() -> None:
-    blocked = _attempt("s1", 0.7)
-    numeric_only = _attempt("s1", 1.0)
+    blocked = _attempt("s1", 0.7, 0)
+    numeric_only = _attempt("s1", 1.0, 1)
     metrics = derive_success_metrics(
         [blocked, numeric_only],
         [
@@ -100,6 +101,26 @@ def test_metrics_deduplicate_findings_and_ignore_numeric_score() -> None:
     assert stat.impact_success_rate == 0.0
     assert metrics.queries_to_first_attempt_success == 1
     assert metrics.queries_to_first_impact_success is None
+
+
+def test_first_hit_uses_authoritative_index_not_input_order() -> None:
+    first = _attempt("s1", 0.0, 0)
+    second = _attempt("s1", 0.7, 1)
+
+    metrics = derive_success_metrics([second, first], [_finding(second)])
+
+    assert metrics.queries_to_first_attempt_success == 2
+
+
+def test_order_dependent_metrics_reject_missing_or_duplicate_indexes() -> None:
+    missing = _attempt("s1", 0.0, 0).model_copy(update={"attempt_index": None})
+    duplicate_a = _attempt("s1", 0.0, 0)
+    duplicate_b = _attempt("s2", 0.0, 0)
+
+    with pytest.raises(ValueError, match="缺少权威 attempt_index"):
+        derive_success_metrics([missing], [])
+    with pytest.raises(ValueError, match="重复 Attempt attempt_index"):
+        derive_success_metrics([duplicate_a, duplicate_b], [])
 
 
 def test_intent_only_finding_is_not_attempt_success_or_stop_signal() -> None:

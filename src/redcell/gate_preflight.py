@@ -306,6 +306,19 @@ def run_preflight(
     那不是回归,只是测试在观察开发机的状态。
     """
     roles = load_role_settings() if roles is None else roles
+    expected_roles = {role.value for role in BillingRole}
+    role_names = [name for name, _settings in roles]
+    if len(role_names) != len(expected_roles) or set(role_names) != expected_roles:
+        role_detail = f"必须且只能提供 target / attacker / controller 各一个；实际为 {role_names}"
+        return PreflightReport(
+            checks=[
+                PreflightCheck(
+                    name="role_configuration",
+                    passed=False,
+                    detail=role_detail,
+                )
+            ]
+        )
     checks: list[PreflightCheck] = []
     for name, settings in roles:
         checks.append(_connection_check(name, settings))

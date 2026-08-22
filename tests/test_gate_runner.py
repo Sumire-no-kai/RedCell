@@ -12,6 +12,7 @@ from scripts.run_gate_matrix import (
     _exclusive_state_lock,
     _resolve_log_directory,
     _save,
+    _subprocess_env,
 )
 
 from redcell.gate_analysis import GateCondition, SeedPlan
@@ -88,6 +89,22 @@ def test_matrix_dry_run_survives_legacy_windows_output_encoding(tmp_path) -> Non
 
     assert completed.returncode == 0, completed.stderr.decode("utf-8", errors="replace")
     assert "待执行 72 格" in completed.stdout.decode("utf-8")
+    assert not state_path.exists()
+    assert not state_path.with_name(f"{state_path.name}.lock").exists()
+
+
+def test_matrix_child_environment_forces_utf8_after_inheriting_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PYTHONUTF8", "0")
+    monkeypatch.setenv("PYTHONIOENCODING", "cp1252")
+    monkeypatch.setenv("REDCELL_TEST_SENTINEL", "preserved")
+
+    environment = _subprocess_env()
+
+    assert environment["PYTHONUTF8"] == "1"
+    assert environment["PYTHONIOENCODING"] == "utf-8"
+    assert environment["REDCELL_TEST_SENTINEL"] == "preserved"
 
 
 def record_outcome(state: MatrixState, **kwargs) -> MatrixState:

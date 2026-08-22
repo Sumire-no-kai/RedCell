@@ -120,6 +120,33 @@ def test_fully_configured_environment_passes(tmp_path) -> None:
     assert report.passed, report.summary()
 
 
+@pytest.mark.parametrize(
+    "roles",
+    [
+        [("target", _settings("target")), ("attacker", _settings("attacker"))],
+        [
+            ("target", _settings("target")),
+            ("target", _settings("target")),
+            ("controller", _settings("controller")),
+        ],
+    ],
+)
+def test_role_shape_errors_fail_closed_instead_of_crashing(tmp_path, roles) -> None:
+    report = run_preflight(
+        seed_plan_json=FROZEN_SEED_PLAN,
+        database_url=_db(tmp_path),
+        golden_fixtures=GOLDEN_FIXTURES,
+        roles=roles,
+        shared_rate_limit_db=f"sqlite:///{tmp_path / 'shared-rate-limit.db'}",
+        billing_evidence=None,
+    )
+
+    check = _check(report, "role_configuration")
+    assert not report.passed
+    assert not check.passed
+    assert "target / attacker / controller" in check.detail
+
+
 def test_shared_rate_limit_is_loaded_from_dotenv(tmp_path, monkeypatch) -> None:
     """Documented `.env` configuration must reach preflight."""
     monkeypatch.chdir(tmp_path)

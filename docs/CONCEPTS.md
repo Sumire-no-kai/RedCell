@@ -2084,6 +2084,12 @@ idempotency_key = 同一个稳定值
 以前由 Executor 每次临时生成 Attempt ID,重试一次就换身份证,
 目标无法识别重复请求;现在这个缺口已修复。
 
+`attempt_index` 是 Run 内从 0 开始的权威逻辑序号，与同一场选择的
+`ControllerDecision.attempt_index` 完全相同。首次成功指标先按该字段排序，不能再依赖
+`created_at` 或 UUID；时间戳相同、系统时钟调整或数据库返回顺序都不得改变实验结果。
+协议 v0.4 的旧 Attempt payload 可从已落盘的 Decision 确定性回填，缺少 Decision 的孤立旧记录
+只能查看 trace，不能计算依赖先后顺序的指标。
+
 ### 14.13 Adapter 与 Tool 各自声明什么
 
 Adapter 的静态能力:

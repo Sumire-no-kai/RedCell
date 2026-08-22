@@ -71,8 +71,9 @@ def _redact_protected_evidence(finding: Finding) -> Finding:
     report_evidence = []
     for evidence in finding.evidence:
         if evidence.protected_location is not None:
-            evidence = evidence.model_copy(update={"matched_value": None})
-        report_evidence.append(evidence)
+            report_evidence.append(evidence.model_copy(update={"matched_value": None}))
+        else:
+            report_evidence.append(evidence)
     return finding.model_copy(update={"evidence": report_evidence})
 
 

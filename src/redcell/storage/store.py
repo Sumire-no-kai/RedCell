@@ -85,6 +85,7 @@ class RunStore:
     # ── Attempt ──────────────────────────────────────────────────────────
 
     def save_attempt(self, attempt: Attempt) -> None:
+        self._require_authoritative_attempt_index(attempt)
         with self._open() as session, session.begin():
             self._merge_attempt(session, attempt)
 
@@ -93,9 +94,50 @@ class RunStore:
             self.save_attempt(attempt)
 
     def attempts_for(self, run_id: str) -> list[Attempt]:
-        stmt = select(AttemptRow).where(AttemptRow.run_id == run_id).order_by(AttemptRow.created_at)
+        attempt_stmt = select(AttemptRow).where(AttemptRow.run_id == run_id)
+        decision_stmt = select(ControllerDecisionRow).where(ControllerDecisionRow.run_id == run_id)
         with self._open() as session:
-            return [Attempt.model_validate(row.payload) for row in session.scalars(stmt)]
+            attempt_rows = list(session.scalars(attempt_stmt))
+            decision_rows = list(session.scalars(decision_stmt))
+
+        decision_indexes: dict[str, int] = {}
+        for decision_row in decision_rows:
+            if decision_row.attempt_id in decision_indexes:
+                detail = (
+                    f"Run '{run_id}' 的 Attempt {decision_row.attempt_id} "
+                    "对应多个 ControllerDecision"
+                )
+                raise ValueError(detail)
+            decision_indexes[decision_row.attempt_id] = decision_row.attempt_index
+
+        attempts: list[Attempt] = []
+        for row in attempt_rows:
+            attempt = Attempt.model_validate(row.payload)
+            decision_index = decision_indexes.get(attempt.id)
+            if attempt.attempt_index is None and decision_index is not None:
+                # v0.4 及更早 payload 没有序号；Decision 表已保存同一权威编号，
+                # 可以确定性回填，不需要用 created_at/UUID 猜。
+                attempt = attempt.model_copy(update={"attempt_index": decision_index})
+            elif (
+                attempt.attempt_index is not None
+                and decision_index is not None
+                and attempt.attempt_index != decision_index
+            ):
+                raise ValueError(
+                    f"Attempt {attempt.id} 的序号 {attempt.attempt_index} "
+                    f"与 ControllerDecision 序号 {decision_index} 不一致"
+                )
+            attempts.append(attempt)
+
+        return sorted(
+            attempts,
+            key=lambda attempt: (
+                attempt.attempt_index is None,
+                attempt.attempt_index if attempt.attempt_index is not None else 0,
+                attempt.created_at,
+                attempt.id,
+            ),
+        )
 
     # ── Finding ──────────────────────────────────────────────────────────
 
@@ -371,8 +413,11 @@ class RunStore:
     ) -> None:
         if attempt.run_id != run.id:
             raise ValueError("Attempt.run_id 与 Run.id 不一致")
+        RunStore._require_authoritative_attempt_index(attempt)
         if decision.outcome is not ControllerDecisionOutcome.COMPLETED:
             raise ValueError("有效 Attempt 只能提交 COMPLETED ControllerDecision")
+        if attempt.attempt_index != decision.attempt_index:
+            raise ValueError("ControllerDecision 与 Attempt.attempt_index 不一致")
         if decision.selected_strategy_id != attempt.strategy_id:
             raise ValueError("ControllerDecision 与 Attempt.strategy_id 不一致")
         if run_event.run_id != run.id or run_event.attempt_id != attempt.id:
@@ -380,6 +425,11 @@ class RunStore:
         for finding in findings:
             if finding.run_id != run.id or finding.attempt_id != attempt.id:
                 raise ValueError("Finding 与 Attempt/Run 关联不一致")
+
+    @staticmethod
+    def _require_authoritative_attempt_index(attempt: Attempt) -> None:
+        if attempt.attempt_index is None:
+            raise ValueError("新落盘的 Attempt 必须提供权威 attempt_index")
 
     # ── 聚合(消融分析用) ───────────────────────────────────────────────
 

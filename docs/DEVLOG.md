@@ -5,6 +5,149 @@
 
 ---
 
+## 2026-08-22 · 全仓 code review：先修不改变实验语义的正确性问题
+
+### 2026-08-22 12:50 AEST · Step 138 · 建立审查基线并修复跨重启限流状态
+
+- 进度：在独立分支 `fix/repository-code-review` 开始全仓审查；读取 PRD 与架构审查规范，
+  基线完成 **749 passed**、Ruff lint、Black 与 compileall。Ruff format 唯一失败来自审查前已存在的
+  `controls.py` 混合行尾状态，本步骤未覆盖该文件。
+- 决策与理由：跨进程 SQLite 限流器原先把 `time.monotonic()` 写入持久化数据库。该时钟在机器
+  重启后重新计数，旧 lease 与 last-start 可能被误判为长时间未过期；改用 epoch wall clock，只改变
+  重启恢复的正确性，不改变同一次正常运行的 RPM/并发合同。同时拒绝空 provider key、负间隔、负并发
+  与非正 lease timeout，避免无效配置静默退化为不限流或立即过期。
+- 遇到的问题：当前工作区已有 `controls.py` 行尾修改和三个未跟踪路径；均视为既有工作保留，未清理、
+  未暂存。首次创建分支因 `.git` 写权限被 sandbox 拒绝，经授权后成功创建。
+- 解决方式：新增重启遗留 monotonic 时间戳回归测试与参数校验测试；为 Attempt/Finding 同时间戳查询
+  增加 ID 次排序，避免数据库在时间相同时返回不确定顺序；另修两个不改变行为的静态清洁度告警。
+- 验证证据：本步骤修改后的定向与全量门禁待下一步骤运行。
+- 剩余状态：TODO —— 继续审查预算、事件投影、Gate 分析、CLI 与模块 seam；核心/算法语义改动仍须先讨论。
+
+### 2026-08-22 13:18 AEST · Step 139 · 回退错误的 ID 次排序并暴露 Attempt 顺序协议缺口
+
+- 进度：定向测试发现，为同时间戳 Attempt/Finding 添加 UUID 次排序会改变已有查询语义；已立即回退
+  `RunStore` 排序修改，没有保留“测试能过但语义错误”的修法。
+- 决策与理由：UUIDv7 只保证毫秒级时间前缀；同一毫秒内尾部为随机数，不能代表 Attempt 执行顺序。
+  `queries_to_first_*` 需要权威顺序，真正修复应让 `Attempt`/存储显式携带 `attempt_index`，不能拿 ID 猜。
+- 遇到的问题：现有 `Attempt` 协议没有 `attempt_index`，而 Store 仅按 `created_at` 读取；时间戳相同或时钟
+  回拨时顺序没有确定性。该问题现有普通路径不一定触发，但会直接改变首次命中指标。
+- 解决方式：先恢复既有行为；把协议修复列为需作者确认的核心设计项，并保留失败测试输出作为证据。
+- 验证证据：错误改动下定向测试为 **1 failed, 41 passed**，失败断言明确显示期望第 2 次命中却变为第 1 次。
+- 剩余状态：OPEN —— 确认是否新增权威 `attempt_index` 并制定历史记录兼容规则。
+
+### 2026-08-22 13:25 AEST · Step 140 · 收紧矩阵脚本的只读与失败传播边界
+
+- 进度：继续审查正式矩阵、旧消融脚本与零成本 preflight；修复 `--dry-run` 仍创建/改写 state/lock、
+  子进程 UTF-8 设置会被继承环境覆盖、并行 Bash 消融忽略部分 child 失败，以及 preflight 在角色缺失或
+  重复时抛 `StopIteration`/静默覆盖的问题。
+- 决策与理由：dry-run 必须真正只读；正式 child 的输出编码必须由 runner 决定；任一并行 cell 失败都应
+  让旧消融脚本非零退出；preflight 的输入形状错误应产生明确的 fail-closed 检查项，而不是 traceback。
+  这些修复只收紧执行与配置合同，不改变 reward、Gate 阈值、统计方法或正式实验语义。
+- 遇到的问题：最初定向 Ruff 报告 runner 中两个嵌套 context manager 可合并；已按同一生命周期合并，
+  没有改变 state lock 与主机唤醒锁的覆盖范围。
+- 解决方式：dry-run 在取得持久锁之前分流，且不落 state；环境合并顺序改为“先继承、后强制 UTF-8”；
+  Bash 记录并逐一等待 PID；preflight 在进入后续配置投影前验证三种角色恰好各一个。
+- 验证证据：相关回归 **70 passed**；定向 Ruff lint 全绿；格式检查发现的一处单行排版已修正，
+  全仓门禁待核心设计讨论前统一执行。
+- 剩余状态：TODO —— 完成剩余静态/结构审查，并就第一个协议级候选向作者提问。
+
+### 2026-08-22 13:31 AEST · Step 141 · 完成非核心修复后的全仓门禁与架构候选收敛
+
+- 进度：完成生产模块、脚本入口、CLI 生命周期、存储/Gate/预算边界的静态复核，并生成临时 HTML
+  架构报告。规范化了 `controls.py` 的既有混合行尾；规范化前后的 Git blob 哈希同为
+  `9ec1725e220aa6bc4c20f7d357e6decaa8360133`，没有覆盖代码内容。
+- 决策与理由：没有按文件大小机械拆分类。`RunOrchestrator`、Gate 证据模型与多数 Pydantic 类型虽多，
+  但分别隐藏执行状态机或承担显式跨组件合同，当前不属于可安全删除的冗余。真正优先的结构问题是
+  Attempt 顺序缺少权威字段、资源账本允许无效负值、CLI 重复组装生命周期，以及 Store 暴露可绕过
+  原子提交的不变式入口；其中前两项属于核心协议/预算，按协作规范先讨论再实现。
+- 遇到的问题：Ruff format 与 Ruff lint 对一条含中文的长 f-string 给出冲突排版；将消息先赋给局部变量，
+  同时满足两个固定门禁。未安装 mypy/pyright/coverage，未为审查临时下载新依赖。
+- 解决方式：保留有明确深度的模块边界，只合并/移除已证明无价值的浅层代码（例如只转抄环境的 helper），
+  并把四个结构候选按收益与风险写入报告，等待作者逐项确认核心项。
+- 验证证据：全量 **757 passed in 60.49s**；`ruff check .`、`ruff format --check .`、
+  `black --check src tests`、`compileall` 与 `git diff --check` 全绿。未调用任何 Provider，未执行正式矩阵。
+- 剩余状态：OPEN —— 首项确认：是否以 `Attempt.attempt_index` 作为权威执行顺序，并明确历史记录回退语义。
+
+### 2026-08-22 13:30 AEST · Step 142 · 记录 Attempt 顺序方案，实施前先做实验影响评估
+
+- 进度：作者要求先把问题与解决方案如实记录，再共同评估对现有实验、冻结证据和历史数据的影响；
+  本步骤只补充决策材料，**没有**新增 `attempt_index`、修改 Pydantic/SQLite schema、重算指标或启动实验。
+- 问题事实：`Attempt` 当前只有 `created_at`，`RunStore.attempts_for()` 也只按该时间排序；同一时间戳或
+  时钟回拨时，执行先后没有权威答案。UUIDv7 的同毫秒尾部含随机位，不能作为次排序。受影响的直接消费者
+  包括 `queries_to_first_finding` / `queries_to_first_success` 以及任何按 Attempt 先后构造的历史窗口。
+- 推荐方案：
+  1. 在协议与 SQLite Attempt row 增加 `attempt_index`，语义固定为“该 Run 内从 1 开始的执行序号”；
+  2. 新 Run 在 Orchestrator/Executor 的单一提交边界分配序号，并以 `(run_id, attempt_index)` 建唯一约束；
+  3. 查询和首次命中指标只使用权威序号，不再用时间戳或 UUID 猜顺序；
+  4. 历史行允许 `attempt_index = NULL` 以保持可读取，但依赖首次顺序的重算必须标为不可验证/拒绝进入新结论；
+  5. 配套升级协议/迁移版本，并补同时间戳、时钟回拨、恢复续跑、重复序号和旧库加载测试。
+- 替代方案与取舍：`created_at + id` 改动最小，但会把随机 UUID 顺序包装成确定证据，已由 Step 139 的
+  失败测试证明不可靠；读取时临时 `enumerate()` 也只能给当前查询结果编号，不能恢复真实历史顺序。
+  两者均不推荐。另一可选方案是只给未来全新数据库启用强制非空字段，迁移最简单，但历史报告代码仍需
+  明确隔离，不能让旧数据看起来满足新协议。
+- 落实前影响评估范围（均为 **OPEN**）：
+  1. **正在/即将执行的正式矩阵：** 08-20 的 v2 state 已标为 ABANDONED，当前只读复核仍是 3 dispatched、
+     0 completed，且 DEVLOG 已禁止恢复；新的 fresh-host 矩阵尚未启动。需确认是否在新 plan/state/DB 生成前
+     升级 schema/context，避免同一正式实验混用两种 Attempt 顺序合同；
+  2. **冻结 utility 297/400：** 初步看该合并证据按任务完成数和独立裁决复算，不依赖首次 Attempt 顺序，
+     但须沿 `ControlsReport → utility confirmation → preflight/Gate` 数据路径用测试确认后，才能断言不受影响；
+  3. **Phase 0 历史消融：** `queries_to_first_finding` 明确依赖 Attempt 顺序。旧结果应保留为历史快照，
+     在无法从原始证据恢复权威顺序时不得用新实现静默重算或改写既有结论；
+  4. **Phase 0.5/0.5b Gate：** 需逐项核对 token-prefix、Finding 路径选择、replay validation、报告重建和
+     resume 是否消费 Attempt 顺序，并决定 trace/schema/Gate-context 哪些版本必须提升；
+  5. **兼容与迁移：** 需盘点现有 SQLite 数据库数量、Attempt 行规模、导出 JSON 与测试 fixture，比较
+     “nullable 历史列 + 新写入强制”与“仅新库 schema”两条迁移路线及回退成本。
+- 当前证据边界：本步骤没有调用 Provider、没有运行或恢复矩阵、没有修改任何 `runs/` 产物，也没有把
+  推荐方案写成已批准决策。现阶段结论仅为“问题成立、方案候选已记录、实验影响尚待共同评估”。
+- 剩余状态：OPEN —— 下一步先产出只读影响清单和兼容方案比较，由作者确认后才允许落实协议修改。
+
+### 2026-08-22 20:57 AEST · Step 143 · 完成顺序影响审计并贯穿既有权威 Attempt index
+
+- 进度：作者授权修完后列清单并直接走提交/合并流程。只读审计发现，系统早已在
+  `ControllerDecision` 与 `ExecutionRequest` 中保存同一个 0-based 逻辑 Attempt 序号；真正缺口是
+  `Attempt` payload 没有携带它，Store 读取也只按 `created_at` 排序。因此没有新增第二套计数器，而是把
+  既有序号贯穿 Executor → Attempt → Store → success metrics / ablation。
+- 对 Step 142 的明确更正：Step 142 候选写的是“新增从 1 开始的序号”。代码审计后否掉该方案，因为
+  现有 Controller 合同已经使用从 0 开始的 `attempt_index`；再造 1-based 字段会引入偏移转换和恢复分歧。
+  最终采用同名、同语义、同取值的现有 0-based 序号，并把协议版本从 `0.4.0` 升至 `0.5.0`。
+- 实验影响证据：只读统计 `redcell.db` 与 `runs/` 下非临时历史库，共 **7,928** 条已完成 Attempt，
+  **7,928/7,928** 均能按 `(run_id, attempt_id)` 匹配唯一 ControllerDecision，因此旧 v0.4 payload 可以
+  确定性回填，不需要猜时间或 UUID。冻结 utility 297/400 的数据路径消费 `ControlsReport`、逐任务完成数和
+  独立裁决，不读取 Attempt 顺序；08-20 废弃矩阵仍为 0 completed，新 fresh-host 矩阵尚未启动。
+- 实现与不变量：新执行把 `ExecutionRequest.attempt_index` 写入 Attempt；新落盘拒绝缺 index；原子提交
+  要求 Attempt 与 Decision index 相同；旧 payload 从 Decision 回填；查询按显式 index 排序；首次命中和
+  旧消融分析遇到缺失或重复 index 时 fail-closed。没有给 `attempts` 表另加重复列，也没有数据库迁移。
+- 替代方案与取舍：`created_at + UUID` 已证明不能恢复同毫秒执行顺序；独立 1-based 计数器会重复
+  Controller 状态；新增 SQLite 列需要迁移但仍复制同一事实。复用 Decision 的权威编号最小且可回退。
+- 遇到的问题：第一次定向运行出现 **23 failed / 83 passed**，全部是测试 fixture 仍在构造没有 index 的
+  “新” Attempt，或协议版本仍固定为 0.4.0；不是生产执行回归。逐一给需要落盘/聚合的 fixture 加入显式
+  index，并新增乱序同时间戳、旧 payload 回填、Attempt/Decision 不一致、缺失/重复 index 的回归测试。
+- 验证证据：相关执行、恢复、存储、报告、指标、CLI 与历史投影定向测试 **112 passed**；定向 Ruff lint
+  全绿。README 与 CONCEPTS 已同步权威顺序语义；全仓门禁和最终自审待下一步骤。
+- 面试讲法：不是“多加一个排序字段”，而是把已经存在于决策账本的领域顺序贯穿到结果证据，避免让
+  数据库偶然顺序决定研究指标。局限是没有 Decision 的孤立旧记录只能查看，不能生成顺序型结论。
+- 剩余状态：TODO —— 统一自审、全量门禁、列出提交清单，然后按授权推送 PR 并合并。
+
+### 2026-08-22 21:00 AEST · Step 144 · 全仓复验通过，准备精确提交与集成
+
+- 进度：完成本次 23 个跟踪文件的统一 diff 自审，确认 README、CONCEPTS、DEVLOG、实现和测试语义一致；
+  三个审查前已存在的未跟踪路径 `.tmp-tests/`、`docs/PHASE0_5_UTILITY_BASELINE.json`、
+  `docs/RELATED_WORK.md` 继续保留且不进入提交。没有内部 PRD/AGENTS、凭据或 `runs/` 产物进入 diff。
+- 自审结论：权威顺序复用既有 Decision index，没有第二计数器或数据库迁移；完成 Attempt 的排序位置仍按
+  “有效 Attempt 序列”计数，允许逻辑 index 因 abandonment 出现空洞，未改变既有删失/ASR 分母语义。
+  其余修复均收紧恢复、dry-run、失败传播和 preflight 输入合同，不改变 reward、Gate 阈值或统计检验。
+- 遇到的问题：默认 `bash` 指向 WSL 服务，sandbox 内返回 `E_ACCESSDENIED`，不是脚本语法失败；改用已安装的
+  Git Bash `C:\Program Files\Git\bin\bash.exe -n` 完成同一只读语法检查并通过。
+- 验证证据：全量 **763 passed in 56.03s**；`ruff check .`、`ruff format --check .`、
+  `black --check src tests`、`compileall`、`git diff --check`、Git Bash `bash -n` 全绿。
+- Git 集成边界：远端 `master` 比当前分支多 2 个已合并提交；当前分支另含 8 个此前尚未进入远端 master 的
+  Phase 0.5b utility/唤醒锁/超时合同与日志提交。GitHub 上没有对应开放或已关闭 PR；本次 PR 必须先吸收
+  最新 master，再整体合入，不能只 cherry-pick code-review commit 而丢掉其依赖。
+- 剩余状态：READY TO COMMIT / INTEGRATE —— 先向作者列清单，再精确暂存本次跟踪文件、提交、合并最新
+  master、复验、推送、创建非 draft PR 并合并。
+
+---
+
 ## 2026-08-20 · 重启 Phase 0.5b 前把真正影响交付的条件写进机器可验的合同
 
 ### 2026-08-20 18:21 AEST · Step 134 · 作者授权新的 144-cell 全量重跑；冻结 Windows 唤醒锁与 60 s 超时

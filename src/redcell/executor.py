@@ -304,6 +304,7 @@ class ConversationExecutor:
         attempt = build_attempt(
             attempt_id=attempt_id,
             run_id=request.run_id,
+            attempt_index=request.attempt_index,
             strategy_id=request.strategy.id,
             actor=request.actor,
             attack_prompt=turns[0].attacker_message,
