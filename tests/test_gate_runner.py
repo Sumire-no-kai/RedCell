@@ -80,6 +80,7 @@ def test_matrix_dry_run_survives_legacy_windows_output_encoding(tmp_path) -> Non
             "--state",
             str(state_path),
             "--dry-run",
+            "--live-conversations",
         ],
         cwd=Path(__file__).parents[1],
         env=environment,

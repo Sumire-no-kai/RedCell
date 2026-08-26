@@ -5,6 +5,87 @@
 
 ---
 
+## 2026-08-26 · 逐轮对话直播：可见进度，不改变正式矩阵调用
+
+### 2026-08-26 12:35 AEST · Step 150 · 处理损坏历史事件后的最终回归
+
+- 进度：Step 149 的自审又发现一个仅影响观察器恢复性的边角：若 `run_events` 中最后一条历史行损坏，旧实现会跳过
+  它却不推进游标，下一秒会再次解析同一行。现改为该行无论能否反序列化均推进只读 rowid cursor；不会输出该行、
+  不会修改数据库，也不会影响正常 event、模型调用、prompt、预算或 Gate 证据。
+- 验证证据：修改后重新完成全量 `python -m pytest -p no:cacheprovider`，**768 passed in 52.42s**；
+  `ruff check .`、`ruff format --check .`（**138 files already formatted**）、`black --check src tests`
+  （**126 files unchanged**）与 `git diff --check` 全绿。
+- 剩余状态：READY TO REVIEW / COMMIT —— 功能默认关闭，正式矩阵仅在命令末尾显式添加
+  `--live-conversations` 时启用；该参数不进入冻结 child argv 或实验指纹。
+
+### 2026-08-26 12:31 AEST · Step 149 · 完成逐轮直播的全仓回归与清理
+
+- 进度：Step 148 后未再改变功能语义；完成全量回归、静态门禁与实际终端 smoke 的最终复核。
+- 验证证据：`python -m pytest -p no:cacheprovider` **768 passed in 65.01s**；`ruff check .` 全绿，
+  `ruff format --check .` 显示 **138 files already formatted**，`black --check src tests` 显示
+  **126 files unchanged**，`git diff --check` 无输出。离线 smoke 仍逐轮打印 Gemini/靶场两段文本，未发起任何
+  在线 Provider 调用。
+- 清理与边界：已删除本步骤自行创建的 `.live-monitor-*` pytest/output scratch；保留工作区原有的
+  `.tmp-tests/`、`docs/PHASE0_5_UTILITY_BASELINE.json`、`docs/RELATED_WORK.md`，未读取、修改、暂存或删除。
+  正式 `runs/` evidence 没有被覆盖。
+- Git 状态：实现位于独立分支 `codex/feat/live-conversation-stream`，尚未提交、推送或创建 PR；当前仅等待作者
+  决定是否提交。默认行为与冻结 matrix plan 不变，只有明确提供 `--live-conversations` 时才启动只读观察器。
+- 剩余状态：READY TO REVIEW / COMMIT —— 可用于下一次新宿主矩阵启动；不能把本地 smoke 当作 GLM 可用性或
+  Gate 完成证据。
+
+### 2026-08-26 12:22 AEST · Step 148 · 以只读事件观察器直播 Gemini ↔ 靶场文本
+
+- 进度：作者要求在命令行确认长时作业仍在推进，但不直播 canary、检测结论或工具细节。新增
+  `--live-conversations`：可用于直接 `redcell run`，也可用于 `scripts/run_gate_matrix.py` 的正式矩阵父进程。
+  每个完整回合会显示最小的 run/attempt/round 标识，以及 `Gemini:`、`靶场:` 两段文本。
+- 设计与边界：正式矩阵的 child stdout 原本被重定向到逐格日志，直接在 child 内 `print` 无法让操作者看到，
+  且会把观察逻辑混入执行路径。最终采用独立只读观察器，仅读取已提交的 `TURN_COMPLETED` SQLite 事件；该事件
+  只会在攻击方生成、靶场回复、Level-1 评分均完成后持久化。观察器不发送 Provider 请求、不写数据库、不改 child
+  argv、冻结 plan、prompt、预算、检测器或 Gate 统计。
+- 安全取舍：双方文本中的完整 canary 和 canary prefix 均替换为 `[已脱敏]`；其他终端控制字符转义，避免模型文本
+  清屏、改写已有输出或泄漏受保护值。原始 trace 仍仅保留在本地 SQLite 实验库；直播故意不显示 tool call、side
+  effect、Finding、score、reward 或任何 canary 明文。
+- 性能取舍：首版若每秒扫描全表，会在 144-cell 长跑后重复解析大量历史事件并引入不必要的 SQLite 竞争；改为
+  只读 `mode=ro` 连接按 append-only `run_events.rowid` 读取新增行。启动时记录已有最大 rowid，续跑不会重放旧
+  对话；后续轮询只处理新增回合，最终停止时再扫描一次，避免漏掉刚提交的文本。
+- 验证证据：新增 `tests/test_live_conversation.py` 覆盖脱敏、终端控制字符转义、非 Turn 事件过滤、旧事件不重放与
+  新事件仅播一次；CLI 生命周期与 matrix `--dry-run --live-conversations` 也有回归覆盖。相关测试 **77 passed**，
+  `ruff check`、`ruff format --check`、`black --check` 均通过。另以离线、1 attempt smoke 实际确认终端逐轮打印
+  双方文本；未调用 GLM/Gemini，结果不构成安全评估。
+- 剩余状态：TODO —— 运行全量 pytest 与全仓格式/静态门禁；通过后再决定是否提交。正式运行时仅在操作者明确加上
+  `--live-conversations` 时启用，默认输出与冻结矩阵行为保持不变。
+
+## 2026-08-26 · Provider 指纹 smoke test：Gemini 可用，当前宿主的 GLM completion 不可用
+
+### 2026-08-26 11:57 AEST · Step 147 · 以非 Gate 中性探针检查当前 GLM / Gemini 行为
+
+- 进度：作者要求在长时 144-cell 矩阵前先做小规模在线检查，以排除 Provider/模型静默变化。新建隔离分支
+  `chore/provider-drift-smoke-20260826`；未运行正式 cell、未使用 Gate seed、未执行 200 次 utility controls，
+  也未改写任何冻结 evidence。
+- 设计与边界：复用版本化 `provider-drift-smoke-v1` 固定题集（4 条无攻击语义的短 prompt、
+  `temperature=0`、每条最多 64 token），原计划对 Target(GLM) 与 Attacker(Gemini)各连采 2 次。
+  指纹只保存模型标识、摘要、稳定性与耗时，不保存 prompt、回答或凭据。它是“烟雾报警器”，不是
+  utility / tool-call / 安全行为的替代测量；历史记录中 `glm-4.7-flash` 与 `gemini-3.6-flash` 均不是
+  当前请求的模型名，故本轮只能建立当前基线，不能单凭摘要推断近期是否更新。
+- 结果：Target 请求 `glm-4.7-flashx` 的第一条指纹 prompt 在 **64.048 s** 后以
+  `ProviderTransientError` 结束，随后独立的一条相同中性 completion 又在 **64.835 s** 后以同类错误结束；
+  两次均未取得模型回复、reported model 或 usage。为区分本地断网，额外零费用检查显示该 endpoint
+  DNS 可解析、TCP 连接 **0.310 s**、TLS 1.3 握手 **4.998 s** 均成功，故当前证据把故障定位在 HTTP
+  completion/响应阶段，而不是“机器没有网络”。这仍不能证明是 Provider 全局事故，也不能证明请求未送达或
+  未计费。
+- Gemini 结果：Attacker 请求/回传均为 `gemini-3.1-flash-lite`；8 条固定探针全部完成，2 次摘要一致，
+  `digest=9345edbabc2bd27992df251a430606a6`、`stable=true`，总耗时 **8.545 s**。这支持该模型此刻对
+  该小探测集稳定可用，不证明它没有任何语义更新，也不替代完整 attacker-control。
+- 决策与理由：不在 GLM 连续无响应时触发矩阵的正式重试链——那会把同类 60 s timeout 放大成 Attempt/
+  seed-block 失效，而不是有效检验模型行为。当前宿主不具备启动矩阵的在线证据；预定的新 Windows 执行主机
+  必须独立重做零成本 preflight/dry-run，并在正式派发前至少确认 GLM 有一条成功的中性 completion。若失败
+  持续，先调查 Provider HTTP 可用性/出口路径，不启动 144-cell。
+- 验证证据：忽略目录 `runs/provider-drift-smoke-2026-08-26-live/model-fingerprint.json`（SHA-256
+  `f3d603d9e5dc5a72c3e05a8c31b314237b1edeb3d5ac894a08496cfbf467eb54`）。该路径不进入 Git。
+- 剩余状态：BLOCKED ON THIS HOST —— 等 GLM successful completion；届时用同一 probe 再建立 GLM
+  指纹，再判断新 Windows 宿主是否可开始正式矩阵。不得据本次小样本重冻 utility、修改 Gate 阈值或安排第三轮
+  utility confirmation。
+
 ## 2026-08-22 · 全仓 code review：先修不改变实验语义的正确性问题
 
 ### 2026-08-22 12:50 AEST · Step 138 · 建立审查基线并修复跨重启限流状态
