@@ -45,6 +45,7 @@ from redcell.gate_runner import (
     verify_cell_run,
 )
 from redcell.host_wakelock import HostWakelockError, host_wakelock
+from redcell.live_conversation import LiveConversationFollower
 from redcell.protocols.run import ExecutionHostProfile
 from redcell.storage import RunStore
 
@@ -202,6 +203,11 @@ def main() -> int:
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     parser.add_argument("--dry-run", action="store_true", help="只打印将要执行的格子")
     parser.add_argument(
+        "--live-conversations",
+        action="store_true",
+        help="逐轮直播 Gemini 与靶场文本；canary 自动脱敏，不输出检测或工具细节",
+    )
+    parser.add_argument(
         "--enable-reserve",
         type=int,
         action="append",
@@ -289,80 +295,90 @@ def _run_matrix(args: argparse.Namespace) -> int:
         return 0
 
     _save(args.state, state)
+    live_follower = LiveConversationFollower(plan.database_url) if args.live_conversations else None
+    if live_follower is not None:
+        # 先记住已有 event，再派发 child；因此续跑不会重放旧对话，也不会漏掉新回合。
+        live_follower.start()
 
-    while True:
-        batch = pending_cells(plan, state, limit=args.concurrency)
-        if not batch:
-            break
-        for cell in batch:
-            state = record_dispatch(state, seed=cell.seed, condition=cell.condition)
-        # 这次写入发生在 ThreadPool 创建之前。崩溃会保守地作废整个 block，绝不把
-        # "也许跑过"的进程结果拼回正式矩阵。
-        _save(args.state, state)
-        dispatched_ids = {
-            (cell.seed, cell.condition): cell.run_id
-            for cell in state.cells
-            if cell.run_id is not None
-        }
-        print(f"=== 本批 {len(batch)} 格 ===")
-        with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
-            results = list(
-                pool.map(
-                    lambda cell, run_ids=dispatched_ids: _run_cell(
-                        cell,
-                        log_directory,
-                        run_ids[(cell.seed, cell.condition)],
-                    ),
-                    batch,
-                )
-            )
-        # 逐格核验 runbook §5 的硬条件。退出码只说明进程正常结束,说明不了
-        # "耗尽的是 Token 而不是墙钟/attempt 上限",而后者产出的 Run 到不了 320k 前缀。
-        with RunStore(plan.database_url) as store:
-            for cell, (exit_code, log_path) in zip(batch, results, strict=True):
-                record = next(
-                    record for record in state.cells if record.key == (cell.seed, cell.condition)
-                )
-                run = None
-                reason = None
-                if exit_code in NORMAL_RUN_EXIT_CODES:
-                    run = store.get_run(record.run_id or "")
-                    reason = verify_cell_run(
-                        run,
-                        cell,
-                        expected_run_id=record.run_id,
-                        expected_gate_context_fingerprint=state.gate_context_fingerprint,
+    try:
+        while True:
+            batch = pending_cells(plan, state, limit=args.concurrency)
+            if not batch:
+                break
+            for cell in batch:
+                state = record_dispatch(state, seed=cell.seed, condition=cell.condition)
+            # 这次写入发生在 ThreadPool 创建之前。崩溃会保守地作废整个 block，绝不把
+            # "也许跑过"的进程结果拼回正式矩阵。
+            _save(args.state, state)
+            dispatched_ids = {
+                (cell.seed, cell.condition): cell.run_id
+                for cell in state.cells
+                if cell.run_id is not None
+            }
+            print(f"=== 本批 {len(batch)} 格 ===")
+            with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
+                results = list(
+                    pool.map(
+                        lambda cell, run_ids=dispatched_ids: _run_cell(
+                            cell,
+                            log_directory,
+                            run_ids[(cell.seed, cell.condition)],
+                        ),
+                        batch,
                     )
-                    if reason is not None:
-                        print(f"    ✗ {cell.condition.value} seed {cell.seed}: {reason}")
-                state = record_outcome(
-                    state,
-                    seed=cell.seed,
-                    condition=cell.condition,
-                    # 核验不过即按失败落账 —— 让整块当场退出,而不是等到 gate-report。
-                    exit_code=exit_code if reason is None else EXIT_VERIFICATION_FAILED,
-                    run_id=record.run_id,
-                    detail=f"{log_path}" if reason is None else f"{log_path} — {reason}",
-                    gate_context_fingerprint=(
-                        run.gate_context_fingerprint()
-                        if reason is None and run is not None
-                        else None
-                    ),
                 )
-        # 每批结束立刻落盘:崩溃时最多丢一批的进度,而不是整轮。
-        _save(args.state, state)
-        print(progress_summary(plan, state))
-        print()
+            # 逐格核验 runbook §5 的硬条件。退出码只说明进程正常结束,说明不了
+            # "耗尽的是 Token 而不是墙钟/attempt 上限",而后者产出的 Run 到不了 320k 前缀。
+            with RunStore(plan.database_url) as store:
+                for cell, (exit_code, log_path) in zip(batch, results, strict=True):
+                    record = next(
+                        record
+                        for record in state.cells
+                        if record.key == (cell.seed, cell.condition)
+                    )
+                    run = None
+                    reason = None
+                    if exit_code in NORMAL_RUN_EXIT_CODES:
+                        run = store.get_run(record.run_id or "")
+                        reason = verify_cell_run(
+                            run,
+                            cell,
+                            expected_run_id=record.run_id,
+                            expected_gate_context_fingerprint=state.gate_context_fingerprint,
+                        )
+                        if reason is not None:
+                            print(f"    ✗ {cell.condition.value} seed {cell.seed}: {reason}")
+                    state = record_outcome(
+                        state,
+                        seed=cell.seed,
+                        condition=cell.condition,
+                        # 核验不过即按失败落账 —— 让整块当场退出,而不是等到 gate-report。
+                        exit_code=exit_code if reason is None else EXIT_VERIFICATION_FAILED,
+                        run_id=record.run_id,
+                        detail=f"{log_path}" if reason is None else f"{log_path} — {reason}",
+                        gate_context_fingerprint=(
+                            run.gate_context_fingerprint()
+                            if reason is None and run is not None
+                            else None
+                        ),
+                    )
+            # 每批结束立刻落盘:崩溃时最多丢一批的进度,而不是整轮。
+            _save(args.state, state)
+            print(progress_summary(plan, state))
+            print()
 
-    print(progress_summary(plan, state))
-    outstanding_invalid = uncompensated_invalid_block_count(state)
-    if outstanding_invalid:
-        print()
-        print(f"⚠️ 尚有 {outstanding_invalid} 个 block 未补位。先看日志判断失效类型,")
-        print("   再决定是否 --enable-reserve;")
-        print("   不得因为 Finding 结果不好看而换 seed。")
-        return 1
-    return 0
+        print(progress_summary(plan, state))
+        outstanding_invalid = uncompensated_invalid_block_count(state)
+        if outstanding_invalid:
+            print()
+            print(f"⚠️ 尚有 {outstanding_invalid} 个 block 未补位。先看日志判断失效类型,")
+            print("   再决定是否 --enable-reserve;")
+            print("   不得因为 Finding 结果不好看而换 seed。")
+            return 1
+        return 0
+    finally:
+        if live_follower is not None:
+            live_follower.stop()
 
 
 if __name__ == "__main__":

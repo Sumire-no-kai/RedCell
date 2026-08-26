@@ -70,6 +70,7 @@ from redcell.gate_runner import MatrixState
 from redcell.gate_validation import select_validation_evidence
 from redcell.generation import AttackGenerator, TemplateAttackGenerator
 from redcell.golden import evaluate_golden
+from redcell.live_conversation import LiveConversationFollower
 from redcell.llm.base import LLMProvider
 from redcell.llm.scripted import ScriptedProvider
 from redcell.mutation import LLMMutationGenerator
@@ -351,6 +352,10 @@ def run(
     max_seconds: Annotated[float | None, typer.Option(help="墙钟上限(秒)")] = None,
     db: Annotated[str, typer.Option(help="SQLite 连接串")] = DEFAULT_URL,
     out: Annotated[Path, typer.Option(help="报告输出目录")] = Path("runs"),
+    live_conversations: Annotated[
+        bool,
+        typer.Option(help="逐轮直播 Gemini 与靶场文本；canary 会脱敏，不输出检测或工具细节。"),
+    ] = False,
 ) -> None:
     """对自带靶场跑一次评测。
 
@@ -520,6 +525,10 @@ def run(
     if not online:
         typer.secho(f"⚠️  {OFFLINE_NOTICE}", fg=typer.colors.YELLOW, err=True)
 
+    live_follower = LiveConversationFollower(db) if live_conversations else None
+    if live_follower is not None:
+        live_follower.start()
+
     async def _execute_and_close():
         # ⚠️ execute 与 provider 关闭必须在**同一个事件循环**里:
         # httpx AsyncClient 绑定到创建它的 loop,换一个新 loop 去关会报
@@ -554,6 +563,8 @@ def run(
         typer.secho(f"配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(ExitCode.BAD_CONFIG) from exc
     finally:
+        if live_follower is not None:
+            live_follower.stop()
         store.close()
 
     paths = _emit(result.run, result.attempts, result.findings, out)

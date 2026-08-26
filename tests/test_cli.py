@@ -103,6 +103,29 @@ def test_run_completes_end_to_end_and_writes_both_reports(workspace) -> None:
     assert "0.0000 USD" in (run_dirs[0] / "report.html").read_text(encoding="utf-8")
 
 
+def test_run_starts_and_stops_the_live_conversation_follower(workspace, monkeypatch) -> None:
+    lifecycle: list[str] = []
+
+    class RecordingFollower:
+        def __init__(self, database_url: str) -> None:
+            assert database_url == _db(workspace)
+
+        def start(self) -> None:
+            lifecycle.append("start")
+
+        def stop(self) -> None:
+            lifecycle.append("stop")
+
+    monkeypatch.setattr("redcell.cli.LiveConversationFollower", RecordingFollower)
+    result = runner.invoke(
+        app,
+        ["run", "--budget", "1", "--live-conversations", "--db", _db(workspace)],
+    )
+
+    assert result.exit_code == ExitCode.CLEAN, result.output
+    assert lifecycle == ["start", "stop"]
+
+
 @pytest.mark.asyncio
 async def test_arena_adapter_uses_the_same_target_model_and_temperature_as_the_snapshot() -> None:
     seen: list[tuple[str | None, float, int | None]] = []
