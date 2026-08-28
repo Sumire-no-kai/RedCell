@@ -7,6 +7,20 @@
 
 ## 2026-08-28 · Z.AI Target 候选中性可用性探针
 
+### 2026-08-28 15:15 AEST · Step 161 · Phase 0.5c 迁移 PR 已合并到 master
+
+- 进度：提交 `c6dc05e` 已推送为 `feat/target-glm-4-7-migration`，PR #55 的目标分支为 `master`，
+  GitHub 合并前判定为 `CLEAN`、无远端状态检查；已用普通 merge 合并。远端验证显示 state=`MERGED`、
+  mergedAt=`2026-08-28T05:15:28Z`、merge commit=`a2b078b6c2ae6c93ec02dbfb21c9340b11918b47`。
+- 验证证据：合并所含提交已在 Step 159 通过全仓 pytest、Ruff 与 Black 四道门；PR 描述明确运行证据、凭据
+  与 artifacts 不入库，且 144-cell Gate matrix 未启动。合并后工作区只保留本来就存在、未被暂存或修改的
+  untracked utility baseline 与 related-work 文件。为使此远端合并记录本身可交付，后续仅文档变更再次运行
+  四道门：pytest **769 passed in 43.78s**，Ruff check/format 与 Black check 均通过。
+- 剩余状态：**PHASE 0.5C MIGRATION PROTOCOL MERGED / FRESH-HOST CONTROLS AND PREFLIGHT REQUIRED
+  BEFORE ANY MATRIX AUTHORIZATION / 144-CELL MATRIX NOT STARTED**。
+
+---
+
 ### 2026-08-28 15:13 AEST · Step 160 · Phase 0.5c 迁移提交已创建，等待远端 PR 合并
 
 - 进度：只暂存 Step 159 列出的 6 个文件，并创建提交 `b1bd7e1`（`feat: register phase 0.5c target migration`）。
