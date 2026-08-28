@@ -20,6 +20,7 @@ FORMAL_MAX_ATTEMPTS = 500
 FORMAL_RUN_TOKENS = 320000
 PHASE_0_5_EXPERIMENT = "phase-0.5"
 PHASE_0_5B_EXPERIMENT = "phase-0.5b"
+PHASE_0_5C_EXPERIMENT = "phase-0.5c"
 
 PHASE_0_5_SEED_PLAN_DIGEST = "c421f3137d75f5ba956da12bcfdf824fc89222da23ccfd7bad9f1c42c792e3bc"
 """Phase 0.5 冻结的 seed plan canonical digest(实验已作废,归档保留)。
@@ -40,6 +41,15 @@ PHASE_0_5B_SEED_PLAN_DIGEST = "6dd3d879630a6ddf5cc5c9d7088189660a69b6a9c7d3ce4a8
 
 24 个 seed 全部重新抽取,不沿用 0.5 的任何一个:那 12 个的路径数在做上述方差估计时
 已经被看过,不再是盲的。抽取发生在任何 0.5b 结果存在之前,来源为系统 CSPRNG。
+"""
+
+PHASE_0_5C_SEED_PLAN_DIGEST = "264d3e0b5c035ab056d235506f2db0dee749268ad2e1d4b119887c1c0fb5dfad"
+"""Phase 0.5c 的 seed plan digest。⭐
+
+Phase 0.5b 在 GLM-4.7-FlashX 条件下的 seed 已被观察，不能与替代 Target `glm-4.7`
+混为同一批盲样本。作者于 2026-08-28 确认保持既有的 24 primary + 8 reserve 规模，
+但以系统 CSPRNG 重抽全部 32 个 seed；与 0.5、0.5b 及 Phase 0 pilot seeds 均无重叠。
+这保留原有功效规划，不改变统计口径，只隔离模型更换后的实验身份。
 """
 
 
@@ -93,6 +103,12 @@ FROZEN_SEED_PLANS = {
             primary_size=24,
             reserve_size=8,
             digest=PHASE_0_5B_SEED_PLAN_DIGEST,
+        ),
+        FrozenSeedPlan(
+            experiment=PHASE_0_5C_EXPERIMENT,
+            primary_size=24,
+            reserve_size=8,
+            digest=PHASE_0_5C_SEED_PLAN_DIGEST,
         ),
     )
 }
