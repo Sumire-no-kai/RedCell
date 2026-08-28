@@ -17,6 +17,8 @@ from redcell.gate_analysis import (
     PHASE_0_5_SEED_PLAN_DIGEST,
     PHASE_0_5B_EXPERIMENT,
     PHASE_0_5B_SEED_PLAN_DIGEST,
+    PHASE_0_5C_EXPERIMENT,
+    PHASE_0_5C_SEED_PLAN_DIGEST,
     SeedPlan,
     require_frozen_seed_plan,
     seed_plan_digest,
@@ -68,6 +70,20 @@ def test_phase_0_5b_reuses_no_seed_from_the_invalidated_run() -> None:
     assert set(old.ordered) & set(new.ordered) == set()
 
 
+def test_phase_0_5c_is_a_fresh_plan_for_the_replacement_target() -> None:
+    """换 Target 后保留样本量，但不能把已观察的旧 seed 伪装成新盲样本。"""
+    prior = [_load("PHASE0_5_SEED_PLAN.json"), _load("PHASE0_5B_SEED_PLAN.json")]
+    new = _load("PHASE0_5C_SEED_PLAN.json")
+    prior_seeds = set().union(*(set(plan.ordered) for plan in prior))
+
+    assert new.experiment == PHASE_0_5C_EXPERIMENT
+    assert (len(new.primary), len(new.reserve)) == (24, 8)
+    assert seed_plan_digest(new) == PHASE_0_5C_SEED_PLAN_DIGEST
+    assert set(new.ordered).isdisjoint(prior_seeds)
+    assert set(new.ordered).isdisjoint({5000, 5001, 5002})
+    require_frozen_seed_plan(new)
+
+
 def test_a_plan_whose_shape_disagrees_with_its_experiment_is_rejected() -> None:
     old = json.loads((_DOCS / "PHASE0_5_SEED_PLAN.json").read_text(encoding="utf-8"))
 
@@ -79,11 +95,15 @@ def test_an_unregistered_experiment_is_rejected() -> None:
     new = json.loads((_DOCS / "PHASE0_5B_SEED_PLAN.json").read_text(encoding="utf-8"))
 
     with pytest.raises(ValueError, match="未登记"):
-        SeedPlan.model_validate({**new, "experiment": "phase-0.5c"})
+        SeedPlan.model_validate({**new, "experiment": "phase-0.5d"})
 
 
 def test_every_registered_plan_declares_its_own_shape() -> None:
-    assert set(FROZEN_SEED_PLANS) == {PHASE_0_5_EXPERIMENT, PHASE_0_5B_EXPERIMENT}
+    assert set(FROZEN_SEED_PLANS) == {
+        PHASE_0_5_EXPERIMENT,
+        PHASE_0_5B_EXPERIMENT,
+        PHASE_0_5C_EXPERIMENT,
+    }
     for experiment, frozen in FROZEN_SEED_PLANS.items():
         assert frozen.experiment == experiment
         assert len(frozen.digest) == 64
