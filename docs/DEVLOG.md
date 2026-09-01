@@ -7,6 +7,17 @@
 
 ## 2026-09-01 · Phase 0.5c 失效审计与 Phase 0.5d 修复
 
+### 2026-09-01 15:49 AEST · Step 164 · Phase 0.5d 修复分支已推送并进入 PR 审查
+
+- 进度：修复、seed 与文档已提交为 `d023b0a`（`fix: harden phase 0.5d matrix reliability`），并推送到
+  `fix/phase-0-5d-integrity-rate-limit`。仅推送了该提交的 14 个已暂存文件；本来存在的
+  `docs/PHASE0_5_UTILITY_BASELINE.json`、`docs/RELATED_WORK.md` 与 `.tmp-tests/` 未被暂存、提交或推送。
+- 进度：已创建 PR #57 `fix: harden Phase 0.5d matrix reliability` → `master`。远端读取显示
+  state=`OPEN`、mergeStateStatus=`CLEAN`、非 draft、无远端 status check、尚无 review decision；这些状态
+  只说明 GitHub 当前可合并，不能替代本地四道质量门或未来 Phase 0.5d 的 Provider 证据门。
+- 剩余状态：**PR #57 READY FOR MERGE DECISION / MERGE DOES NOT AUTHORIZE RPM CALIBRATION, CONTROLS,
+  PREFLIGHT OR MATRIX PROVIDER CALLS**。
+
 ### 2026-09-01 15:47 AEST · Step 163 · Phase 0.5d 修复实现、seed 登记与本地验证
 
 - 进度：`_experiment_conditions` 现在在所有在线 treatment 的条件快照中统一写入
