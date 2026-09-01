@@ -85,6 +85,84 @@ async def test_pre_reboot_monotonic_timestamps_do_not_block_a_new_process(tmp_pa
     await limiter.release("new-child")
 
 
+async def test_rate_limit_cooldown_is_shared_across_child_like_instances(tmp_path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'rate-limit.db'}"
+    left = SQLiteRateLimiter(
+        database_url, provider_key="provider|model", min_interval_seconds=0, max_concurrency=1
+    )
+    right = SQLiteRateLimiter(
+        database_url, provider_key="provider|model", min_interval_seconds=0, max_concurrency=1
+    )
+
+    assert await left.record_rate_limit(retry_after_seconds=0.03) == pytest.approx(0.03)
+    started = time.perf_counter()
+    await right.acquire("cooldown-observer")
+    elapsed = time.perf_counter() - started
+    await right.release("cooldown-observer")
+
+    assert elapsed >= 0.02
+
+
+async def test_rate_limit_without_retry_after_uses_a_capped_shared_streak(tmp_path) -> None:
+    limiter = SQLiteRateLimiter(
+        f"sqlite:///{tmp_path / 'rate-limit.db'}",
+        provider_key="provider|model",
+        min_interval_seconds=0,
+        max_concurrency=1,
+    )
+
+    delays = [await limiter.record_rate_limit() for _ in range(6)]
+
+    assert delays == [5.0, 10.0, 20.0, 40.0, 60.0, 60.0]
+
+
+async def test_success_after_an_expired_or_zero_cooldown_resets_the_shared_streak(tmp_path) -> None:
+    limiter = SQLiteRateLimiter(
+        f"sqlite:///{tmp_path / 'rate-limit.db'}",
+        provider_key="provider|model",
+        min_interval_seconds=0,
+        max_concurrency=1,
+    )
+
+    assert await limiter.record_rate_limit(retry_after_seconds=0) == 0.0
+    await limiter.record_success()
+
+    assert await limiter.record_rate_limit() == 5.0
+
+
+def test_legacy_limiter_database_is_migrated_without_rebuilding_it(tmp_path) -> None:
+    path = tmp_path / "rate-limit.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE shared_provider_rate_limit ("
+            "provider_key TEXT PRIMARY KEY, active_count INTEGER NOT NULL, "
+            "last_started_at REAL, min_interval_seconds REAL NOT NULL, "
+            "max_concurrency INTEGER NOT NULL)"
+        )
+        connection.execute(
+            "CREATE TABLE shared_provider_rate_limit_lease ("
+            "provider_key TEXT NOT NULL, lease_id TEXT NOT NULL, expires_at REAL NOT NULL, "
+            "PRIMARY KEY (provider_key, lease_id))"
+        )
+
+    limiter = SQLiteRateLimiter(
+        f"sqlite:///{path}",
+        provider_key="provider|model",
+        min_interval_seconds=0,
+        max_concurrency=1,
+    )
+    with sqlite3.connect(path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(shared_provider_rate_limit)"
+            ).fetchall()
+        }
+
+    assert {"blocked_until", "consecutive_rate_limits"}.issubset(columns)
+    assert limiter._cooldown_seconds(consecutive_rate_limits=1, retry_after_seconds=None) == 5.0
+
+
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [

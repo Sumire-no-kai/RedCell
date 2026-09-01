@@ -5,6 +5,70 @@
 
 ---
 
+## 2026-09-01 · Phase 0.5c 失效审计与 Phase 0.5d 修复
+
+### 2026-09-01 15:49 AEST · Step 164 · Phase 0.5d 修复分支已推送并进入 PR 审查
+
+- 进度：修复、seed 与文档已提交为 `d023b0a`（`fix: harden phase 0.5d matrix reliability`），并推送到
+  `fix/phase-0-5d-integrity-rate-limit`。仅推送了该提交的 14 个已暂存文件；本来存在的
+  `docs/PHASE0_5_UTILITY_BASELINE.json`、`docs/RELATED_WORK.md` 与 `.tmp-tests/` 未被暂存、提交或推送。
+- 进度：已创建 PR #57 `fix: harden Phase 0.5d matrix reliability` → `master`。远端读取显示
+  state=`OPEN`、mergeStateStatus=`CLEAN`、非 draft、无远端 status check、尚无 review decision；这些状态
+  只说明 GitHub 当前可合并，不能替代本地四道质量门或未来 Phase 0.5d 的 Provider 证据门。
+- 剩余状态：**PR #57 READY FOR MERGE DECISION / MERGE DOES NOT AUTHORIZE RPM CALIBRATION, CONTROLS,
+  PREFLIGHT OR MATRIX PROVIDER CALLS**。
+
+### 2026-09-01 15:47 AEST · Step 163 · Phase 0.5d 修复实现、seed 登记与本地验证
+
+- 进度：`_experiment_conditions` 现在在所有在线 treatment 的条件快照中统一写入
+  `ControllerSettings.request_timeout_seconds`；仅 LLM treatment 仍加载/调用 Controller，静态、Random 与
+  Thompson 不会因此新增网络角色。`resume` 根据已落盘快照兼容旧的 `null` timeout，同时对新快照继续把这个
+  声明当作条件指纹的一部分。新增回归测试证明六条件的 Gate context 相同，而改动 timeout 仍会改变 context。
+- 进度：SQLite shared limiter 新增向后兼容的 `blocked_until` 与 `consecutive_rate_limits` 列；收到 429 的
+  provider 在释放 lease 前记录全局 cooldown，成功请求只在 cooldown 过期后重置退避级数。新测试覆盖两个
+  child-like limiter 实例共享 cooldown、无 header 的 5/10/20/40/60 秒封顶、成功重置、旧 limiter DB migration，
+  以及 OpenAI-compatible provider 确实发布 429。实现不存储凭据、prompt 或响应正文。
+- 实验身份：新增 `phase-0.5d`，`docs/PHASE0_5D_SEED_PLAN.json` 为新的系统 CSPRNG **24 primary + 8
+  reserve**，digest=`0b8304d8a968c8982d632e11e135abc7f84989cadc17117283b9d33707567c66`。测试锁住它与
+  0.5/0.5b/0.5c/pilot 的零重叠；无 Provider 调用的 plan 构建确认 **144 primary + 48 reserve = 192** cells。
+  0.5c runbook 已标为失效归档，0.5d runbook 明确 RPM calibration 仍为 `OPEN`、需独立授权，不能以 `0` 或
+  猜测值启动。
+- 验证证据：定向修复测试 **61 passed**；seed/plan/preflight 定向集 **98 passed**；全仓
+  `python -m pytest -p no:cacheprovider` **776 passed in 45.09s**；Ruff check、Ruff format check、Black check
+  与 `git diff --check` 均通过。整个步骤没有 Provider 请求、没有触碰 copied 0.5c artifact。
+- 剩余状态：**PHASE 0.5D LOCAL IMPLEMENTATION AND QUALITY GATES SUPPORTED / COMMIT, PUSH AND PR
+  NEXT / RPM CALIBRATION, FRESH CONTROLS, PREFLIGHT AND MATRIX EACH REQUIRE SEPARATE AUTHORIZATION**。
+
+### 2026-09-01 15:34 AEST · Step 162 · 复制的 Phase 0.5c matrix 运行审计，作者授权修复
+
+- 进度：只读审计 `runs/RedCell-phase-0-5c-failed-run/phase-0-5c` 的 plan、preflight、matrix state、
+  36 份可用 run report、日志与 shared-rate-limit SQLite 状态；该运行的 preflight 当时全通过，但 matrix
+  最终为 **36 completed / 36 failed / 72 skipped_block_invalid / 48 reserve pending**。24 个 primary seed
+  block 均已失效，因此它是 **EXPERIMENT_INVALID**，不是 Adaptive、Static 或模型能力的研究结论；已观察过的
+  primary seed 不得重跑或挪作 reserve，原始运行目录保留为只读证据。
+- 根因一（协议/代码）：Gate runner 正确地要求同一矩阵 cell 共享 Gate context fingerprint，但静态 treatment
+  的 `request_timeouts.controller_seconds` 是 `null`，LLM treatment 则在执行时写入 `60`。两种 context
+  digest 因此不同，18 个 block 的 LLM 子进程以 exit `90` fail-closed，余下 cell 被跳过。这个字段只是在静态
+  条件下没有实际调用 Controller，并不代表实验应使用不同的 declared timeout；不能删除 fingerprint 校验，
+  否则会掩盖真正的条件漂移。
+- 根因二（运行可靠性）：GLM Target 的 shared limiter 当时虽然已将并发限制为 1，但 `REDCELL_TARGET_RPM=0`
+  令其最小启动间隔为 0，且 limiter 没有跨子进程持久的 429 cooldown。日志记录到 Target `glm-4.7` 的多次
+  HTTP 429（无 `Retry-After`），独立子进程各自 retry，随后 18 个 block 以 exit `3`
+  `reliability_budget_exceeded` 失败。这不能证明配额耗尽或模型缺陷；可证明的是现有调度不能在持续限流时
+  抑制 retry storm。`--concurrency 1` 不是充分修复，因为 Target 已经是全局单并发。
+- 决策与理由：作者要求记录原因并启动 Phase 0.5d 修复。采用两项最小、可验证的修复：(1) 对在线 Phase 0.5
+  的所有六个 treatment 在条件快照中声明同一个 Controller timeout，静态 treatment 仍不创建或调用 Controller；
+  (2) 给 SQLite shared limiter 增加跨进程、持久化的 429 cooldown，优先使用服务端 `Retry-After`，缺失时采用
+  5/10/20/40/60 秒封顶退避。否决“忽略 controller timeout 的 fingerprint”：会使真实 LLM 配置漂移失去
+  防护。否决只降低 worker concurrency：不能解决已实证的零间隔串行 Target 请求。
+- 运行边界：本修复阶段不发送任何新的 Provider 请求、不修改 copied run、也不设置猜测性的 Target RPM。
+  Phase 0.5d 将使用新的 CSPRNG 24 primary + 8 reserve seed plan；实际 RPM 必须在代码合并后的独立小规模、
+  付费且获授权 calibration 中确定并冻结，然后才可重新申请 controls/preflight/matrix 授权。
+- 剩余状态：**PHASE 0.5C INVALID PRESERVED AS EVIDENCE / PHASE 0.5D CODE, SEED REGISTRATION,
+  LOCAL TESTS, PUSH AND PR IN PROGRESS / NO NEW PROVIDER CALLS AUTHORIZED**。
+
+---
+
 ## 2026-08-28 · Z.AI Target 候选中性可用性探针
 
 ### 2026-08-28 15:15 AEST · Step 161 · Phase 0.5c 迁移 PR 已合并到 master

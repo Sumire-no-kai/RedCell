@@ -21,6 +21,7 @@ FORMAL_RUN_TOKENS = 320000
 PHASE_0_5_EXPERIMENT = "phase-0.5"
 PHASE_0_5B_EXPERIMENT = "phase-0.5b"
 PHASE_0_5C_EXPERIMENT = "phase-0.5c"
+PHASE_0_5D_EXPERIMENT = "phase-0.5d"
 
 PHASE_0_5_SEED_PLAN_DIGEST = "c421f3137d75f5ba956da12bcfdf824fc89222da23ccfd7bad9f1c42c792e3bc"
 """Phase 0.5 冻结的 seed plan canonical digest(实验已作废,归档保留)。
@@ -50,6 +51,15 @@ Phase 0.5b 在 GLM-4.7-FlashX 条件下的 seed 已被观察，不能与替代 T
 混为同一批盲样本。作者于 2026-08-28 确认保持既有的 24 primary + 8 reserve 规模，
 但以系统 CSPRNG 重抽全部 32 个 seed；与 0.5、0.5b 及 Phase 0 pilot seeds 均无重叠。
 这保留原有功效规划，不改变统计口径，只隔离模型更换后的实验身份。
+"""
+
+PHASE_0_5D_SEED_PLAN_DIGEST = "0b8304d8a968c8982d632e11e135abc7f84989cadc17117283b9d33707567c66"
+"""Phase 0.5d 的 seed plan digest。⭐
+
+Phase 0.5c 的正式矩阵发生了 Gate context 不一致和持续 429，所有 24 个 primary
+seed 都已经被观察，整批实验因此失效。Phase 0.5d 保持既有 24 primary + 8 reserve
+功效规划，但在修复统一 context 声明及 shared 429 cooldown 后，以系统 CSPRNG 重抽
+32 个 seed；与 0.5、0.5b、0.5c 及 Phase 0 pilot seeds 均无重叠。
 """
 
 
@@ -109,6 +119,12 @@ FROZEN_SEED_PLANS = {
             primary_size=24,
             reserve_size=8,
             digest=PHASE_0_5C_SEED_PLAN_DIGEST,
+        ),
+        FrozenSeedPlan(
+            experiment=PHASE_0_5D_EXPERIMENT,
+            primary_size=24,
+            reserve_size=8,
+            digest=PHASE_0_5D_SEED_PLAN_DIGEST,
         ),
     )
 }

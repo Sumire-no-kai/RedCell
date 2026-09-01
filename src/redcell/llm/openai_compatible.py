@@ -247,15 +247,25 @@ class OpenAICompatibleProvider(LLMProvider):
         if self._slots is None:
             if self._shared_limiter is None:
                 return await self._timed_post(payload)
-            async with self._shared_limiter.hold():
-                return await self._timed_post(payload)
+            return await self._complete_with_shared_limiter(payload)
         # 并发闸在节流之前:先占到位子再算间隔,否则一批协程会同时通过间隔检查,
         # 然后一起冲进去把并发上限撞穿。
         async with self._slots:
             if self._shared_limiter is None:
                 return await self._timed_post(payload)
-            async with self._shared_limiter.hold():
-                return await self._timed_post(payload)
+            return await self._complete_with_shared_limiter(payload)
+
+    async def _complete_with_shared_limiter(self, payload: dict[str, Any]) -> LLMResponse:
+        """Publish a 429 to sibling processes before this request releases its lease."""
+        assert self._shared_limiter is not None
+        async with self._shared_limiter.hold():
+            try:
+                response = await self._timed_post(payload)
+            except ProviderRateLimitedError as exc:
+                await self._shared_limiter.record_rate_limit(exc.retry_after_seconds)
+                raise
+            await self._shared_limiter.record_success()
+            return response
 
     async def _timed_post(self, payload: dict[str, Any]) -> LLMResponse:
         await self._await_throttle()
