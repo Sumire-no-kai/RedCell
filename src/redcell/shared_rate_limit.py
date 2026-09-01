@@ -11,7 +11,15 @@ from pathlib import Path
 
 
 class SQLiteRateLimiter:
-    """Coordinate start rate and in-flight count for one non-secret provider key."""
+    """Coordinate start rate, in-flight count and 429 cooldown for one provider key.
+
+    The database contains only a non-secret endpoint/model key and timing state.  A
+    child that receives a 429 records one shared cooldown before it releases its
+    lease, so sibling processes do not each start their own retry storm.
+    """
+
+    RATE_LIMIT_BASE_SECONDS = 5.0
+    RATE_LIMIT_MAX_SECONDS = 60.0
 
     def __init__(
         self,
@@ -53,8 +61,27 @@ class SQLiteRateLimiter:
                 "CREATE TABLE IF NOT EXISTS shared_provider_rate_limit ("
                 "provider_key TEXT PRIMARY KEY, active_count INTEGER NOT NULL, "
                 "last_started_at REAL, min_interval_seconds REAL NOT NULL, "
-                "max_concurrency INTEGER NOT NULL)"
+                "max_concurrency INTEGER NOT NULL, blocked_until REAL, "
+                "consecutive_rate_limits INTEGER NOT NULL DEFAULT 0)"
             )
+            # Existing matrix limiter databases predate the cooldown columns.  Keep
+            # them usable: a fresh child may join a long-running matrix after this
+            # code update without being forced to rebuild its non-secret limiter DB.
+            columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(shared_provider_rate_limit)"
+                ).fetchall()
+            }
+            if "blocked_until" not in columns:
+                connection.execute(
+                    "ALTER TABLE shared_provider_rate_limit ADD COLUMN blocked_until REAL"
+                )
+            if "consecutive_rate_limits" not in columns:
+                connection.execute(
+                    "ALTER TABLE shared_provider_rate_limit "
+                    "ADD COLUMN consecutive_rate_limits INTEGER NOT NULL DEFAULT 0"
+                )
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS shared_provider_rate_limit_lease ("
                 "provider_key TEXT NOT NULL, lease_id TEXT NOT NULL, expires_at REAL NOT NULL, "
@@ -69,7 +96,8 @@ class SQLiteRateLimiter:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT active_count, last_started_at, min_interval_seconds, max_concurrency "
+                "SELECT active_count, last_started_at, min_interval_seconds, max_concurrency, "
+                "blocked_until "
                 "FROM shared_provider_rate_limit WHERE provider_key = ?",
                 (self._provider_key,),
             ).fetchone()
@@ -83,20 +111,22 @@ class SQLiteRateLimiter:
                 (self._provider_key,),
             ).fetchone()[0]
             if row is None:
-                last_started, interval, limit = (
+                last_started, interval, limit, blocked_until = (
                     None,
                     self._min_interval,
                     self._max_concurrency,
+                    None,
                 )
                 connection.execute(
                     "INSERT INTO shared_provider_rate_limit "
                     "(provider_key, active_count, last_started_at, "
-                    "min_interval_seconds, max_concurrency) "
-                    "VALUES (?, 0, NULL, ?, ?)",
+                    "min_interval_seconds, max_concurrency, blocked_until, "
+                    "consecutive_rate_limits) "
+                    "VALUES (?, 0, NULL, ?, ?, NULL, 0)",
                     (self._provider_key, interval, limit),
                 )
             else:
-                _stored_active, last_started, saved_interval, saved_limit = row
+                _stored_active, last_started, saved_interval, saved_limit, blocked_until = row
                 interval = max(float(saved_interval), self._min_interval)
                 limits = [item for item in (int(saved_limit), self._max_concurrency) if item > 0]
                 limit = min(limits) if limits else 0
@@ -106,6 +136,11 @@ class SQLiteRateLimiter:
                     "WHERE provider_key = ?",
                     (interval, limit, self._provider_key),
                 )
+            if blocked_until is not None:
+                remaining = float(blocked_until) - now
+                if remaining > 0:
+                    connection.commit()
+                    return remaining
             if limit > 0 and active >= limit:
                 connection.commit()
                 return 0.05
@@ -157,6 +192,83 @@ class SQLiteRateLimiter:
 
     async def release(self, lease_id: str) -> None:
         await asyncio.to_thread(self._release, lease_id)
+
+    @classmethod
+    def _cooldown_seconds(
+        cls, *, consecutive_rate_limits: int, retry_after_seconds: float | None
+    ) -> float:
+        """Prefer a valid server hint; otherwise use the documented 5/10/.../60 curve."""
+        if (
+            isinstance(retry_after_seconds, (int, float))
+            and not isinstance(retry_after_seconds, bool)
+            and retry_after_seconds >= 0
+        ):
+            return min(float(retry_after_seconds), cls.RATE_LIMIT_MAX_SECONDS)
+        return min(
+            cls.RATE_LIMIT_MAX_SECONDS,
+            cls.RATE_LIMIT_BASE_SECONDS * (2 ** max(consecutive_rate_limits - 1, 0)),
+        )
+
+    def _record_rate_limit(self, retry_after_seconds: float | None) -> float:
+        """Persist one 429 observation and return the cooldown just scheduled."""
+        now = time.time()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT blocked_until, consecutive_rate_limits "
+                "FROM shared_provider_rate_limit WHERE provider_key = ?",
+                (self._provider_key,),
+            ).fetchone()
+            if row is None:
+                previous_blocked_until = None
+                previous_streak = 0
+                connection.execute(
+                    "INSERT INTO shared_provider_rate_limit "
+                    "(provider_key, active_count, last_started_at, min_interval_seconds, "
+                    "max_concurrency, blocked_until, consecutive_rate_limits) "
+                    "VALUES (?, 0, NULL, ?, ?, NULL, 0)",
+                    (self._provider_key, self._min_interval, self._max_concurrency),
+                )
+            else:
+                previous_blocked_until, previous_streak = row
+            streak = min(int(previous_streak) + 1, 5)
+            cooldown = self._cooldown_seconds(
+                consecutive_rate_limits=streak,
+                retry_after_seconds=retry_after_seconds,
+            )
+            blocked_until = max(float(previous_blocked_until or now), now + cooldown)
+            connection.execute(
+                "UPDATE shared_provider_rate_limit SET blocked_until = ?, "
+                "consecutive_rate_limits = ? WHERE provider_key = ?",
+                (blocked_until, streak, self._provider_key),
+            )
+            connection.commit()
+        return cooldown
+
+    async def record_rate_limit(self, retry_after_seconds: float | None = None) -> float:
+        """Tell every process sharing this provider key about a received HTTP 429."""
+        return await asyncio.to_thread(self._record_rate_limit, retry_after_seconds)
+
+    def _record_success(self) -> None:
+        """Reset the backoff streak only after a request succeeds outside a live block."""
+        now = time.time()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT blocked_until FROM shared_provider_rate_limit WHERE provider_key = ?",
+                (self._provider_key,),
+            ).fetchone()
+            if row is not None and (row[0] is None or float(row[0]) <= now):
+                connection.execute(
+                    "UPDATE shared_provider_rate_limit SET blocked_until = NULL, "
+                    "consecutive_rate_limits = 0 WHERE provider_key = ?",
+                    (self._provider_key,),
+                )
+            connection.commit()
+
+    async def record_success(self) -> None:
+        """Clear an expired global 429 streak after a real successful request."""
+        await asyncio.to_thread(self._record_success)
 
     @asynccontextmanager
     async def hold(self):

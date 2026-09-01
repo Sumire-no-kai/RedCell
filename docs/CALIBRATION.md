@@ -366,6 +366,14 @@ SE_差 = √(0.015625 + 0.005625) = √0.02125 = 0.146
 > `glm-4.7` 已通过独立阳性与 260 次 controls，但不继承 FlashX 的任何矩阵或 seed；新的 24+8
 > CSPRNG seed plan、运行配置和 billing evidence 单独保存。Phase 0.5b 保持 `EXPERIMENT_INVALID`。
 
+> **2026-09-01 更正/Phase 0.5d：** Phase 0.5c 的 copied matrix run 不是研究结果：24 个 primary
+> block 全部无效（36 completed / 36 failed / 72 skipped）。静态 cell 未在条件快照中声明 Controller
+> timeout，而 LLM cell 声明了 60 秒，Gate 的 fail-closed context 校验因此正确拒绝配对 block；随后 GLM
+> Target 在零间隔、无跨进程 cooldown 的调度下持续 HTTP 429，触发 reliability budget。修复不会删除
+> context 校验，而是让全部 treatment 声明相同 timeout，并以 SQLite 共享 429 cooldown 抑制 retry storm。
+> 0.5c seed 已观察，不能重用；0.5d 以新的 24+8 CSPRNG plan 重新开始。Target RPM 仍为 `OPEN`：必须用
+> 单独获授权的有界 calibration 确定并冻结，不能猜测或沿用 `0`。
+
 **⚠️ 之前(2026-08-01)记的 3.8 秒/轮、2.3 小时/轮,与今天(2026-08-06)彩排实测
 差 15 倍以上,不能再用。** 早先那个数只测了 target 单次调用延迟,
 漏算了攻击方生成话术、多轮工具往返、落盘的时间——**拿组件延迟外推整场耗时

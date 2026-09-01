@@ -7,6 +7,9 @@
 
 from __future__ import annotations
 
+import sqlite3
+import time
+
 import httpx
 import pytest
 
@@ -21,6 +24,7 @@ from redcell.llm import (
 )
 from redcell.protocols import Role
 from redcell.protocols.run import UsageAccountingMode
+from redcell.shared_rate_limit import SQLiteRateLimiter
 
 _OK_BODY = {
     "model": "glm-4.7-flash",
@@ -321,6 +325,34 @@ async def test_rate_limit_raises_the_dedicated_subclass() -> None:
     with pytest.raises(ProviderRateLimitedError) as exc:
         await provider.complete(_user("你好"))
     assert exc.value.retry_after_seconds == 30.0
+
+
+async def test_rate_limit_is_published_to_the_shared_limiter_before_the_lease_releases(
+    tmp_path,
+) -> None:
+    limiter = SQLiteRateLimiter(
+        f"sqlite:///{tmp_path / 'rate-limit.db'}",
+        provider_key="example|model",
+        min_interval_seconds=0,
+        max_concurrency=1,
+    )
+    provider = _provider(
+        httpx.MockTransport(lambda _: httpx.Response(429, headers={"retry-after": "30"})),
+        shared_limiter=limiter,
+    )
+
+    with pytest.raises(ProviderRateLimitedError):
+        await provider.complete(_user("你好"))
+
+    with sqlite3.connect(tmp_path / "rate-limit.db") as connection:
+        blocked_until, streak = connection.execute(
+            "SELECT blocked_until, consecutive_rate_limits "
+            "FROM shared_provider_rate_limit WHERE provider_key = ?",
+            ("example|model",),
+        ).fetchone()
+
+    assert blocked_until > time.time()
+    assert streak == 1
 
 
 async def test_server_error_is_not_a_rate_limit() -> None:

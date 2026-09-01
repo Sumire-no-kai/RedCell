@@ -49,7 +49,8 @@ from redcell.live_conversation import LiveConversationFollower
 from redcell.protocols.run import ExecutionHostProfile
 from redcell.storage import RunStore
 
-# worker 最多并行 3 个 cell；Provider 共享 limiter 会进一步执行 Target=2 等更严格的角色上限。
+# worker 最多并行 3 个 cell；Provider shared limiter 会继续执行
+# 当前 Target 配置的更严格上限与 cooldown。
 DEFAULT_CONCURRENCY = 3
 
 EXIT_VERIFICATION_FAILED = 90

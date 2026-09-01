@@ -1,7 +1,9 @@
-# Phase 0.5c 运行手册：GLM-4.7 Target
+# Phase 0.5c 运行手册：GLM-4.7 Target（失效归档）
 
-> 状态：**配置、billing evidence 与 Target controls 已通过；144-cell Gate matrix 未启动。**
-> 这是取代 FlashX 条件下失效的 Phase 0.5b 的新实验身份，不续跑、不混用 0.5b 数据。
+> 状态：**EXPERIMENT_INVALID（2026-09-01）**。复制的 matrix 运行出现 treatment 间 Gate context
+> fingerprint 不一致（静态条件未声明 Controller timeout）及未被 shared limiter 协调的持续 429；24 个
+> primary block 全部失效。不得运行、续跑、复制或分析下方命令生成的 0.5c 数据；原文保留仅用于审计。
+> 请使用 `docs/PHASE0_5D_TEST_RUNBOOK.md` 的全新实验身份和全新 seed。
 
 ## 已冻结的决策
 

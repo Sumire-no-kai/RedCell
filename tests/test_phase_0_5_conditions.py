@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from types import SimpleNamespace
 
 import pytest
 
+from redcell.arena.support_agent import DefenseLevel
 from redcell.budget import BudgetLimits
+from redcell.cli import _experiment_conditions
 from redcell.protocols import (
     ArenaRunConfiguration,
     ControllerRunConfiguration,
@@ -209,6 +212,82 @@ def test_regression_context_ignores_treatment_but_complete_fingerprint_does_not(
     )
     assert static.fingerprint() != llm.fingerprint()
     assert static.regression_context_fingerprint() == llm.regression_context_fingerprint()
+
+
+def test_online_cli_conditions_declare_one_controller_timeout_for_every_treatment() -> None:
+    """Static does not call Controller, but its Gate contract must declare the same timeout.
+
+    A Gate block is one paired measurement.  Leaving this field null only for the
+    static cells made the runner correctly reject an otherwise complete 0.5c block.
+    """
+    provider = _provider()
+    providers = SimpleNamespace(
+        target_configuration=provider,
+        attacker_configuration=provider,
+        target=SimpleNamespace(timeout_seconds=60.0),
+        attacker=SimpleNamespace(timeout_seconds=60.0),
+    )
+    common = _experiment_conditions(
+        online=True,
+        providers=providers,
+        actor="customer_a",
+        defense=DefenseLevel.STANDARD,
+        enforce_permissions=True,
+        enforce_confirmation=False,
+        declared_controller_timeout_seconds=60.0,
+    )
+    static = common.model_copy(
+        update={
+            "search": SearchConfiguration(selector=SearchSelector.STATIC),
+            "generation_memory": GenerationMemoryConfiguration(mode=GenerationMemoryMode.OFF),
+        }
+    )
+    llm = common.model_copy(
+        update={
+            "search": SearchConfiguration(selector=SearchSelector.LLM),
+            "generation_memory": GenerationMemoryConfiguration(
+                mode=GenerationMemoryMode.BOUNDED_RELEVANT_V1,
+                policy_version="bounded-relevant-v1",
+                limits=GenerationMemoryLimits(),
+            ),
+            "controller": ControllerRunConfiguration(
+                provider=provider,
+                connection_id="controller-test",
+                connection_fingerprint="sha256:abc",
+                prompt_version="controller-prompt-v1",
+                evidence_policy_version="controller-evidence-v1",
+                thinking_disabled=False,
+            ),
+        }
+    )
+    static_run = Run(
+        target_name="target",
+        policy_version="policy-v1",
+        adapter_type="arena",
+        algorithm="static",
+        limits=BudgetLimits(max_attempts=500, max_total_tokens=320000),
+        experiment_conditions=static,
+    )
+    llm_run = static_run.model_copy(update={"algorithm": "llm", "experiment_conditions": llm})
+
+    assert static.request_timeouts is not None
+    assert static.request_timeouts.controller_seconds == 60.0
+    assert static.regression_context_fingerprint() == llm.regression_context_fingerprint()
+    assert static_run.gate_context_fingerprint() == llm_run.gate_context_fingerprint()
+    assert (
+        static_run.gate_context_fingerprint()
+        != static_run.model_copy(
+            update={
+                "experiment_conditions": static.model_copy(
+                    update={
+                        "request_timeouts": static.request_timeouts.model_copy(
+                            update={"controller_seconds": 30.0}
+                        )
+                    }
+                )
+            }
+        ).gate_context_fingerprint()
+    )
 
 
 def test_regression_context_omits_optional_legacy_provider_fields() -> None:

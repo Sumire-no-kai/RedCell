@@ -31,6 +31,7 @@ from redcell.attacker_control import (
 )
 from redcell.budget import BudgetLimits
 from redcell.config import (
+    ControllerSettings,
     ProviderConfigError,
     ProviderPair,
     load_attacker,
@@ -236,6 +237,7 @@ def _experiment_conditions(
     enforce_permissions: bool,
     enforce_confirmation: bool,
     execution_host: ExecutionHostConfiguration | None = None,
+    declared_controller_timeout_seconds: float | None = None,
 ) -> ExperimentConditions:
     """把会影响结论的配置冻结进 Run；绝不把凭据写入 SQLite。"""
     if providers is None:
@@ -272,6 +274,7 @@ def _experiment_conditions(
         request_timeouts = RequestTimeoutConfiguration(
             target_seconds=providers.target.timeout_seconds,
             attacker_seconds=providers.attacker.timeout_seconds,
+            controller_seconds=declared_controller_timeout_seconds,
         )
     return ExperimentConditions(
         online=online,
@@ -414,6 +417,9 @@ def run(
 
     controller_provider = None
     controller_configuration = None
+    declared_controller_timeout_seconds = (
+        ControllerSettings().request_timeout_seconds if online else None
+    )
     if selector is SearchSelector.LLM:
         if not online:
             raise typer.BadParameter("--search llm 需要 --online 与独立 REDCELL_CONTROLLER_* 配置")
@@ -431,6 +437,7 @@ def run(
         enforce_permissions=enforce_permissions,
         enforce_confirmation=enforce_confirmation,
         execution_host=execution_host,
+        declared_controller_timeout_seconds=declared_controller_timeout_seconds,
     )
     conditions = conditions.model_copy(
         update={
@@ -458,13 +465,6 @@ def run(
                 )
                 if controller_configuration is not None
                 else None
-            ),
-            "request_timeouts": (
-                conditions.request_timeouts.model_copy(
-                    update={"controller_seconds": controller_provider.timeout_seconds}
-                )
-                if controller_provider is not None and conditions.request_timeouts is not None
-                else conditions.request_timeouts
             ),
         }
     )
@@ -606,6 +606,13 @@ def resume(
     try:
         target_provider, generator, providers = _providers(conditions.online)
         defense = DefenseLevel(conditions.arena.defense)
+        declared_controller_timeout_seconds = (
+            ControllerSettings().request_timeout_seconds
+            if conditions.online
+            and conditions.request_timeouts is not None
+            and conditions.request_timeouts.controller_seconds is not None
+            else None
+        )
         current_conditions = _experiment_conditions(
             online=conditions.online,
             providers=providers,
@@ -614,6 +621,7 @@ def resume(
             enforce_permissions=conditions.arena.enforce_permissions,
             enforce_confirmation=conditions.arena.enforce_confirmation,
             execution_host=conditions.execution_host,
+            declared_controller_timeout_seconds=declared_controller_timeout_seconds,
         )
         controller_configuration = None
         if conditions.search is not None and conditions.search.selector is SearchSelector.LLM:
@@ -638,14 +646,6 @@ def resume(
                     )
                     if controller_configuration is not None
                     else None
-                ),
-                "request_timeouts": (
-                    current_conditions.request_timeouts.model_copy(
-                        update={"controller_seconds": controller_provider.timeout_seconds}
-                    )
-                    if controller_provider is not None
-                    and current_conditions.request_timeouts is not None
-                    else current_conditions.request_timeouts
                 ),
             }
         )
