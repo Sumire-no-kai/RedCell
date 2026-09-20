@@ -5,6 +5,127 @@
 
 ---
 
+## 2026-09-20 · 反馈闭环审核修正
+
+### 2026-09-20 18:06 AEST · Step 01 · 按已讨论的审核结论修正
+- 进度:作者授权直接修复审核中的七项问题并提交；继续在 `feat/feedback-loop-observation` 修正候选接口，原工作区的 replay / 协议改动不在本次范围。
+- 决策与理由:允许从公开反馈推断目标规则，禁止读取评测器真值；攻击者可见性须独立于 Adapter 插桩等级；公开错误采用固定类别与说明；把首次及 repair 调用前预算检查作为接口责任。
+- 纠正:先前脚本按顺序返回不同消息仅证明序列化管道，不证明消息由反馈改变。新增反事实反馈和忽略反馈的对照，并核验消息实际到达模拟目标；证据引用本身仍不能证明推理正确。
+- 实施范围:先修接口与最小离线执行验证；统一决策只是实现候选，拆分角色方案仍可对照。`finding_signature` 仅代表结构证据变体；根本漏洞覆盖要按单独登记的规则/边界 ID 计算。
+- 验证状态:进行中；本轮不执行付费 Provider 或正式矩阵，也不将先前的 800 项通过视为机制有效证据。
+
+### 2026-09-20 18:21 AEST · Step 02 · 修正契约并完成实际送达探针
+- 进度:观察、prompt、choice 升为独立开发 v2。可见性由调用方显式授予并进入摘要；自带靶场诊断保留固定错误类别与说明，不复制私有值。提示允许公开规则推断和授权保密测试；探索动作可无证据引用。
+- 实现:输入快照重新校验；零步骤或零 Token 不调用；首次/repair 实际用量耗尽后不返回可发送动作，异常保留已用成本。输出长度受剩余额度约束，但当前接口无法提前严格限制输入 Token；一次在途调用可能超额，不能声称费用硬封顶。
+- 验证证据:含观察、决策和旧 Finding 身份契约的 51 项聚焦测试通过。两轮探针通过实际 TargetAdapter.send 验证消息送达；五类反馈保持相同回复文本。忽略反馈的负对照虽给合法引用，仍在四类状态下失败；第二次决策含攻击者和目标用量。这是离线接口证据，不是模型智能、成功率或持久化恢复证据。
+- 文档修正:新增 `docs/FEEDBACK_MECHANISM.md` 记录可审查契约、替代方案、预算及指标限制；内部 PRD §2.10 更正“一切细节均已确认”、永久否决跨 Run 学习、将签名变体当根本漏洞等过强结论。统一决策仍是候选，完整恢复系统后置，旧实验代码与数据未改动。
+- 剩余状态:DONE（审核问题的实现和说明）；TODO（最终格式、完整四道门禁、diff 复核、本地提交）；OPEN（生产执行器集成、严格调用前预留、真实模型验证和正式指标登记）。
+
+### 2026-09-20 18:25 AEST · Step 03 · 全仓验证与提交前复核
+- 验证证据:54 项聚焦测试通过；第一轮完整检查为 `827 passed in 109.35s`，Ruff check、Ruff format check 和 Black check 全部通过；旧 history、Controller、Orchestrator 与 Finding 身份实现无 diff。
+- 遇到的问题与修复:格式检查指出异常类需要 Error 后缀、导入排序及长行，已按现有规范修正。最终测试复核发现开场使用 tool-status、跟进使用 diagnostics，会在会话中改变信息授权；已固定整个探针的授权，并增加一致性断言。
+- 决策与理由:保留所有冻结实验及原工作树的无关变更；此次只提交本分支的代码、测试、开发契约及日志，内部 PRD 不进入版本控制。完整测试需在最后夹具修正后再次通过。
+- 剩余状态:TODO（最终复测、本地提交）；OPEN（远端发布、生产执行器和真实模型验证）。
+
+### 2026-09-20 18:28 AEST · Step 04 · 最终门禁与本地提交交付
+- 验证证据:最后夹具修正后的完整检查为 `827 passed in 107.05s`；Ruff check、Ruff format check、Black check 全部通过；最终 diff 已复核，`git diff --check` 无空白错误。
+- 提交范围:仅七个文件——观察投影、决策接口、三份相关测试、开发契约与本日志。本步骤随修复形成同一个本地提交，原工作区的已有变更不纳入暂存；内部 PRD 已同步但按约定不提交。
+- 交付边界:审核指出的本地契约、测试与文档问题已修正；严格输入 Token 预留、正式运行器/恢复系统、正常能力检查和真实模型效果仍是后续工作，不把离线通过当成机制收益结论。
+- 远端状态:本次仅本地提交；此前自动审批因缺少针对 origin 外发源代码的明确授权而拒绝 push，未再次尝试，也未创建或合并 PR。
+- 剩余状态:DONE（审核修正与离线验证）；OPEN（远端发布及上述后续研究/集成）。
+
+### 2026-09-20 18:32 AEST · Step 05 · 明确远端发布授权并核对范围
+- 进度:作者针对上一轮未推送状态明确允许提交；按当前 origin 推送本分支并创建可审查 PR。该授权不包含付费模型调用或新实验矩阵。
+- 验证证据:同步 origin 后，待发布为 `5751abc`、`beaedcf`、`04009d2` 三个提交，差异仅七个反馈接口相关文件；独立工作树此前干净，原工作区的 replay / 协议未提交改动不纳入发布。GitHub 身份本次核验有效，该 head 尚无既有 PR。
+- 更正:此前受限环境下的身份检查不能作为当前凭据失效的结论；本次可正常读取远端和 PR 状态。0.5d 本地 Gate 仍为 `EXPERIMENT_INVALID`，包含 `validation_usage_unknown`。
+- 剩余状态:TODO（push、PR 和远端验证）；OPEN（新攻击者运行入口、真实模型行为与匹配对照）。
+
+### 2026-09-20 18:35 AEST · Step 06 · 发布审批拒绝与可审查交付准备
+- 遇到的问题:尝试 `git push -u origin feat/feedback-loop-observation` 时，自动审批仍将本次“允许提交”视为仅授权本地提交，因缺少针对具体 GitHub 目的地和代码载荷的明确授权而拒绝。推送命令未执行，没有创建 PR。
+- 解决方式:保留拒绝事实，不通过其他工具、协议或间接命令绕过。PR 标题、正文、七文件范围及本地验证证据均已准备；下一步授权项明确包含 origin 地址、代码/测试/文档及关联提交历史。
+- 验证边界:本轮源码未改动；`04009d2` 的 827 项测试与四道门禁证据仍适用，不为纯日志更新重复运行全仓测试。GitHub 身份有效与允许读取远端不等于审批已允许推送。
+- 剩余状态:DONE（本地修复与 PR 内容准备）；BLOCKED（远端发布，等待具体目的地与载荷授权）；OPEN（运行入口、真实模型验证和匹配对照）。
+
+### 2026-09-20 18:38 AEST · Step 07 · 作者明确授权远端提交
+- 进度:作者在已展示具体 origin 地址、七文件范围和关联历史后明确回复“允许提交到远端仓库”；继续发布 `feat/feedback-loop-observation` 到 `git@github.com:Sumire-no-kai/RedCell.git` 并创建 PR。
+- 验证证据:提交前工作树干净，当前 head 为 `dc03cdf`，仍只有已核对的七文件差异；原工作区的未提交变更不纳入远端发布。
+- 剩余状态:TODO（push、PR 和远端 head 核验）；研究与运行器集成边界保持不变。
+
+### 2026-09-20 18:39 AEST · Step 08 · 远端分支发布成功
+- 进度:`git push -u origin feat/feedback-loop-observation` 成功创建远端分支并设置 tracking；远端已包含源码修复 `04009d2` 和截至 `dc03cdf` 的本地历史。
+- 验证证据:相对 tracking branch 无未推送提交，PR 查询确认该分支尚无现有 PR；正式创建 PR 前已复核标题、正文、验证证据与研究限制。
+- 剩余状态:DONE（代码推送）；TODO（PR、同步发布日志及最终远端核验）。
+
+### 2026-09-20 18:40 AEST · Step 09 · PR 创建与发布状态核验
+- 进度:已创建 [PR #58](https://github.com/Sumire-no-kai/RedCell/pull/58)，`feat/feedback-loop-observation` → `master`；正文包含行为变化、候选架构与替代方案、827 项测试证据及离线机制验证的限制。
+- 验证证据:GitHub 返回 `OPEN`、非 draft、`MERGEABLE/CLEAN`；目前无远端 status check 或 review decision。代码已发布，但未合并；可合并状态不等于完成代码审查或真实模型验证。
+- 提交边界:本轮仅追加发布日志，源码保持已验证的 `04009d2` 内容；发布日志随本分支提交并同步到 PR，不纳入内部 PRD 或原工作区的未提交变更。
+- 剩余状态:DONE（远端代码发布与 PR 创建）；OPEN（PR 审查/合并、运行器接入与真实模型验证）。
+
+### 2026-09-20 18:42 AEST · Step 10 · PR 合并授权与最终前置核验
+- 进度:作者明确授权合并 PR #58；准备按近期多提交 PR 的 merge commit 方式合入 `master`，保留本分支的设计、修正和发布记录。
+- 验证证据:合并前 GitHub 状态为 `OPEN`、非 draft、`MERGEABLE/CLEAN`，head=`e1dfd4e`，无 status check 或 review decision；本地与远端分支一致，源码自 `04009d2` 的 `827 passed` 与四道门禁后无变化。
+- 边界:本次授权只完成 PR #58 的合并，不启动 Provider、正式矩阵或后续运行器开发；合并状态也不构成真实模型机制有效的证据。
+- 剩余状态:TODO（提交并同步本日志、合并 PR、核验 `master`）；OPEN（运行器接入与真实模型验证）。
+
+## 2026-09-20 · 反馈驱动攻击闭环机制修正
+
+### 2026-09-20 17:13 AEST · Step 01 · 隔离分支并冻结旧实验边界
+- 进度:作者确认按“研究问题校正 → 反馈忠实性 → 最小持续闭环 → 匹配对照 → 决定正式实验”的顺序开始修正。在 `feat/feedback-loop-observation` 独立工作树开发，避免混入原工作区尚未提交的 replay / native function-calling 改动。
+- 决策与理由:Phase 0.5d 的实现、数据库、validation 与 `EXPERIMENT_INVALID` Gate 裁决保持历史冻结；新行为使用新的版本身份，不通过修改 `bounded-relevant-v1` 事后改写旧条件。
+- 遇到的问题:现有工作区位于 `fix/replay-checkpoint-recovery`，有 25 个已修改文件和多个未跟踪文件，且 Controller、Run 协议与 CLI 与本任务存在重叠。
+- 解决方式:从当前提交 `9e992ac` 新建独立工作树，只在新分支实现机制基础层；后续集成必须在 replay 分支收尾后显式处理依赖，不把两组改动混成一个 PR。
+- 验证证据:`git worktree add` 成功创建独立分支；原工作区状态未被修改。
+- 剩余状态:DONE（隔离）；OPEN（依赖分支的最终集成顺序）。
+
+### 2026-09-20 17:20 AEST · Step 02 · 攻击者观察投影 v1
+- 进度:新增 `attacker-observation-v1` 投影，把已发生的攻击会话转换成持续攻击者可读取的结构化观察账本。
+- 决策与理由:显式区分 `performed`、`awaiting_confirmation`、`rejected` 与 `unknown`；证据继续受 Adapter observability 约束：`PARTIAL` 不暴露执行结果，`RESPONSE_ONLY` 不暴露内部工具证据。工具结果正文、副作用 payload、Policy、Signal、reward、Finding、Scorer 证据和内部 stop reason 不进入接口。已完成历史与进行中快照使用不同源类型；跨 Run 历史和自相矛盾的工具证据 fail closed。
+- 遇到的问题:旧 `history.py` 把“等待确认”渲染成 `success`，但直接修正会改变冻结 `bounded-relevant-v1` 的恢复语义。
+- 解决方式:保留旧投影不动，建立独立、带版本的新 seam；未来闭环只消费新投影。
+- 验证证据:覆盖四态映射、私有字段隔离、稳定引用/digest、跨 Run 拒绝及矛盾证据拒绝的聚焦测试通过。
+- 剩余状态:DONE（基础投影）；OPEN（正式运行配置尚未引用该版本）。
+
+### 2026-09-20 17:35 AEST · Step 03 · 最小持续决策接口与脚本机制探针
+- 进度:新增单方法 `FeedbackAttackDriver` seam 及 `LLMFeedbackAttackAdapter`。一次决策同时返回有界假设状态和可执行 action：开始 Attempt、继续 Attempt、结束 Attempt 或停止 Run；发送 action 同时携带真实消息、测试意图和证据引用。
+- 决策与理由:工作记忆作为显式输入/输出，不藏在 Provider 对话中，便于调用方先持久化再执行、恢复时复用已落盘决定。策略库在本机制中是 primary audit label 和起点，不再阻断消息对多场证据的综合。替代方案是继续分离 Controller/Generator 并新增 tactic 字段；它改动较小，但仍需两边同步假设状态，第一轮机制验证不采用。
+- 遇到的问题:独立工作树没有自己的 `.venv`，首次测试命令未启动；Ruff 也无法在 `.codex` 工作树写缓存。
+- 解决方式:使用主工作区虚拟环境并临时把新工作树 `src` 放进当前测试进程的模块路径；Ruff 使用 `--no-cache`，格式差异用精确补丁修正。
+- 验证证据:67 项聚焦测试通过。脚本化探针证实 `awaiting_confirmation` 进入第二次决策请求后，下一条可执行消息能够改变并绑定相应证据引用；观察账本同时校验 observability、Run、权威 Attempt 顺序和内容 digest，决策结果绑定完整 request digest。
+- 剩余状态:DONE（接口和离线机制 plumbing）；OPEN（尚未接入 Orchestrator/持久化，尚未进行真实模型行为验证，不能声称 LLM 已正确学习反馈）。
+
+### 2026-09-20 17:36 AEST · Step 04 · 完整仓库门禁与证据边界复核
+- 进度:完成 M1-A 基础层的仓库级回归验证，并复核内部 PRD 的研究问题、实施顺序、退出条件与旧实验冻结边界。
+- 决策与理由:当前分支只交付观察投影、统一决策 seam 和离线机制探针；不在 replay / native function-calling 依赖尚未落地时接入 Orchestrator，也不把脚本化消息变化解释成真实模型能力。
+- 遇到的问题:聚焦测试第一次引用了不存在的 `tests/test_adapter_contract.py`，因此没有启动测试；这是命令路径错误，不是实现失败。
+- 解决方式:改用仓库实际存在的 `tests/test_adapter.py` 与 `tests/test_arena_adapter.py` 后重跑聚焦集，再运行完整四道门禁。
+- 验证证据:`794 passed`；`ruff check . --no-cache`、`ruff format --check . --no-cache`、`black --check src tests` 全部通过；`git diff --check` 无空白错误。
+- 剩余状态:DONE（M1-A 离线基础层）；OPEN（M1-B 的逐决策持久化、恢复、全角色预算和停止策略；M1-C 的正常能力检查与真实模型机制探针）。
+
+### 2026-09-20 17:46 AEST · Step 05 · 最终 diff 复核修正观察边界
+- 进度:在提交前逐行复核中发现并修正两类设计缺口：投影未按 Adapter observability 裁剪工具证据；进行中会话曾通过未完成 `Attempt` 表示，且历史 `stop_reason` 可能泄漏内部成功裁决。
+- 决策与理由:`FULL` 才能看到确定执行状态与副作用种类，`PARTIAL` 只看到调用且 outcome 为 `unknown`，`RESPONSE_ONLY` 只看到回复；新增独立 `ActiveAttemptTrace` 作为进行中会话源，历史投影不再携带 stop reason。假设状态发生变化时必须引用观察证据，active attempt 也必须与账本中的进行中快照一致。
+- 遇到的问题:Ruff 在独立 `.codex` 工作树无法直接改写文件，不能自动格式化新补丁。
+- 解决方式:按 Ruff 给出的精确 diff 手工调整换行，再重跑聚焦集和完整门禁。
+- 验证证据:67 项聚焦测试通过；最终 `798 passed`；Ruff lint、Ruff format check、Black check 全部通过。
+- 剩余状态:DONE（M1-A 最终候选）；OPEN（M1-B / M1-C 保持不变，未进行任何付费 Provider 调用）。
+
+### 2026-09-20 17:52 AEST · Step 06 · 收紧持续状态与跟进动作契约
+- 进度:最终契约检查补上持久状态引用和跟进动作约束：输入工作状态不得引用当前账本中已不存在的证据；`continue_attempt` 必须引用至少一条可见观察；结束类动作必须保存简短原因；选择记录显式绑定 prompt/schema 版本。
+- 决策与理由:证据引用只能证明信息管道可追溯，不能证明模型推理正确，但它能排除“说明里声称使用历史、实际动作完全无法对应历史”的不可审计状态。短原因用于解释停止/换路，不保存隐藏 chain-of-thought。
+- 遇到的问题:无新的运行故障。
+- 解决方式:增加契约校验和针对性回归覆盖，不扩大到 Orchestrator 或在线 Provider。
+- 验证证据:最终完整门禁为 `800 passed`；`ruff check . --no-cache`、`ruff format --check . --no-cache`、`black --check src tests` 全部通过。
+- 剩余状态:DONE（M1-A 提交候选）；OPEN（M1-B / M1-C 与正式对照仍未执行）。
+
+### 2026-09-20 17:54 AEST · Step 07 · 本地提交与远端状态
+- 进度:M1-A 实现与测试已在 `feat/feedback-loop-observation` 形成独立本地提交 `5751abc`（`feat: add feedback-driven attacker seam`）。
+- 决策与理由:只提交观察投影、统一决策 seam、回归测试和本日志；内部 PRD 保持 gitignored，原 `fix/replay-checkpoint-recovery` 工作区未被改写。
+- 遇到的问题:远端发布未执行；当前缺少对具体 `origin` 外发源代码的明确授权，且本机 `gh` 凭据状态无效，因此没有创建 PR。
+- 解决方式:保留本地分支和提交，等待明确授权及可用 GitHub 身份后再 push / 建 PR，不通过其他渠道绕过。
+- 验证证据:提交后独立工作树无未暂存变更；原工作区仍保留原有 25 个修改文件和 4 个未跟踪文件。
+- 剩余状态:DONE（本地提交）；OPEN（push / PR；M1-B / M1-C）。
+
 ## 2026-09-01 · Phase 0.5c 失效审计与 Phase 0.5d 修复
 
 ### 2026-09-01 15:49 AEST · Step 164 · Phase 0.5d 修复分支已推送并进入 PR 审查

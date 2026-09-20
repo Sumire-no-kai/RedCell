@@ -63,6 +63,22 @@ def test_structure_signature_binds_argument_names_and_json_types() -> None:
     assert finding_signature(amount) != finding_signature(string_amount)
 
 
+def test_legacy_signature_separates_impact_variants_of_the_same_boundary() -> None:
+    realized = _finding(strategy_id="a", title="x", arguments={"amount": 10})
+    blocked = realized.model_copy(
+        update={
+            "triad": ViolationTriad(
+                attempted_action=True,
+                realized_impact=ImpactStatus.NOT_REALIZED,
+                impact_basis=ImpactBasis.SIDE_EFFECT,
+            )
+        }
+    )
+
+    # 同一工具、参数和违规类别仍有两个身份，故不能把此数量直接称为根本漏洞数。
+    assert finding_signature(realized) != finding_signature(blocked)
+
+
 def test_structure_signature_binds_constraint_semantics() -> None:
     base = _finding(strategy_id="a", title="x", arguments={"amount": 10})
     max_value = base.model_copy(
