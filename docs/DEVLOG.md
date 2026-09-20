@@ -5,6 +5,56 @@
 
 ---
 
+## 2026-09-20 · 反馈驱动攻击闭环机制修正
+
+### 2026-09-20 17:13 AEST · Step 01 · 隔离分支并冻结旧实验边界
+- 进度:作者确认按“研究问题校正 → 反馈忠实性 → 最小持续闭环 → 匹配对照 → 决定正式实验”的顺序开始修正。在 `feat/feedback-loop-observation` 独立工作树开发，避免混入原工作区尚未提交的 replay / native function-calling 改动。
+- 决策与理由:Phase 0.5d 的实现、数据库、validation 与 `EXPERIMENT_INVALID` Gate 裁决保持历史冻结；新行为使用新的版本身份，不通过修改 `bounded-relevant-v1` 事后改写旧条件。
+- 遇到的问题:现有工作区位于 `fix/replay-checkpoint-recovery`，有 25 个已修改文件和多个未跟踪文件，且 Controller、Run 协议与 CLI 与本任务存在重叠。
+- 解决方式:从当前提交 `9e992ac` 新建独立工作树，只在新分支实现机制基础层；后续集成必须在 replay 分支收尾后显式处理依赖，不把两组改动混成一个 PR。
+- 验证证据:`git worktree add` 成功创建独立分支；原工作区状态未被修改。
+- 剩余状态:DONE（隔离）；OPEN（依赖分支的最终集成顺序）。
+
+### 2026-09-20 17:20 AEST · Step 02 · 攻击者观察投影 v1
+- 进度:新增 `attacker-observation-v1` 投影，把已发生的攻击会话转换成持续攻击者可读取的结构化观察账本。
+- 决策与理由:显式区分 `performed`、`awaiting_confirmation`、`rejected` 与 `unknown`；证据继续受 Adapter observability 约束：`PARTIAL` 不暴露执行结果，`RESPONSE_ONLY` 不暴露内部工具证据。工具结果正文、副作用 payload、Policy、Signal、reward、Finding、Scorer 证据和内部 stop reason 不进入接口。已完成历史与进行中快照使用不同源类型；跨 Run 历史和自相矛盾的工具证据 fail closed。
+- 遇到的问题:旧 `history.py` 把“等待确认”渲染成 `success`，但直接修正会改变冻结 `bounded-relevant-v1` 的恢复语义。
+- 解决方式:保留旧投影不动，建立独立、带版本的新 seam；未来闭环只消费新投影。
+- 验证证据:覆盖四态映射、私有字段隔离、稳定引用/digest、跨 Run 拒绝及矛盾证据拒绝的聚焦测试通过。
+- 剩余状态:DONE（基础投影）；OPEN（正式运行配置尚未引用该版本）。
+
+### 2026-09-20 17:35 AEST · Step 03 · 最小持续决策接口与脚本机制探针
+- 进度:新增单方法 `FeedbackAttackDriver` seam 及 `LLMFeedbackAttackAdapter`。一次决策同时返回有界假设状态和可执行 action：开始 Attempt、继续 Attempt、结束 Attempt 或停止 Run；发送 action 同时携带真实消息、测试意图和证据引用。
+- 决策与理由:工作记忆作为显式输入/输出，不藏在 Provider 对话中，便于调用方先持久化再执行、恢复时复用已落盘决定。策略库在本机制中是 primary audit label 和起点，不再阻断消息对多场证据的综合。替代方案是继续分离 Controller/Generator 并新增 tactic 字段；它改动较小，但仍需两边同步假设状态，第一轮机制验证不采用。
+- 遇到的问题:独立工作树没有自己的 `.venv`，首次测试命令未启动；Ruff 也无法在 `.codex` 工作树写缓存。
+- 解决方式:使用主工作区虚拟环境并临时把新工作树 `src` 放进当前测试进程的模块路径；Ruff 使用 `--no-cache`，格式差异用精确补丁修正。
+- 验证证据:67 项聚焦测试通过。脚本化探针证实 `awaiting_confirmation` 进入第二次决策请求后，下一条可执行消息能够改变并绑定相应证据引用；观察账本同时校验 observability、Run、权威 Attempt 顺序和内容 digest，决策结果绑定完整 request digest。
+- 剩余状态:DONE（接口和离线机制 plumbing）；OPEN（尚未接入 Orchestrator/持久化，尚未进行真实模型行为验证，不能声称 LLM 已正确学习反馈）。
+
+### 2026-09-20 17:36 AEST · Step 04 · 完整仓库门禁与证据边界复核
+- 进度:完成 M1-A 基础层的仓库级回归验证，并复核内部 PRD 的研究问题、实施顺序、退出条件与旧实验冻结边界。
+- 决策与理由:当前分支只交付观察投影、统一决策 seam 和离线机制探针；不在 replay / native function-calling 依赖尚未落地时接入 Orchestrator，也不把脚本化消息变化解释成真实模型能力。
+- 遇到的问题:聚焦测试第一次引用了不存在的 `tests/test_adapter_contract.py`，因此没有启动测试；这是命令路径错误，不是实现失败。
+- 解决方式:改用仓库实际存在的 `tests/test_adapter.py` 与 `tests/test_arena_adapter.py` 后重跑聚焦集，再运行完整四道门禁。
+- 验证证据:`794 passed`；`ruff check . --no-cache`、`ruff format --check . --no-cache`、`black --check src tests` 全部通过；`git diff --check` 无空白错误。
+- 剩余状态:DONE（M1-A 离线基础层）；OPEN（M1-B 的逐决策持久化、恢复、全角色预算和停止策略；M1-C 的正常能力检查与真实模型机制探针）。
+
+### 2026-09-20 17:46 AEST · Step 05 · 最终 diff 复核修正观察边界
+- 进度:在提交前逐行复核中发现并修正两类设计缺口：投影未按 Adapter observability 裁剪工具证据；进行中会话曾通过未完成 `Attempt` 表示，且历史 `stop_reason` 可能泄漏内部成功裁决。
+- 决策与理由:`FULL` 才能看到确定执行状态与副作用种类，`PARTIAL` 只看到调用且 outcome 为 `unknown`，`RESPONSE_ONLY` 只看到回复；新增独立 `ActiveAttemptTrace` 作为进行中会话源，历史投影不再携带 stop reason。假设状态发生变化时必须引用观察证据，active attempt 也必须与账本中的进行中快照一致。
+- 遇到的问题:Ruff 在独立 `.codex` 工作树无法直接改写文件，不能自动格式化新补丁。
+- 解决方式:按 Ruff 给出的精确 diff 手工调整换行，再重跑聚焦集和完整门禁。
+- 验证证据:67 项聚焦测试通过；最终 `798 passed`；Ruff lint、Ruff format check、Black check 全部通过。
+- 剩余状态:DONE（M1-A 最终候选）；OPEN（M1-B / M1-C 保持不变，未进行任何付费 Provider 调用）。
+
+### 2026-09-20 17:52 AEST · Step 06 · 收紧持续状态与跟进动作契约
+- 进度:最终契约检查补上持久状态引用和跟进动作约束：输入工作状态不得引用当前账本中已不存在的证据；`continue_attempt` 必须引用至少一条可见观察；结束类动作必须保存简短原因；选择记录显式绑定 prompt/schema 版本。
+- 决策与理由:证据引用只能证明信息管道可追溯，不能证明模型推理正确，但它能排除“说明里声称使用历史、实际动作完全无法对应历史”的不可审计状态。短原因用于解释停止/换路，不保存隐藏 chain-of-thought。
+- 遇到的问题:无新的运行故障。
+- 解决方式:增加契约校验和针对性回归覆盖，不扩大到 Orchestrator 或在线 Provider。
+- 验证证据:最终完整门禁为 `800 passed`；`ruff check . --no-cache`、`ruff format --check . --no-cache`、`black --check src tests` 全部通过。
+- 剩余状态:DONE（M1-A 提交候选）；OPEN（M1-B / M1-C 与正式对照仍未执行）。
+
 ## 2026-09-01 · Phase 0.5c 失效审计与 Phase 0.5d 修复
 
 ### 2026-09-01 15:49 AEST · Step 164 · Phase 0.5d 修复分支已推送并进入 PR 审查
