@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+from functools import partial
+
 import pytest
 
 from redcell.attacker_observation import (
-    ATTACKER_OBSERVATION_POLICY_V1,
+    ATTACKER_OBSERVATION_POLICY_V2,
     ActiveAttemptTrace,
     AttackerObservationLedger,
+    AttackerVisibility,
     ObservationProjectionError,
     ObservedToolOutcome,
-    project_attacker_observations,
+    PublicToolError,
+)
+from redcell.attacker_observation import (
+    project_attacker_observations as project_observations,
 )
 from redcell.protocols import (
     AdapterOutput,
@@ -22,6 +28,10 @@ from redcell.protocols import (
     ToolResult,
     Turn,
     build_attempt,
+)
+
+project_attacker_observations = partial(
+    project_observations, visibility=AttackerVisibility.SUPPORT_AGENT_DIAGNOSTICS
 )
 
 
@@ -96,7 +106,7 @@ def test_projection_distinguishes_tool_outcomes_without_leaking_private_truth() 
     ledger = project_attacker_observations([_attempt(output)])
     turn = ledger.attempts[0].turns[0]
 
-    assert ledger.policy_version == ATTACKER_OBSERVATION_POLICY_V1
+    assert ledger.policy_version == ATTACKER_OBSERVATION_POLICY_V2
     assert ledger.run_id == "run-1"
     assert ledger.attempts[0].attempt_index == 0
     assert ledger.attempts[0].active is False
@@ -291,3 +301,93 @@ def test_projection_represents_in_progress_trace_without_fabricating_attempt() -
     assert ledger.run_id == "run-1"
     assert ledger.attempts[0].active is True
     assert ledger.attempts[0].ref == "attempt:attempt-active"
+
+
+@pytest.mark.parametrize(
+    ("visibility", "calls", "status", "effects"),
+    [
+        (AttackerVisibility.RESPONSE_ONLY, 0, None, []),
+        (AttackerVisibility.TOOL_CALLS, 1, ObservedToolOutcome.UNKNOWN, []),
+        (AttackerVisibility.TOOL_STATUS, 1, ObservedToolOutcome.PERFORMED, []),
+        (
+            AttackerVisibility.SUPPORT_AGENT_DIAGNOSTICS,
+            1,
+            ObservedToolOutcome.PERFORMED,
+            ["refund_issued"],
+        ),
+    ],
+)
+def test_instrumentation_does_not_grant_attacker_visibility(
+    visibility, calls, status, effects
+) -> None:
+    output = AdapterOutput(
+        observability=ObservabilityLevel.FULL,
+        tool_calls=[ToolCall(id="call", name="issue_refund", arguments={})],
+        tool_results=[ToolResult(tool_call_id="call", name="issue_refund", content="PRIVATE")],
+        side_effects=[SideEffect(kind="refund_issued", payload={}, tool_call_id="call")],
+    )
+    ledger = project_observations([_attempt(output)], visibility=visibility)
+    observed = ledger.attempts[0].turns[0]
+    assert ledger.visibility is visibility
+    assert len(observed.tool_actions) == calls
+    if calls:
+        assert observed.tool_actions[0].outcome is status
+        assert observed.tool_actions[0].side_effect_kinds == effects
+    assert "PRIVATE" not in ledger.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    ("error", "category"),
+    [
+        ("invalid amount: PRIVATE_VALUE", PublicToolError.INVALID_ARGUMENTS),
+        ("permission denied: PRIVATE_RESOURCE", PublicToolError.PERMISSION_DENIED),
+        ("confirmation required: PRIVATE_OPERATION", PublicToolError.CONFIRMATION_REQUIRED),
+        ("unknown tool: PRIVATE_NAME", PublicToolError.UNKNOWN_TOOL),
+        ("unknown order: PRIVATE_ID", PublicToolError.NOT_FOUND),
+        ("refund of 120.0 exceeds the 100 limit", PublicToolError.LIMIT_EXCEEDED),
+        ("PRIVATE_UNRECOGNIZED_ERROR", PublicToolError.UNCLASSIFIED),
+    ],
+)
+def test_public_diagnostics_keep_categories_without_copying_private_errors(error, category) -> None:
+    output = AdapterOutput(
+        observability=ObservabilityLevel.FULL,
+        tool_calls=[ToolCall(id="call", name="issue_refund", arguments={})],
+        tool_results=[
+            ToolResult(tool_call_id="call", name="issue_refund", content="", error=error)
+        ],
+    )
+    ledger = project_attacker_observations([_attempt(output)])
+    observed = ledger.attempts[0].turns[0].tool_actions[0]
+    assert observed.error_category is category
+    assert observed.error_summary
+    assert error not in ledger.model_dump_json()
+    assert "PRIVATE" not in ledger.model_dump_json()
+
+    restricted = project_observations([_attempt(output)], visibility=AttackerVisibility.TOOL_STATUS)
+    assert restricted.attempts[0].turns[0].tool_actions[0].error_category is None
+
+
+def test_invalid_arguments_and_denied_permission_remain_distinguishable() -> None:
+    ledgers = []
+    for error in ["invalid amount: 'x'", "permission denied: unavailable operation"]:
+        output = AdapterOutput(
+            observability=ObservabilityLevel.FULL,
+            tool_calls=[ToolCall(id="call", name="issue_refund", arguments={"amount": "x"})],
+            tool_results=[
+                ToolResult(tool_call_id="call", name="issue_refund", content="", error=error)
+            ],
+        )
+        ledgers.append(project_attacker_observations([_attempt(output)]))
+    assert ledgers[0].digest != ledgers[1].digest
+    assert (
+        ledgers[0].attempts[0].turns[0].tool_actions[0].error_category
+        != ledgers[1].attempts[0].turns[0].tool_actions[0].error_category
+    )
+
+
+def test_visibility_is_required_and_bound_into_digest() -> None:
+    with pytest.raises(TypeError, match="visibility"):
+        project_observations([])
+    restricted = project_observations([], visibility=AttackerVisibility.RESPONSE_ONLY)
+    diagnostic = project_attacker_observations([])
+    assert restricted.digest != diagnostic.digest
