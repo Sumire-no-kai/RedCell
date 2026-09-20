@@ -55,6 +55,14 @@
 - 验证证据:最终完整门禁为 `800 passed`；`ruff check . --no-cache`、`ruff format --check . --no-cache`、`black --check src tests` 全部通过。
 - 剩余状态:DONE（M1-A 提交候选）；OPEN（M1-B / M1-C 与正式对照仍未执行）。
 
+### 2026-09-20 17:54 AEST · Step 07 · 本地提交与远端状态
+- 进度:M1-A 实现与测试已在 `feat/feedback-loop-observation` 形成独立本地提交 `5751abc`（`feat: add feedback-driven attacker seam`）。
+- 决策与理由:只提交观察投影、统一决策 seam、回归测试和本日志；内部 PRD 保持 gitignored，原 `fix/replay-checkpoint-recovery` 工作区未被改写。
+- 遇到的问题:远端发布未执行；当前缺少对具体 `origin` 外发源代码的明确授权，且本机 `gh` 凭据状态无效，因此没有创建 PR。
+- 解决方式:保留本地分支和提交，等待明确授权及可用 GitHub 身份后再 push / 建 PR，不通过其他渠道绕过。
+- 验证证据:提交后独立工作树无未暂存变更；原工作区仍保留原有 25 个修改文件和 4 个未跟踪文件。
+- 剩余状态:DONE（本地提交）；OPEN（push / PR；M1-B / M1-C）。
+
 ## 2026-09-01 · Phase 0.5c 失效审计与 Phase 0.5d 修复
 
 ### 2026-09-01 15:49 AEST · Step 164 · Phase 0.5d 修复分支已推送并进入 PR 审查
