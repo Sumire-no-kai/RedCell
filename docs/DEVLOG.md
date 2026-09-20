@@ -46,6 +46,22 @@
 - 验证边界:本轮源码未改动；`04009d2` 的 827 项测试与四道门禁证据仍适用，不为纯日志更新重复运行全仓测试。GitHub 身份有效与允许读取远端不等于审批已允许推送。
 - 剩余状态:DONE（本地修复与 PR 内容准备）；BLOCKED（远端发布，等待具体目的地与载荷授权）；OPEN（运行入口、真实模型验证和匹配对照）。
 
+### 2026-09-20 18:38 AEST · Step 07 · 作者明确授权远端提交
+- 进度:作者在已展示具体 origin 地址、七文件范围和关联历史后明确回复“允许提交到远端仓库”；继续发布 `feat/feedback-loop-observation` 到 `git@github.com:Sumire-no-kai/RedCell.git` 并创建 PR。
+- 验证证据:提交前工作树干净，当前 head 为 `dc03cdf`，仍只有已核对的七文件差异；原工作区的未提交变更不纳入远端发布。
+- 剩余状态:TODO（push、PR 和远端 head 核验）；研究与运行器集成边界保持不变。
+
+### 2026-09-20 18:39 AEST · Step 08 · 远端分支发布成功
+- 进度:`git push -u origin feat/feedback-loop-observation` 成功创建远端分支并设置 tracking；远端已包含源码修复 `04009d2` 和截至 `dc03cdf` 的本地历史。
+- 验证证据:相对 tracking branch 无未推送提交，PR 查询确认该分支尚无现有 PR；正式创建 PR 前已复核标题、正文、验证证据与研究限制。
+- 剩余状态:DONE（代码推送）；TODO（PR、同步发布日志及最终远端核验）。
+
+### 2026-09-20 18:40 AEST · Step 09 · PR 创建与发布状态核验
+- 进度:已创建 [PR #58](https://github.com/Sumire-no-kai/RedCell/pull/58)，`feat/feedback-loop-observation` → `master`；正文包含行为变化、候选架构与替代方案、827 项测试证据及离线机制验证的限制。
+- 验证证据:GitHub 返回 `OPEN`、非 draft、`MERGEABLE/CLEAN`；目前无远端 status check 或 review decision。代码已发布，但未合并；可合并状态不等于完成代码审查或真实模型验证。
+- 提交边界:本轮仅追加发布日志，源码保持已验证的 `04009d2` 内容；发布日志随本分支提交并同步到 PR，不纳入内部 PRD 或原工作区的未提交变更。
+- 剩余状态:DONE（远端代码发布与 PR 创建）；OPEN（PR 审查/合并、运行器接入与真实模型验证）。
+
 ## 2026-09-20 · 反馈驱动攻击闭环机制修正
 
 ### 2026-09-20 17:13 AEST · Step 01 · 隔离分支并冻结旧实验边界
