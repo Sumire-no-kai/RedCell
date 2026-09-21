@@ -108,6 +108,17 @@
 - **剩余状态:** DONE（公共分支与私有资料同步、Windows 离线备用）；OPEN（公共 draft PR、Mac clone
   与跨平台质量门）。
 
+### 2026-09-21 17:18 AEST · Step 08 · 最终远端一致性与交接入口复核
+
+- **进度:** 完成公共/私有两套本地 tracking、公开差异范围、manifest 与 bundle 的最终只读复核；
+  把未创建 draft PR 的 compare 入口和建议标题写入交接文件。
+- **验证证据:** 公共本地/远端分支均为 `baa7a02`（最终日志提交前），相对 `master` 为 29 files、
+  1,919 insertions、91 deletions，`git diff --check` 通过；private 本地/远端均为 `bedf688`，
+  manifest failure 为 0，bundle 字节数和 SHA-256 与 Step 07 一致。GitHub compare API 可读取分支。
+- **边界:** draft PR 仍未创建；这不影响 Mac clone 或代码传输，但下一位开发者不能把该分支当成已
+  进入 PR 审查。852 项测试证据对应 `b284e9d`，此后只有迁移文档更新，未改源码或测试。
+- **剩余状态:** DONE（可迁移状态与判断信息）；OPEN（创建 draft PR、Mac clone、Mac 四道门）。
+
 ---
 
 ## 2026-09-20 · 反馈闭环审核修正

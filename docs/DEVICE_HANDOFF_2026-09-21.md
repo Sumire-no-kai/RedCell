@@ -32,7 +32,9 @@
 - 合并前质量门为 `801 passed`。接入 PR #58 后重新执行完整门禁：`852 passed in 46.83s`；
   Ruff lint、Ruff format check（147 files）与 Black check（132 files）全部通过。
 - 公共分支已推送到 `origin/fix/replay-checkpoint-recovery`。自动创建 draft PR 时，GitHub 集成
-  返回 403，且本机 `gh` token 已失效；因此本快照不把“分支已推送”写成“PR 已创建”。
+  返回 403，且本机 `gh` token 已失效；因此本快照不把“分支已推送”写成“PR 已创建”。恢复
+  GitHub 写权限后，使用 [预填 compare 页面](https://github.com/Sumire-no-kai/RedCell/compare/master...fix/replay-checkpoint-recovery?expand=1)
+  创建 draft PR，建议标题为 `Add resumable replay and versioned experiment protocols`。
 - 私有仓库 `git@github.com:Sumire-no-kai/RedCell_Private_Data.git` 已推送 `master@bedf688`；
   本地与 `origin/master` 一致。
 
