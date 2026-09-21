@@ -8,6 +8,8 @@ PRD.md
 AGENTS.md
 CLAUDE.md
 /docs/internal/
+/docs/RELATED_WORK.md
+/docs/PHASE0_5_UTILITY_BASELINE.json
 *.private.md
 NOTES.md
 
@@ -104,4 +106,5 @@ desktop.ini
 *.log
 logs/
 tmp/
+.tmp-tests/
 .cache/

@@ -42,6 +42,21 @@
   的完整 SHA-256，以及未来摘要必须携带的十类字段。
 - **剩余状态:** OPEN - 私有仓库内容与校验清单待生成并扫描；公共与私有远端尚未完成同步。
 
+### 2026-09-21 17:00 AEST · Step 03 · 生成最小 private companion repository
+
+- **进度:** 在 ignored 的 `runs/device-handoff-2026-09-21/RedCell-internal` 建立独立仓库内容，
+  只复制 `PRD.md`、`AGENTS.md`、`RELATED_WORK.md`、冻结 utility baseline 与本次交接快照；增加
+  private 边界、Mac 使用方法、来源状态和跨平台 LF 约定。
+- **决策与理由:** 私有仓库保存会影响研究判断的内部文档，但仍不承担 secrets manager 或原始
+  实验对象存储职责。原始 run/trace/DB 留在 Windows，避免扩大攻击内容和凭据暴露面。
+- **遇到的问题:** 当前 `gh` token 无效，无法立即创建 GitHub private remote。
+- **解决方式:** 先把 private 内容、本地 Git 历史和校验清单做成可审查结果；远端认证恢复后只需
+  创建 `Sumire-no-kai/RedCell-internal` 并推送。公共实现已形成 commit `99560c9`。
+- **验证证据:** private 内容只含 9 个预期文件；对 OpenAI 风格 key、GitHub token、Google key、
+  Bearer token 与疑似赋值 secret 的脱敏扫描均为 0，禁入扩展名/文件名计数为 0。
+- **剩余状态:** OPEN - 更新 public branch commit 身份、生成最终 manifest、初始化并提交 private
+  Git 历史；接入 public `origin/master` 后重跑质量门并推送。
+
 ---
 
 ## 2026-09-10 · Phase 0.5d Gate 失败归因复核
