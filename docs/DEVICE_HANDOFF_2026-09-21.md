@@ -9,7 +9,7 @@
 | 位置 | 职责 | 应保存 | 不应保存 |
 | --- | --- | --- | --- |
 | 公共 `RedCell` 仓库 | 代码、测试、公开文档、可审查的工程历史 | 源码、测试、`docs/DEVLOG.md`、本交接文件 | 内部 PRD、密钥、原始 run/trace/DB |
-| 私有 `RedCell-internal` 仓库 | 两台机器共享的内部事实来源 | `PRD.md`、`AGENTS.md`、研究综述、冻结 utility baseline、私有迁移清单 | `.env`、凭据、原始模型响应、大型运行数据库 |
+| 私有 `RedCell_Private_Data` 仓库 | 两台机器共享的内部事实来源 | `PRD.md`、`AGENTS.md`、研究综述、冻结 utility baseline、私有迁移清单 | `.env`、凭据、原始模型响应、大型运行数据库 |
 | Windows 实验机 | 长时间运行与原始证据保管 | `.env`、run/trace、SQLite、checkpoint、完整报告、运行日志 | 不经摘要和校验就把原始数据当作跨机结论 |
 | macOS 开发机 | 日常开发、review、离线测试 | 两个仓库的 clone、重建的 `.venv` | Windows `.venv`、Windows 绝对路径、真实运行凭据 |
 
@@ -31,6 +31,10 @@
      未进入正式 runner 结论，也未做行为有效性实验。
 - 合并前质量门为 `801 passed`。接入 PR #58 后重新执行完整门禁：`852 passed in 46.83s`；
   Ruff lint、Ruff format check（147 files）与 Black check（132 files）全部通过。
+- 公共分支已推送到 `origin/fix/replay-checkpoint-recovery`。自动创建 draft PR 时，GitHub 集成
+  返回 403，且本机 `gh` token 已失效；因此本快照不把“分支已推送”写成“PR 已创建”。
+- 私有仓库 `git@github.com:Sumire-no-kai/RedCell_Private_Data.git` 已推送 `master@bedf688`；
+  本地与 `origin/master` 一致。
 
 另有两个旧 worktree，不需要复制到 macOS：
 
@@ -132,6 +136,12 @@ Phase 0.5d 实际比较的是：已经用 LLM 生成消息以后，再加“LLM 
 需要深度审计原始数据时，先明确具体文件和目的，再走加密的私有传输；不要把整个 `runs/`
 上传到 GitHub，即使仓库是 private。
 
+内部资料另有完整 Git bundle 备用：Windows 路径
+`runs/device-handoff-2026-09-21/RedCell-internal.bundle`，102,726 bytes，SHA-256
+`f9fbcf0e11bb7278117dc9c3da41db7ef4fcbe9db4e302b49263db8cfeba8d3f`。只有在 private GitHub
+不可用时才通过可信 U 盘或加密私有通道传输；Mac 可执行
+`git clone RedCell-internal.bundle RedCell_Private_Data`。该 bundle 包含完整历史到 `bedf688`。
+
 ## 6. macOS 开发机初始化
 
 建议两个仓库并排克隆：
@@ -139,7 +149,7 @@ Phase 0.5d 实际比较的是：已经用 LLM 生成消息以后，再加“LLM 
 ```bash
 mkdir -p ~/Developer/redcell && cd ~/Developer/redcell
 git clone git@github.com:Sumire-no-kai/RedCell.git
-git clone git@github.com:Sumire-no-kai/RedCell-internal.git
+git clone git@github.com:Sumire-no-kai/RedCell_Private_Data.git
 cd RedCell
 git fetch origin
 git switch fix/replay-checkpoint-recovery
@@ -148,10 +158,10 @@ git switch fix/replay-checkpoint-recovery
 从私有仓库复制内部事实来源，并在本 clone 的本地 exclude 中防止误提交：
 
 ```bash
-cp ../RedCell-internal/PRD.md ./PRD.md
-cp ../RedCell-internal/AGENTS.md ./AGENTS.md
-cp ../RedCell-internal/docs/RELATED_WORK.md ./docs/RELATED_WORK.md
-cp ../RedCell-internal/docs/PHASE0_5_UTILITY_BASELINE.json ./docs/PHASE0_5_UTILITY_BASELINE.json
+cp ../RedCell_Private_Data/PRD.md ./PRD.md
+cp ../RedCell_Private_Data/AGENTS.md ./AGENTS.md
+cp ../RedCell_Private_Data/docs/RELATED_WORK.md ./docs/RELATED_WORK.md
+cp ../RedCell_Private_Data/docs/PHASE0_5_UTILITY_BASELINE.json ./docs/PHASE0_5_UTILITY_BASELINE.json
 ```
 
 这些路径也已进入公共仓库 `.gitignore`。不要复制私有仓库的 `.git` 目录进公共 clone。

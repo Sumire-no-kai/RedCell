@@ -78,6 +78,36 @@
 - **边界:** 这是本地离线软件证据；没有 Provider 调用、Mac 实机验证或新实验效果证据。
 - **剩余状态:** DONE（Windows 合并后质量门）；TODO（提交结果记录、推送公共分支、Mac 复跑）。
 
+### 2026-09-21 17:13 AEST · Step 06 · 发布公共分支并确定私有远端
+
+- **进度:** `fix/replay-checkpoint-recovery` 已通过 SSH 推送到公共 origin 并建立 tracking。private
+  companion repository 已在本地提交为 `afbf778`，同时生成完整 Git bundle 备用。
+- **遇到的问题:** 已连接的 GitHub 集成创建 draft PR 返回 403；本机 `gh` token 失效。启动设备登录
+  后，作者告知已手动创建私有远端 `git@github.com:Sumire-no-kai/RedCell_Private_Data.git`，因此中止
+  不再需要的登录，不重复创建仓库。
+- **解决方式:** 采用作者创建的私有远端并更新全部 Mac 克隆路径；PR 状态继续诚实记录为“未创建”，
+  不把 branch push 当成 PR。若稍后恢复 GitHub 写权限，再用已准备的描述创建 draft PR。
+- **验证证据:** 公共 SSH push 成功；private manifest 9/9 校验通过，secret 模式扫描全部为 0；
+  bundle 为完整历史，101,769 bytes，SHA-256 为
+  `8086d0684ebf26443353c77d60a0f9e03944787403117e97a5055b72b254086c`。
+- **剩余状态:** TODO - 更新 private snapshot/manifest 后推送 `RedCell_Private_Data`，再推送本条公共日志；
+  OPEN - draft PR 创建与 Mac 实机复核。
+
+### 2026-09-21 17:16 AEST · Step 07 · 私有资料远端与离线备份完成
+
+- **进度:** private companion repository 更新为作者创建的远端名称，重新复制当前公共交接快照、
+  生成 manifest、提交为 `bedf688` 并推送 `master` 到 `RedCell_Private_Data`。
+- **遇到的问题:** 首次外部 push 被 Git `dubious ownership` 保护拒绝，因为本地仓库由沙箱账户创建，
+  而 SSH 进程以 Windows 用户运行。
+- **解决方式:** 没有改全局 `safe.directory`；只在单次 push 命令中精确允许该目录。随后 SSH push
+  成功，本地 `master` 与 `origin/master` 均为 `bedf688`。
+- **验证证据:** 更新后的 secret 模式扫描为 0；manifest 与 `git diff --check` 通过；最终 Git bundle
+  已重建并验证为完整历史，102,726 bytes，SHA-256 为
+  `f9fbcf0e11bb7278117dc9c3da41db7ef4fcbe9db4e302b49263db8cfeba8d3f`。Step 06 的旧 bundle
+  哈希对应重建前版本，已被本最终 bundle 替代。
+- **剩余状态:** DONE（公共分支与私有资料同步、Windows 离线备用）；OPEN（公共 draft PR、Mac clone
+  与跨平台质量门）。
+
 ---
 
 ## 2026-09-20 · 反馈闭环审核修正
