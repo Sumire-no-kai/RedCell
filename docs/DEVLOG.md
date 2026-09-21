@@ -68,6 +68,16 @@
   08-22、08-21、08-20 的历史顺序也已保留。`git diff --check` 无空白错误。
 - **剩余状态:** OPEN - 提交 merge，执行合并后的完整测试、Ruff 与 Black，再生成最终 private manifest。
 
+### 2026-09-21 17:09 AEST · Step 05 · 合并后完整离线质量门
+
+- **进度:** 在 merge commit `982649b` 上执行仓库要求的四道门，验证反馈接口与 replay/原生工具协议
+  改动组合后没有回归。
+- **验证证据:** `python -m pytest -p no:cacheprovider` 为 `852 passed in 46.83s`；
+  `ruff check . --no-cache` 通过；`ruff format --check . --no-cache` 报告 147 files already formatted；
+  `black --check src tests` 报告 132 files unchanged。
+- **边界:** 这是本地离线软件证据；没有 Provider 调用、Mac 实机验证或新实验效果证据。
+- **剩余状态:** DONE（Windows 合并后质量门）；TODO（提交结果记录、推送公共分支、Mac 复跑）。
+
 ---
 
 ## 2026-09-20 · 反馈闭环审核修正

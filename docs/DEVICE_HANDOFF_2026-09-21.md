@@ -21,7 +21,7 @@
 - PR #57 已合并：Phase 0.5d 矩阵可靠性与证据完整性修复。
 - PR #58 已合并：反馈驱动攻击者的接口接缝。它增加了可持续传递 observation、下一步意图、
   假设账本和预算的契约；**尚未接入正式 runner，也没有证明这种攻击者优于现有基线**。
-- 待审分支：`fix/replay-checkpoint-recovery`。它在本交接时包含以下本地实现，需在同步后通过
+- 待审分支：`fix/replay-checkpoint-recovery`；与最新主干的集成 commit 为 `982649b`。它在本交接时包含以下实现，需在同步后通过
   PR review 决定是否合并：
   1. replay 原子 checkpoint、锁、恢复、失败账本和 unknown usage 传播；
   2. provider-neutral 原生 Function Calling、结构化 tool call、`role=tool` 回传；
@@ -29,8 +29,8 @@
   4. preflight 在付费矩阵前检查 Target、工具协议、utility context、aggregate 和逐任务回归；
   5. `controller-prompt-v2` 候选。它明确 reward-per-token 与探索目标，但不属于 Phase 0.5d，
      未进入正式 runner 结论，也未做行为有效性实验。
-- 本地同步前质量门：`801 passed`；Ruff lint、Ruff format check、Black check 全部通过。该结果
-  来自合并最新主干前的工作树；分支接入 `origin/master` 后必须重新执行四道门。
+- 合并前质量门为 `801 passed`。接入 PR #58 后重新执行完整门禁：`852 passed in 46.83s`；
+  Ruff lint、Ruff format check（147 files）与 Black check（132 files）全部通过。
 
 另有两个旧 worktree，不需要复制到 macOS：
 
@@ -193,7 +193,8 @@ Windows 每次完成或中止一项长运行后，在公共分支提交一份不
 
 ## 8. 下一步顺序
 
-1. 在 macOS clone 上 review 待审分支，合并最新 `master` 后重跑四道质量门，再决定是否合并 PR。
+1. 在 macOS clone 上 review 待审分支；Windows 已接入 `master` 并通过四道门，Mac 应复跑同一组
+   离线检查以确认跨平台兼容，再决定是否合并 PR。
 2. 不重写 Phase 0.5d，也不把 native Function Calling 或 Controller v2 算入旧实验。
 3. 在独立开发场景验证 observation 是否忠实区分拒绝、等待确认、格式错误和实际执行，并验证
    下一步行为确实随反馈改变；只看模型自述不算通过。
