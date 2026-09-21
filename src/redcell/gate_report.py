@@ -61,6 +61,7 @@ from redcell.protocols.run import (
 from redcell.search import ControllerDecisionOutcome
 from redcell.storage.store import RunStore
 from redcell.utility_baseline import (
+    UtilityBaseline,
     load_frozen_utility_baseline,
     per_task_regressions,
 )
@@ -260,6 +261,7 @@ def build_gate_report(
     seed_plan: SeedPlan | None = None,
     matrix_state: MatrixState | None = None,
     billing_evidence: BillingEvidenceBundle | None = None,
+    utility_baseline: UtilityBaseline | None = None,
 ) -> GateReport:
     prefixes: list[TokenPrefix] = []
     contexts: set[str] = set()
@@ -342,7 +344,7 @@ def build_gate_report(
             failures.extend(utility_confirmation_result.failures)
     else:
         controls_assessment, controls_failures = _controls_assessment(
-            controls, controls_adjudication, reference
+            controls, controls_adjudication, reference, utility_baseline
         )
         failures.extend(controls_failures)
     failures.extend(_attacker_control_failures(attacker_control, reference))
@@ -543,6 +545,7 @@ def _controls_assessment(
     controls: ControlsReport | None,
     adjudication: ControlsAdjudicationReport | None,
     reference: ExperimentConditions | None,
+    utility_baseline: UtilityBaseline | None = None,
 ) -> tuple[ControlsAssessment | None, list[str]]:
     if controls is None:
         return None, ["missing_controls"]
@@ -591,14 +594,16 @@ def _controls_assessment(
         assessment.extra_adjudications or not assessment.adjudication_environment_matches
     ):
         failures.append("controls_adjudication_mismatch")
-    failures.extend(_utility_failures(controls))
+    failures.extend(_utility_failures(controls, utility_baseline))
     return assessment, failures
 
 
-def _utility_failures(controls: ControlsReport) -> list[str]:
+def _utility_failures(
+    controls: ControlsReport, baseline: UtilityBaseline | None = None
+) -> list[str]:
     """utility 回归判定。基线缺失时挡住 Gate,不拿旧刻度凑合。"""
     failures: list[str] = []
-    baseline = load_frozen_utility_baseline()
+    baseline = baseline or load_frozen_utility_baseline()
     if baseline is None:
         # 仪器换过之后还没重新采集参照 —— 这是证据缺失,不是实验失败。
         failures.append("utility_baseline_not_established")

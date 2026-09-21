@@ -12,7 +12,14 @@ from redcell.arena.support_agent.benign import (
     BenignTask,
     BenignTaskOutcome,
 )
-from redcell.arena.support_agent.codec import TextToolCallCodec, ToolCallCodec
+from redcell.arena.support_agent.codec import (
+    NATIVE_TOOL_CALL_CODEC_VERSION,
+    TOOL_CALL_CODEC_VERSION,
+    NativeToolCallCodec,
+    TextToolCallCodec,
+    ToolCallCodec,
+    ToolCallProtocol,
+)
 from redcell.arena.support_agent.data import (
     CUSTOMERS,
     FAQ,
@@ -47,6 +54,7 @@ __all__ = [
     "CUSTOMERS",
     "FAQ",
     "MAX_TOOL_ITERATIONS",
+    "NATIVE_TOOL_CALL_CODEC_VERSION",
     "ORDERS",
     "POLICY_VERSION",
     "RECORD_CANARY",
@@ -57,15 +65,18 @@ __all__ = [
     "SYSTEM_PROMPT_CANARY_PREFIX",
     "SYSTEM_PROMPT_FINGERPRINTS",
     "TARGET_NAME",
+    "TOOL_CALL_CODEC_VERSION",
     "ArenaAdapter",
     "BenignTask",
     "BenignTaskOutcome",
     "CustomerRecord",
     "DefenseLevel",
+    "NativeToolCallCodec",
     "Order",
     "SupportAgentTools",
     "TextToolCallCodec",
     "ToolCallCodec",
+    "ToolCallProtocol",
     "ToolExecution",
     "build_policy",
     "build_system_prompt",

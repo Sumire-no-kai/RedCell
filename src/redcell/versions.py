@@ -4,7 +4,10 @@ LEVEL1_SCORER_VERSION = "level1-v1"
 FINDING_SIGNATURE_VERSION = "finding-signature-v2"
 ATTACK_PATH_SIGNATURE_VERSION = "attack-path-signature-v2"
 
-EXPERIMENT_CONDITIONS_SCHEMA_VERSION = "experiment-conditions-v3"
+EXPERIMENT_CONDITIONS_SCHEMA_VERSION = "experiment-conditions-v4"
+SUPPORTED_EXPERIMENT_CONDITIONS_SCHEMA_VERSIONS = frozenset(
+    {"experiment-conditions-v3", EXPERIMENT_CONDITIONS_SCHEMA_VERSION}
+)
 """`ExperimentConditions` 的 schema 版本,绑定 `experiment_fingerprint` 的出处。⭐
 
 **改动任何进入 `fingerprint()` 的字段就必须把它升一版** —— 加字段、删字段、改默认值
@@ -12,6 +15,7 @@ EXPERIMENT_CONDITIONS_SCHEMA_VERSION = "experiment-conditions-v3"
 默认值,一样会改变摘要。
 
 v2 于 2026-08-14 随本机制首次落盘。v3 于 2026-08-20 增加实际 HTTP 超时和 Windows
-唤醒锁宿主档案；此前的历史记录都只保留、不重算校验。`tests/test_run_fingerprint_pins.py`
+唤醒锁宿主档案；v4 增加显式 tool-call protocol 身份。v3 继续可重算验证，旧记录缺失的
+新字段保持 `None` 且不进入摘要。`tests/test_run_fingerprint_pins.py`
 会在摘要漂移时当场变红,不必等到历史证据读不出来才发现。
 """

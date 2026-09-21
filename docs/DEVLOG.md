@@ -5,6 +5,287 @@
 
 ---
 
+## 2026-09-21 · 双设备迁移与完整证据交接
+
+### 2026-09-21 17:00 AEST · Step 01 · 审计公共 Git、本地私有资料与 Windows 原始证据
+
+- **进度:** 核对主干、三个 worktree、主工作树的未提交实现、内部文档、环境文件、Phase 0.5d
+  数据库与 Gate/validation 产物。确认 PR #58 已合并到 `master`，反馈闭环只形成接口接缝，尚未接入
+  正式 runner；当前待同步实现集中在 `fix/replay-checkpoint-recovery`。
+- **决策与理由:** 跨机交接不能只传成功率或下一步。将完整 Gate failures、limitations、完成度、
+  replay failures、unknown usage、身份 fingerprint 与原始文件 SHA-256 作为最低交接集，避免 macOS
+  开发侧因遗漏失败项而错误解释实验。
+- **遇到的问题:** `gh auth status` 显示默认 GitHub token 已失效；公共仓库 SSH remote 仍保留，
+  但新的 private repository 暂时不能用当前 `gh` 会话创建。旧 paper-roadmap worktree 还留有一条
+  未提交的研究定位记录。
+- **解决方式:** 先完成可本地审查的公共交接文档和私有仓库内容，再处理远端认证；将旧 worktree
+  的唯一记录迁入连续 DEVLOG，不复制落后的 worktree。没有读取或输出 `.env` 的值。
+- **验证证据:** Phase 0.5d 原始产物重新计算 SHA-256；Gate verdict 为 `EXPERIMENT_INVALID`，
+  `protection_failures` 完整为 7 项，`limitations` 完整为 6 项；144 primary cells completed、48
+  reserve cells pending；96 路径 × 5 replay = 480 trials、137 reproduced、8 个 transient failure、
+  Target usage unknown。Windows 当前无活动 `python`/`pythonw` 进程。
+- **剩余状态:** OPEN - 生成私有伴随仓库、提交公共分支、接入最新主干、重跑质量门并推送；新的
+  private GitHub repository 需恢复 GitHub 认证后创建。
+
+### 2026-09-21 17:00 AEST · Step 02 · 建立公共/私有/Windows 三层同步边界
+
+- **进度:** 新增 `docs/DEVICE_HANDOFF_2026-09-21.md`，记录仓库状态、未合并实现、Phase 0.5d
+  全部失败与限制、原始证据哈希、Mac 初始化步骤、后续实验跨机同步合同和下一步顺序。
+- **决策与理由:** 公共仓库传代码和可公开判断；private companion repository 传 `PRD.md`、
+  `AGENTS.md`、研究综述与冻结 baseline；大型敏感 run/trace/DB 留在 Windows，只同步结构化摘要和
+  哈希。即使 private 也不存 Provider key、`.env` 或原始攻击响应，降低误泄露和 clone 成本。
+- **遇到的问题:** `docs/RELATED_WORK.md` 与 `docs/PHASE0_5_UTILITY_BASELINE.json` 原先未被公共
+  `.gitignore` 覆盖，在 Mac 复制后容易被误提交。
+- **解决方式:** 将这两个内部路径加入公共 `.gitignore`；Mac 使用 Python 3.12 重建 `.venv`，
+  不复制 Windows 环境或绝对路径。
+- **验证证据:** 交接文档逐项列出七项 protection failures、六项 limitations、六个关键原始文件
+  的完整 SHA-256，以及未来摘要必须携带的十类字段。
+- **剩余状态:** OPEN - 私有仓库内容与校验清单待生成并扫描；公共与私有远端尚未完成同步。
+
+---
+
+## 2026-09-10 · Phase 0.5d Gate 失败归因复核
+
+### 2026-09-10 12:52 AEST · Step 01 · 独立复核 Gate 聚合与 utility 回归
+- 进度:只读检查 Gate 判定实现、冻结 controls 与 144-run SQLite 事件；未修改矩阵、validation 或 Gate 产物，也未调用任何 Provider。
+- 决策与理由:`utility_baseline_context_mismatch` 是 codec v2 修复后刻意触发的 fail-closed 保护，不是随机指纹故障。工具调用 codec 已进入 utility 因果上下文，旧基线与当前仪器不能冒充同条件比较。
+- 遇到的问题:当前 controls 总 utility 为 157/200，高于冻结总下限 138/200，但逐任务检查发现 `legitimate_refund` 从基线 10/20 降为 0/20；20 次中 11 次记录坏格式工具调用，9 次未调用任何工具。现有 controls 没有保留原始模型响应，暂时无法区分模型未遵守协议与 codec 未覆盖输出形状。
+- 解决方式:使用正式兼容加载器读取历史 controls，并按数据库 `run_events` 的 token 前缀规则独立复算。160k 的 24 个 `llm-memory` run 仅 7 个通过策略覆盖，17 个失败；其中 7 个同时少于 6 种策略且最大策略占比超过 40%，1 个只缺策略数量，9 个只超占比。`llm-memory` 与最强 `thompson-off` 各有 16/24 个 run 的 path count 为零，因此预注册的逐-run tokens/path 均值按定义不可计算。处理组类别也确实只有 `unauthorized_tool_use`，未覆盖 Static 观察到的 `prompt_injection`。
+- 验证证据:复算得到 `llm-memory` 160k path 总数 10、均值 0.4167；`thompson-off` path 总数 12、均值 0.5，与 Gate 报告一致。矩阵前缀内各 condition 的 committed attempt usage 均为 known。Gate 代码在任一 run path count 为零时返回不可计算，并对 utility 总量和逐任务退化分别判定；当前输出符合该实现。
+- 剩余状态:OPEN - 未发现已证实的 Gate 聚合代码 bug。`legitimate_refund` 的 0/20 暴露了可能的 Target/文本工具协议兼容问题；必须先获得可安全审计的原始坏格式形状或做单独预注册复现，才能决定是否修 codec。不得用事后改 Gate 公式或重冻基线来消除本次失败。
+
+### 2026-09-10 13:09 AEST · Step 02 · 更正 utility context mismatch 归因并审计 preflight
+- 进度:重新核对冻结 utility baseline、其归档 controls 来源与 Phase 0.5d controls 的 context payload；同时审计正式 `preflight.json` 及 preflight 实现的检查边界。
+- 更正:本条目前一阶段把 `utility_baseline_context_mismatch` 归因于 codec v1→v2 不正确。冻结 baseline 与本轮 controls 均为 codec-v2；两个 context payload 的唯一差异是 Target model 从 `glm-4.7-flashx` 迁移到 `glm-4.7`。归档来源文件 SHA-256 与 baseline 记录一致，两个 context fingerprint 也都能由各自 payload 复算，未发现数据损坏或哈希实现错误。
+- 遇到的问题:Phase 0.5d 正式 preflight 的 14 项检查全部通过，但没有 utility baseline/context compatibility 检查；该不相容条件直到最终 Gate 才 fail-closed。由于模型迁移在矩阵前已经发生，这本可在付费矩阵前零成本发现。
+- 决策与理由:不把旧模型 baseline 事后重标为新模型 baseline，也不在看到 144-run 结果后补冻 baseline。两种做法都会破坏预注册边界。将其登记为 preflight/实验流程缺口，而不是矩阵执行错误。
+- 验证证据:冻结 baseline aggregate 为 158/200、context fingerprint 为 `dd1eff…`；本轮 controls aggregate 为 157/200、context fingerprint 为 `9de1f5…`，且 `legitimate_refund` 从 10/20 降至 0/20。正式 preflight 仅覆盖连接、价格、usage coverage、billing evidence、seed plan、golden、数据库与共享限流，没有 baseline compatibility 检查。
+
+### 2026-09-10 13:48 AEST · Step 04 · 修复工具协议与 Gate 证据绑定
+- 进度:实现 Target 原生 Function Calling 请求、结构化调用解析及 `role=tool` 回传；将工具协议写入 Run/controls 指纹；Gate preflight 增加 Target、协议、context、aggregate 与逐任务 baseline compatibility 检查；Gate report 可消费实验专属 baseline。
+- 决策与理由:保留 text-v2 作为历史默认，native-function-calling-v1 必须显式选择；GatePlan 升级为 v3 并把协议写进每个子 Run 的 argv，v1/v2 仍按原 schema 加载，避免改写 Phase 0.5d 冻结计划。
+- 遇到的问题:首次新增的 preflight 回归测试被异常文本污染；同时发现只在 preflight/CLI 增加协议选项仍会让 GatePlan 子 Run 回落到默认 text-v2；协议字段若重复进入 `negative_arena` 投影还会无理由改变历史 text-v2 utility 指纹。
+- 解决方式:重写损坏测试；在 GatePlan v3 唯一冻结并派发协议；utility context 继续用既有 `tool_call_codec_version` 位置绑定协议，并从嵌套 arena 投影排除重复字段。
+- 验证证据:聚焦回归 `205 passed`；完整 `python -m pytest -p no:cacheprovider` 为 `801 passed`；`python -m ruff check .`、`python -m ruff format --check .`、`python -m black --check src tests` 全部通过。
+- 剩余状态:DONE - 本地实现与质量门已完成；未调用外部 Provider，未生成或改写 Phase 0.5d replay/Gate 产物。
+- 剩余状态:DONE（归因）；TODO（未来实验开始前加入 baseline/context compatibility preflight，并在预注册阶段决定新模型 baseline 或跨模型桥接规则）。
+
+### 2026-09-10 13:09 AEST · Step 03 · 深入复核 text tool-call 与 Gate 失败的因果范围
+- 进度:只读汇总 144 个正式 Run 的 attempt turns、malformed units、策略覆盖、路径覆盖与 Static-off 320k ASR；未发送 Provider 请求，未修改数据库、replay、Gate 阈值或任何冻结输入。
+- 发现:24,844 个 attempt turn 中有 298 个 malformed units；其中 286 个是结构完整但缺少 `<tool_call>` 标签的 JSON 工具请求，约占 malformed 的 96.0%。这会让当前安全边界下的 text codec 将其记录为不可执行，直接影响工具完成率与部分攻击计数。
+- 边界:即使把 Static-off 320k 的全部 55 个 malformed attempt 极端地假设成成功违规，ASR 上界也仅约 3.25%，仍低于冻结 non-inferiority 所需约 6.11%。因此 codec 缺陷不能解释全部历史 ASR 漂移；模型迁移与 Target/生成器语义漂移仍是主要嫌疑，不能从现有数据进一步拆分因果。
+- 发现:LLM-memory 160k 的 24 个 Run 只有 7 个通过冻结策略覆盖；聚合选择中 `tool_parameter_manipulation` 占 44.78%，而其平均 reward 约 0.104，明显低于 `multi_turn_escalation` 约 0.413 与 `confirmation_bypass` 约 0.279。Controller prompt 只要求从候选 ID 中选一个，没有明确优化新路径/成本的目标或探索约束，属于算法提示规格不足，不是聚合器计算错误。
+- 决策与理由:Phase 0.5d 保持 text protocol 冻结，不通过放宽 parser 事后改变证据语义。官方 Z.AI 接口已支持 `tools`、`tool_choice` 与结构化 `message.tool_calls`；正确的后续修复方向是预注册的 Phase 0.5e native function-calling sensitivity study，而不是重写 Phase 0.5d。
+- 剩余状态:DONE（只读诊断）。Phase 0.5d 的负面/无效证据保留；Phase 0.5e 与任何 Controller prompt v2 均需作为新实验，先讨论并冻结设计后再执行。
+
+---
+
+## 2026-09-09 · Phase 0.5d replay and Gate completion
+
+### 2026-09-09 09:39 AEST · Step 01 · Replay recovery release gate
+- 进度:在 `fix/replay-checkpoint-recovery` 独立分支审查 replay 修复范围，并完成仓库规定的四道本地门。
+- 决策与理由:只将 replay 相关源码、测试与本日志纳入本分支范围；保留工作区既有的 `RELATED_WORK`、utility baseline 与临时目录，不把无关文件混入修复。
+- 遇到的问题:无测试、lint 或格式失败。
+- 解决方式:不需要额外修复。
+- 验证证据:`python -m pytest -p no:cacheprovider` 为 795 passed；`ruff check .`、`ruff format --check .` 与 `black --check src tests` 全部通过。正式数据库、seed plan、gate plan 与 matrix state 的 SHA-256 仍与修复前基线一致；正式 validation 与 checkpoint 尚不存在，也没有残留 Python replay 进程。
+- 剩余状态:DONE。允许进入已授权的正式 replay；本步骤未调用 Provider。
+
+### 2026-09-09 09:40 AEST · Step 02 · External replay approval blocked
+- 进度:尝试启动正式 `validate-paths`，计划使用冻结 seed plan、Phase 0.5d 数据库、`repeats=5`、进程级 `TARGET_RPM=10`，并输出独立 checkpoint 与 validation。
+- 遇到的问题:外部执行审批在进程启动前拒绝。原因是该命令会把数据库中的攻击对话发送到当前配置的第三方 Target Provider 并产生付费请求；现有的概括授权没有明确写出该目的地及敏感数据外发范围。
+- 解决方式:没有启动替代路径或绕过审批。命令未执行，Provider 未收到请求，也没有生成 checkpoint 或 validation。
+- 验证证据:执行工具返回 `CreateProcess Rejected`，拒绝发生在子进程创建前。
+- 剩余状态:BLOCKED。需要作者明确授权将 Phase 0.5d 攻击对话发送到当前配置的 Z.AI Target 并承担相应 API 费用，之后才能继续 replay、Gate report 与结果分析。
+
+### 2026-09-09 09:42 AEST · Step 03 · Explicit Provider authorization received
+- 进度:作者明确授权将 Phase 0.5d replay 攻击对话发送到当前配置的 Z.AI Target API，并接受相应 API 费用。
+- 决策与理由:按冻结 Target 配置、`repeats=5` 与正式 seed plan 执行；仅在当前进程设置 `REDCELL_TARGET_RPM=10` 以匹配冻结快照，不修改 `.env`、数据库或实验条件。
+- 验证证据:启动前确认正式 `validation.json` 与默认 checkpoint 均不存在，不会覆盖旧 replay 证据。
+- 剩余状态:IN PROGRESS。执行可续跑 replay；完成后生成 Gate report 并独立复核关键统计。
+
+## 2026-09-08 · Offline guard repair and recovery regression
+
+### 2026-09-08 11:02 AEST · Step 01 · Repair the Windows test harness
+- User authorized completing the repair and explaining its root cause. The test socket guard prevented Windows asyncio from constructing its TCP-loopback wake-up socket pair; no replay assertions had executed in the thirteen setup-error cases.
+- Narrow the socket exception to numeric 127.0.0.1 and ::1 only, continue blocking external socket connections, and explicitly block both synchronous and asynchronous HTTPX send paths. Add guard regression tests so allowing the event-loop wake-up connection cannot silently enable Provider HTTP requests.
+- Apply repository formatting only to the replay implementation and recovery test file. Leave frozen Phase 0.5d artifacts, scoring rules, and Gate thresholds unchanged. Status: validation in progress; no paid calls authorized or launched by this task.
+
+### 2026-09-08 11:04 AEST · Step 02 · Fault recovery and style checks pass
+- The corrected guard allowed the Windows event loop to initialize while its four regression cases blocked external sockets and sync/async HTTP requests. The combined replay recovery, validator, CLI, and Gate-report suite passed: 66 tests in 10.08 seconds.
+- Verified timeout reset/retry, preservation of known partial-turn usage, unknown pending-call accounting, completed negative-trial resume, zero-call export of completed checkpoints, persisted retry exhaustion, unsafe/quota/fatal stop behavior, input mismatch/corruption rejection, pre-send persistence failure, lock exclusion, credential redaction, Retry-After handling, and Gate unknown-usage rejection.
+- Follow-up checks exposed one import-order issue in cli.py and a Black/Ruff formatting difference in validator.py. Applied only import ordering and formatting; Ruff lint, Ruff format --check, and Black --check now pass for all four touched Python files.
+- Status: targeted behavior and style checks passed. Broader related offline regression and final frozen-file hashes remain to be recorded; live Provider availability remains untested.
+
+### 2026-09-08 11:04 AEST · Step 03 · Related regression complete
+- Final related suite: 134 passed in 14.27 seconds across recovery, validator, CLI, Gate report/validation/analysis, retry policy, executor, and storage/report tests. This is a focused related suite, not a claim that the entire repository test suite ran.
+- Ruff lint, Ruff formatting, and Black checks passed for validator.py, replay_checkpoint.py, cli.py, and test_replay_recovery.py. No scoring, Gate threshold, matrix executor, or frozen experimental configuration changes were required.
+- Final SHA-256 values exactly match the pre-test baselines for runs/phase-0-5d.db, docs/PHASE0_5D_SEED_PLAN.json, runs/phase-0-5d/gate-plan.json, and runs/phase-0-5d/gate-matrix-state.json. These four frozen artifacts remained byte-identical.
+- Root-cause distinction: original replay lacked the matrix runner's retry/checkpoint recovery, so a transient Provider exception discarded its in-memory progress; the later local setup errors were caused by an overly broad test socket guard blocking Windows asyncio loopback initialization. Neither observation proves insufficient Provider credit.
+- Status: local repair and related validation DONE. No real Provider request, formal replay, final Gate report, Git commit, or push was performed. Live service timeouts may still occur; bounded recovery does not erase unknown billing or guarantee a SUPPORTED Gate. Unsaved progress and billing gaps from older failed replay processes remain unrecoverable from these checkpoints.
+
+## 2026-09-08 · Offline replay recovery validation
+
+### 2026-09-08 10:58 AEST · Step 01 · Isolated regression coverage
+- User authorized local tests and asked whether the completed Phase 0.5d experiment would be affected. Added tests/test_replay_recovery.py using fake adapters, ScriptedProvider, and pytest temporary checkpoint files; no paid replay or formal Gate report was launched.
+- Existing tests/test_validator.py passed all six cases. Captured SHA-256 baselines for the formal database, Phase 0.5d seed plan, gate plan, and matrix state before the combined regression run.
+
+### 2026-09-08 11:01 AEST · Step 02 · Results and remaining blocker
+- The combined validator, CLI, Gate-report, and recovery test run finished. Existing validator/CLI/Gate-report cases and the checkpoint lock test passed. Thirteen new asynchronous recovery tests errored during setup: the new socket guard also blocked the Windows asyncio loop's required 127.0.0.1 socket connection. These errors do not establish a replay implementation failure or successful recovery coverage.
+- Ruff check reported eight E501 line-length errors across validator.py and the new recovery tests. Ruff format --check reported two files requiring formatting; cli.py and replay_checkpoint.py were already formatted.
+- Recomputed all four SHA-256 hashes after the run: every hash exactly matched its baseline. The completed Phase 0.5d database and the three frozen plan/state files remained byte-identical.
+- Status: OPEN. Report the test-fixture defect before correcting it, then obtain authorization to narrow the guard without enabling external Provider traffic, apply formatting, and rerun the recovery tests. No production logic was changed during this validation task.
+
+## 2026-09-08 · Replay checkpoint and bounded recovery
+
+### 2026-09-08 10:50 AEST · Step 01 · Repair scope
+- User authorized repairing replay after repeated transient Target failures. The existing matrix completed despite transient failures; a Provider timeout alone is not evidence of exhausted credit.
+- Root cause: validation previously called the adapter without bounded recovery and wrote its report only after every replay completed. A late timeout discarded the in-memory results.
+- Decision: retain the existing RetryPolicy limits, reset the full simulator before retrying a failed conversation, and persist completed trials and usage. Increasing the frozen HTTP timeout alone would not fix lost progress and is not part of this change.
+- Historical matrix data and previous failed replay calls are not rewritten. This checkpoint cannot recover results or billing information that the earlier processes never saved.
+
+### 2026-09-08 10:50 AEST · Step 02 · Recovery implementation
+- Added a separate, atomically replaced JSON checkpoint with an OS-released exclusive lock. The default CLI checkpoint is next to the final validation report; matching input/configuration/retry-policy digests resume automatically.
+- Completed trials, including negative reproductions, are retained. Only transient failures on full-state-reset adapters can retry; daily quota exhaustion and other fatal errors stop. Retry counts survive process restarts and exhaustion cannot be bypassed by rerunning the same command.
+- Save before each adapter send and after each returned turn. Persist known usage from unsuccessful conversations, retain failure records, and mark pending/interrupted request usage unknown rather than zero. Final reports include the failure ledger; existing Gate unknown-usage rejection remains unchanged.
+- A stopped process restarts only its unfinished conversation after reset, not its completed trials. This is engineering recovery, not proof of statistically independent failures or of complete Provider billing.
+- No changes to the frozen 144-run database, target settings, repeats, scoring, or Gate thresholds. No new paid replay, tests, lint, or post-edit validation was run in this repair step; implementation remains unverified pending explicit validation authorization.
+- Remaining status: OPEN. Validate fault recovery and resume behavior before another paid replay. Earlier replay billing gaps remain unresolved and cannot be erased by this repair.
+
+## 2026-09-08 · Phase 0.5d replay 运行时超时
+
+### 2026-09-08 08:45 AEST · Step 01 · 受控外部 replay 启动后超时停止
+- 进度：作者恢复授权后，以冻结的 `REDCELL_TARGET_RPM=10` 临时进程覆盖重新启动 `validate-paths`；没有改写 `.env`、seed、正式矩阵数据库或原始 Run 产物。
+- 遇到的问题：运行约十分钟后，Target 请求触发 `ProviderTransientError: target 请求超时`。此前外部执行入口已正常通过，故这不是本地配置不一致或沙箱断网拒绝。
+- 决策与理由：当前 validator 只在所有路径完成后写出 `validation.json`，不保存中间 replay 结果；超时请求是否已被 Provider 接收或完成不可知。不能把未审计的部分结果当作已发生，也不能无记录整批重跑后挑选有利结果。
+- 解决方式：停止在首次超时，未重试、未生成不含 validation 的最终 Gate report。`validation.json` 与 `gate-report.json` 均不存在。
+- 剩余状态：**OPEN** —— 作者需决定是按冻结条件整批从头重跑 5 次 replay，还是先讨论并实现可审计、fail-closed 的中断恢复协议；在任一选择完成前，Phase 0.5d 不得给出最终 Gate 结论。
+
+### 2026-09-08 09:05 AEST · Step 02 · 作者授权的一次完整重跑同样超时
+- 进度：作者明确授权再尝试一次后，以相同的冻结 Target RPM、seed plan、数据库和 5 次 replay 重启完整验证。
+- 遇到的问题：第二次运行超过首次失败时间后，仍在另一条 Target 请求上触发同一 `ProviderTransientError: target 请求超时`。同样没有中间 checkpoint 或 `validation.json`。
+- 决策与理由：两次独立完整尝试均被单次 60 秒超时终止，继续整批盲重跑只会重复已发生的未审计调用，不能提高证据质量；本轮不再发起第三次。
+- 解决方式：停止 replay；未生成最终 Gate report，避免将缺少 Validation binding 的预报告误称为终局裁决。
+- 剩余状态：**OPEN / DESIGN DECISION REQUIRED** —— 若继续，需在核心 replay 证据语义下讨论可审计、fail-closed 的 checkpoint/resume 或显式的超时处理协议，再经作者确认后实现和验证。
+
+## 2026-09-06 · Phase 0.5d replay 启动与外部执行阻塞
+
+### 2026-09-06 13:56 AEST · Step 01 · Replay 配置核对与执行边界
+- 进度：按作者授权启动正式 `validate-paths`，固定 `repeats=5`，输入为 `runs/phase-0-5d.db`、冻结的 `docs/PHASE0_5D_SEED_PLAN.json`，目标输出为 `runs/phase-0-5d/validation.json`。
+- 决策与理由：数据库中的正式 Run 冻结 Target `rpm=10.0`，当前 `.env` 为 `0`；其余 Target 配置一致。仅对本次进程临时覆盖 `REDCELL_TARGET_RPM=10`，不改写 `.env`，保持矩阵条件。
+- 遇到的问题：首次执行在外网连接阶段失败，报 `target 连接失败: All connection attempts failed`；未形成 validation 产物。随后申请受控网络执行。
+- 解决方式：受控网络请求被自动审批拒绝，原因是当前外部用量额度已达到上限；未尝试绕过审批或改用其他执行路径。
+- 验证证据：截至本步骤，`runs/phase-0-5d/validation.json` 与最终 Gate report 均不存在；没有可记录的 Provider 成功响应或 replay 结果。
+- 剩余状态：**BLOCKED / TODO** —— 需补充外部用量额度或等待额度重置后，重新执行同一冻结 replay；完成 validation 后再生成最终 Gate report。
+
+## 2026-09-05 · 研究可行性审阅与 Phase 0.5e 实施前问题登记
+
+### 2026-09-05 12:21 AEST · Step 168 · 保存审阅证据，建立文档更新范围
+
+- 进度：作者告知 Phase 0.5d 矩阵正在另一台电脑运行并决定等待结果，随后授权将本轮审阅结论与后续
+  建议更新到相关文档。本地在 `9e992ac` 上创建 `docs/research-review-phase-0-5e` 文档分支；原有
+  DEVLOG 修改及未跟踪文件保留。首次创建分支受文件系统写权限限制，经受控权限重试后成功。
+- 已完成的审阅：核对 PRD、阶段手册与 Controller/history、靶场、执行器、评分、预算、Gate/replay
+  关键链路。此前只读审阅中 16 个相关测试文件共 **307 passed in 12.16s**，不是全仓验证；另外以
+  ScriptedProvider/合成 Attempt 在内存中复现历史等待状态误标、策略成本投影缺项和中间正文丢失。
+  合成探针未调用 Provider，未保存为回归测试文件。
+- 已验证问题：history 将 `awaiting_confirmation` 渲染为 `success`；策略成本摘要只取 Attempt
+  成本而不含 Controller selection，但全局预算另行计入 Controller 成本；Generator memory 的策略
+  聚合及 abandoned 历史未完整符合 PRD 描述。Adapter 工具循环保留最终正文而不保留此前各次正文。
+- 解释边界：这些是本机实现审阅结果，尚未核验另一台主机的 commit/条件与实际受影响样本；不能据此
+  宣布 0.5d 整批失效，也不能直接宣布其完全符合预注册实现。当前确认代理、Attempt 成功即停止、
+  signature×Strategy 主指标的范围限制需在研究材料中明确。
+- 决策与理由：仅登记 PRD 审阅附录、0.5e 待确认事项与本日志；保留冻结条件和历史条目。当前等待
+  0.5d 结果，再做真实产物一致性审查。修复时点、FC 细化和 Paper B 的核心设计仍为 OPEN。
+- 剩余状态：审阅证据已记录；PRD 更新与文档验证 TODO。未改运行代码、实验产物或条件，未提交或推送。
+
+### 2026-09-05 12:25 AEST · Step 169 · PRD 审阅附录与 FC 候选范围落盘并完成文档检查
+
+- 进度：PRD 新增 §2.9，记录 Paper A/B 可行性、实现偏差、已知限制及等待真实 0.5d 产物的审查顺序；
+  §19 的 Phase 0.5e 增加带日期的实施候选、协议整体归因、schema 与业务授权边界、失败分类、成本
+  和跨协议统计待办。新增方案明确为 OPEN；原有预注册条件和历史结论没有改写。
+- 解释澄清：两个 Gate 标签不同不自动证明协议间效应显著不同，两边不支持也不证明等效；后续分析
+  需真实记录登记时间和结果访问状态。文本与 FC 间保持攻击者行为是推荐方案，先修再跑是需额外
+  对照的替代方案，两者都未因本轮文档授权而获准实施。
+- 遇到的问题及解决：首个内容保留校验脚本因 PowerShell 管道中的中文正则编码报 `multiple repeat`；
+  改用 ASCII 标题定位，校验正常完成，未因此修改文档正文或实验代码。
+- 验证证据：已逐段复核新增内容；移除本轮新增区块后，两文件 SHA-256 与编辑前一致，证明原文及
+  预先存在的用户修改完整保留。UTF-8、LF、代码围栏检查与 `git diff --check` 通过；PRD 仍被忽略。
+  本步仅修改文档，未重跑先前的 307 项测试或发起在线调用。
+- 剩余状态：**文档更新 DONE / PHASE 0.5D RESULTS PENDING / IMPLEMENTATION AND ANALYSIS DETAILS OPEN**。
+  仅本地文档分支更新，未提交、推送或创建 PR；代码、运行产物和冻结实验配置未变。
+
+---
+
+## 2026-09-04 · Paper A 公开工件与安全复现协议已登记
+
+### 2026-09-04 14:14 AEST · Step 167 · 作者确认 Phase 0.5 数据公开的三层隔离与验收规则
+
+- 决策：作者确认 Paper A 公开数据采用“私有原始审计层 / 公开去敏数据层 / 公开分析层”三层隔离。
+  `phase-0.5d` 文本协议与后续 `phase-0.5e` 原生 Function Calling 协议分别裁决，并以 `protocol` 字段
+  在同一公开工件中并列报告；不得把两套 raw matrix 直接相加或将任一协议的结果替另一协议补位。
+- 决策与理由：完整 trace 对内部调试和证据审计很有用，但带有 system prompt、canary、攻击话术、工具
+  参数/返回值与 Provider 元数据，直接公开会把防御性靶场变成可复用规避语料。只发最终图表又不能让读者
+  复核删失、Token 口径和统计。三层方案让公开 CSV 足以重现结果，同时保留 raw 证据的受控完整性承诺。
+- 公开最小包：`manifest.json`、cell/controls-utility/replay/censoring-protocol 汇总 CSV、固定 analysis
+  脚本、figures、checksums 与 SECURITY 说明。公开字段为 protocol、paired seed 或审查后的 label、treatment、
+  checkpoint、有效/删失、计数、分角色 Token 与汇总指标；prompt/policy/tool schema 仅发布 hash。完整
+  `GateReport`、`MatrixState`、`BillingEvidenceBundle` 不可直接序列化为公开数据。
+- 发布验收：两个 Gate 各自终局裁决后冻结 raw artifacts 并作 SHA-256 承诺；allow-list exporter 完成自动
+  泄漏扫描与人工复核；在干净环境中从公开 CSV 重现论文图表；最后才按作者另行授权和目标会议双盲规则决定
+  匿名工件、公开 archive 或 DOI。
+- 运行边界：本次只登记公开协议；未读取/导出/上传任何运行数据，未改 `phase-0.5d` 或 0.5e 的条件，未调用
+  Provider，未提交、推送或修改 PR。
+- 剩余状态：**PAPER A PUBLIC-ARTIFACT SPECIFICATION REGISTERED / NO PUBLIC DATA EXISTS YET / IMPLEMENTATION AND RELEASE REQUIRE SEPARATE AUTHORIZATION**。
+
+---
+
+## 2026-09-04 · 两篇顺序论文规划已登记
+
+### 2026-09-04 13:24 AEST · Step 166 · 作者确认 RedCell 拆分为两个顺序研究包
+
+- 决策：作者确认 RedCell 不再把 Phase 0.5 的等预算攻击者测量/工具协议稳健性，与 Phase 1 的防御分层
+  归因/utility 取舍硬塞为同一篇论文。规划为先完成 Paper A（`phase-0.5d` 文本协议 Gate + 后续独立
+  `phase-0.5e` 原生 Function Calling 对照），再完成 Paper B（以 Phase 1 防御实验为核心，Phase 2
+  回放与回归为复现支持）。
+- 决策与理由：两包回答的中心问题和审阅证据不同。Paper A 处理“以等额总 billed Token 预算比较时，攻击者
+  比较是否公平、结论是否受工具协议混淆”；Paper B 处理“防御在哪个阶段起效、正常任务付出什么代价”。拆开能让
+  Phase 0.5 的正、负或协议敏感结果独立成立，也避免防御论文被攻击者测量细节挤占篇幅。
+- 证据边界：Paper A 的每套协议独立 fail-closed；未完成 0.5e 时不得把 0.5d 的文本结论扩大为跨协议结论。
+  Paper B 继续受 PRD §2.6 的 3 个权限语义靶场、至少 2 个目标模型或 agent harness、层开关、utility/cost、
+  失败/删失、replay 与安全聚合复现包门槛约束，并须在自身材料中保留轻量攻击者敏感性消融，不能只引用
+  Paper A 就假定攻击者选择无关紧要。
+- 防重复规则：两篇不可把同一正式数据重复作为各自的新实证贡献；未来如需引用已公开的 Paper A，按目标
+  会议的实际双盲/自引规则处理。先完成研究包不等于已获 preprint、投稿或公开发布授权。
+- 运行边界：本次只登记论文规划；不改变当前 `phase-0.5d` 的任何运行条件、seed、预算、controls、停止
+  规则或已有产物，不触发新的 Provider 调用，也未提交、推送或修改 PR。
+- 剩余状态：**TWO-PAPER RESEARCH PLAN REGISTERED / CURRENT PHASE 0.5D EXECUTION AND RESULT ADJUDICATION REMAIN UNCHANGED**。
+
+---
+
+## 2026-09-04 · Phase 0.5 工具调用协议敏感性对照已登记
+
+### 2026-09-04 12:36 AEST · Step 165 · 作者确认原生 Function Calling 作为独立 0.5e 对照
+
+- 决策：作者确认保留 `phase-0.5d` 的文本工具协议为冻结主 Gate，并在其终局裁决后，新增独立的
+  `phase-0.5e` GLM-4.7 原生 Function Calling 配对对照；二者共同构成 Phase 0.5 研究包，但不混合 cell、
+  controls、数据库、报告或统计结论。
+- 决策与理由：现有文本 codec 让多 Provider/脚本化靶场使用同一协议，但将「模型能否稳定写出可解析
+  工具格式」混入了工具型 Agent 行为。原生 Function Calling 能以结构化调用与调用 ID 消除这层格式漂移，
+  但会改变模型接口、Token 与失败模式，故不能在 0.5d 中途替换。否决仅跑文本（无法测协议敏感性）与
+  中途切换协议（破坏冻结比较）；采用预先登记的独立配对对照。
+- 协议边界：0.5e 仍由本地靶场执行模拟工具、权限、确认与副作用观测；Provider 只返回结构化调用意图，
+  不获得真实工具执行权。0.5e 使用独立 identity/artifacts/controls/billing evidence 与 native codec
+  fingerprint；与尚未观察的 0.5d 24 primary + 8 reserve seed 值配对。两套分别 fail-closed 裁决，
+  只有主指标方向一致时才可称结论跨已测协议一致。
+- 当前证据：GLM-4.7 迁移 controls 的正常任务为 156/200，失败集中在合法退款与两步请求，并累计记录
+  33 次文本工具调用格式异常；这支持把 native protocol 作为后续独立对照的工程动机，但不是其效果结论。
+- 运行边界：本次仅更新内部 PRD 与开发记录；未实现 native codec、未生成 0.5e plan、未发送 Provider
+  请求。0.5d 仍停在 RPM calibration、fresh controls、billing/preflight、dry-run、matrix、replay 与
+  `gate-report` 之前。
+- 剩余状态：**PHASE 0.5E DESIGN REGISTERED / NOT STARTED / PHASE 0.5D REMAINS THE NEXT FORMAL GATE**。
+
+---
+
 ## 2026-09-01 · Phase 0.5c 失效审计与 Phase 0.5d 修复
 
 ### 2026-09-01 15:49 AEST · Step 164 · Phase 0.5d 修复分支已推送并进入 PR 审查
@@ -546,6 +827,30 @@
 - 边界：本轮没有 Provider 调用、正式矩阵执行或冻结证据重算；三个既有未跟踪路径仍未提交。预算账本、
   Gate 损坏证据容错和 CLI/Store 收缩仍保持 OPEN，不因 code review PR 合并而宣称解决。
 - 剩余状态：DONE —— 本文档合并记录单独走小型 PR；完成后删除远端工作分支，不留开放 PR。
+
+---
+
+## 2026-08-21 · 论文定位收敛与课程反馈计划
+
+### 2026-08-21 19:45 AEST · Step 138 · 冻结近期论文论题边界，不启动新实验
+
+- **进度:** 作者确认保留 RedCell 主线，并吸收“反馈驱动攻击”与“多工具组合风险”中合理部分。
+  PRD §2.6 已记录近期可检验论题：在等 Token 预算的自适应攻击下，分别开关提示词、资源归属
+  授权强制和确认闸门，观测它们影响的是违规调用 Attempt，还是确认的实际副作用 Impact。
+- **决策与理由:** 不把“自适应攻击引擎”“确定性 ground truth”或“工具授权类别”单独写成
+  novelty；它们已有近作覆盖，应该作为可信压力测试与测量前提。论文主张收敛为防御层的
+  阶段化归因，只有在跨靶场、等成本、可复现的实证下才成立。
+- **范围边界:** Phase 0 的 `NOT SUPPORTED` 以及 Phase 0.5 的冻结 Gate 均不改写。当前主实验
+  以确定性的 Attempt / Impact 为主；Intent 仍需独立语义标注与一致性验证，未列为主结论。
+  “局部合法、组合违规”的多工具链仅列为后续独立研究方向，未实现、未声明为当前能力，且任何
+  后续设计必须继续限于本地、可重置、可观测的授权靶场。
+- **课程反馈计划:** 优先完成当前无污染 Gate 与一份研究包（问题、相关工作差异、冻结方法、
+  结果或负结果、限制），再请本学期 Cybersecurity 课程老师评阅研究问题与证据强度。若课程
+  需要早期确认，可先给明确标注 `PRE-RESULTS` 的一页 proposal；不把未完成 roadmap 当结论。
+- **验证证据:** 仅内部文档更新；未调用 Provider、未启动矩阵、未修改 Gate 条件、未改动运行
+  产物或攻击实现。
+- **剩余状态:** DONE（定位/计划记录）；OPEN（完成新的干净 Phase 0.5 矩阵及后续跨靶场研究
+  证据后，才决定实际投稿稿件与目标 venue）。
 
 ---
 

@@ -9,10 +9,11 @@ from redcell.arena.support_agent import (
     SYSTEM_PROMPT_CANARY,
     ArenaAdapter,
     DefenseLevel,
+    NativeToolCallCodec,
     TextToolCallCodec,
 )
 from redcell.arena.support_agent import tools as arena_tools
-from redcell.llm import LLMProviderExhaustedError, LLMResponse, ScriptedProvider
+from redcell.llm import LLMProviderExhaustedError, LLMResponse, LLMToolCall, ScriptedProvider
 from redcell.protocols import (
     AdapterInput,
     Message,
@@ -43,6 +44,29 @@ def test_codec_extracts_calls_and_strips_them_from_visible_text() -> None:
     assert decoded.malformed == 0
     assert "<tool_call>" not in decoded.visible
     assert "Let me check that for you." in decoded.visible
+
+
+def test_native_codec_preserves_provider_call_id_and_rejects_bad_arguments() -> None:
+    codec = NativeToolCallCodec()
+    decoded = codec.decode(
+        LLMResponse(
+            content="",
+            tool_calls=[
+                LLMToolCall(
+                    id="call-1",
+                    name="search_faq",
+                    arguments_json='{"topic":"refund"}',
+                ),
+                LLMToolCall(id="call-2", name="search_faq", arguments_json="not-json"),
+            ],
+        )
+    )
+
+    assert [(call.id, call.name) for call in decoded.calls] == [("call-1", "search_faq")]
+    assert decoded.calls[0].arguments == {"topic": "refund"}
+    assert decoded.malformed == 1
+    assert codec.system_suffix([]) == ""
+    assert codec.provider_tool_choice == "auto"
 
 
 def test_codec_counts_malformed_calls_instead_of_silently_dropping_them() -> None:

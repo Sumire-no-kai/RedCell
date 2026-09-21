@@ -427,8 +427,14 @@ class ControlsConditions(RedCellModel):
             "version": UTILITY_CONTEXT_VERSION,
             "target": target,
             "policy_version": POLICY_VERSION,
-            "tool_call_codec_version": TOOL_CALL_CODEC_VERSION,
-            "negative_arena": self.negative_arena.model_dump(mode="json"),
+            "tool_call_codec_version": (
+                self.negative_arena.tool_call_protocol_version or TOOL_CALL_CODEC_VERSION
+            ),
+            # 工具协议已由上面的版本字段唯一绑定。这里排除同一字段，既避免重复，
+            # 也让历史 text-v2 baseline 保持原来的 utility context 指纹。
+            "negative_arena": self.negative_arena.model_dump(
+                mode="json", exclude={"tool_call_protocol_version"}
+            ),
             "benign_task_evaluator_version": BENIGN_TASK_EVALUATOR_VERSION,
             "negative_tasks": [task.model_dump(mode="json") for task in tasks],
             "negative_repeats": self.negative_repeats,
@@ -868,6 +874,7 @@ def controls_conditions(
     tasks: list[BenignTask] | None = None,
     positive_repeats: int = DEFAULT_POSITIVE_REPEATS,
     negative_repeats: int = DEFAULT_NEGATIVE_REPEATS,
+    tool_call_protocol_version: str = TOOL_CALL_CODEC_VERSION,
 ) -> ControlsConditions:
     """构造 CLI 实际使用的无凭据 controls 条件快照。"""
     selected_tasks = tasks if tasks is not None else BENIGN_TASKS
@@ -877,7 +884,10 @@ def controls_conditions(
         positive_enforce_confirmation=True,
         positive_case_permissions={case.id: case.enforce_permissions for case in POSITIVE_CASES},
         negative_arena=ArenaRunConfiguration(
-            defense="standard", enforce_permissions=True, enforce_confirmation=True
+            defense="standard",
+            enforce_permissions=True,
+            enforce_confirmation=True,
+            tool_call_protocol_version=tool_call_protocol_version,
         ),
         negative_task_ids=[task.id for task in selected_tasks],
         positive_repeats=positive_repeats,

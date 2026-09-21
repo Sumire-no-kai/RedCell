@@ -23,6 +23,7 @@ from pathlib import Path
 
 from pydantic import Field
 
+from redcell.arena.support_agent.codec import TOOL_CALL_CODEC_VERSION, ToolCallProtocol
 from redcell.config import (
     AttackerSettings,
     ControllerSettings,
@@ -30,7 +31,13 @@ from redcell.config import (
     TargetSettings,
     load_shared_rate_limit_database_url,
 )
-from redcell.gate_analysis import SeedPlan, require_frozen_seed_plan
+from redcell.controls import ControlsReport
+from redcell.gate_analysis import (
+    PHASE_0_5_EXPERIMENT,
+    PHASE_0_5B_EXPERIMENT,
+    SeedPlan,
+    require_frozen_seed_plan,
+)
 from redcell.gate_billing_evidence import (
     BillingEvidenceBundle,
     BillingRole,
@@ -41,8 +48,8 @@ from redcell.protocols.common import RedCellModel
 from redcell.protocols.run import ProviderRunConfiguration
 from redcell.shared_rate_limit import SQLiteRateLimiter
 from redcell.storage import RunStore
+from redcell.utility_baseline import UtilityBaseline, per_task_regressions
 from redcell.utility_confirmation import (
-    PHASE_0_5B_EXPERIMENT,
     UtilityConfirmationEvidence,
     validate_utility_confirmation,
 )
@@ -208,6 +215,111 @@ def _requires_utility_confirmation(seed_plan_json: Path) -> bool:
     return seed_plan.experiment == PHASE_0_5B_EXPERIMENT
 
 
+def _requires_utility_baseline(seed_plan_json: Path) -> bool:
+    try:
+        seed_plan = SeedPlan.model_validate_json(seed_plan_json.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return seed_plan.experiment not in {PHASE_0_5_EXPERIMENT, PHASE_0_5B_EXPERIMENT}
+
+
+def _utility_baseline_checks(
+    controls: ControlsReport | None,
+    baseline: UtilityBaseline | None,
+    *,
+    expected_target: ProviderRunConfiguration,
+    expected_tool_protocol: ToolCallProtocol,
+) -> list[PreflightCheck]:
+    if controls is None:
+        return [
+            PreflightCheck(
+                name="controls_missing",
+                passed=False,
+                detail="正式替代实验必须在矩阵前提供同配置 controls",
+            )
+        ]
+    if baseline is None:
+        return [
+            PreflightCheck(
+                name="utility_baseline_not_established",
+                passed=False,
+                detail="正式替代实验必须在矩阵前绑定已冻结 utility baseline",
+            )
+        ]
+
+    checks: list[PreflightCheck] = []
+    if controls.conditions is None or controls.conditions.target != expected_target:
+        checks.append(
+            PreflightCheck(
+                name="controls_target_environment_mismatch",
+                passed=False,
+                detail="controls Target 配置与当前运行配置不一致",
+            )
+        )
+    actual_protocol = (
+        controls.conditions.negative_arena.tool_call_protocol_version or TOOL_CALL_CODEC_VERSION
+        if controls.conditions is not None
+        else None
+    )
+    if actual_protocol != expected_tool_protocol.value:
+        checks.append(
+            PreflightCheck(
+                name="controls_tool_protocol_mismatch",
+                passed=False,
+                detail=f"controls={actual_protocol}; planned={expected_tool_protocol.value}",
+            )
+        )
+    if controls.utility_context_fingerprint is None:
+        checks.append(
+            PreflightCheck(
+                name="controls_utility_context_missing",
+                passed=False,
+                detail="controls 未绑定 utility context",
+            )
+        )
+    elif controls.utility_context_fingerprint != baseline.context_fingerprint:
+        checks.append(
+            PreflightCheck(
+                name="utility_baseline_context_mismatch",
+                passed=False,
+                detail="controls 与冻结 baseline 使用了不同 Target 或工具协议",
+            )
+        )
+
+    utility = controls.utility
+    repeats = {outcome.runs for outcome in controls.negative}
+    observed = {
+        outcome.id: outcome.completed_runs or 0
+        for outcome in controls.negative
+        if outcome.completed_runs is not None
+    }
+    utility_failed = utility is None or len(repeats) != 1
+    if utility is not None and len(repeats) == 1:
+        repeat_count = next(iter(repeats))
+        utility_failed = (
+            utility.task_runs != baseline.task_runs
+            or utility.completed_task_runs < baseline.aggregate_floor
+            or bool(per_task_regressions(observed, repeat_count, baseline))
+        )
+    if utility_failed:
+        checks.append(
+            PreflightCheck(
+                name="utility_failed",
+                passed=False,
+                detail="controls aggregate、样本形状或逐任务回归未通过冻结判据",
+            )
+        )
+    if not checks:
+        checks.append(
+            PreflightCheck(
+                name="utility_baseline",
+                passed=True,
+                detail="Target、工具协议、context、aggregate 与逐任务判据一致",
+            )
+        )
+    return checks
+
+
 def _utility_confirmation_check(
     evidence: UtilityConfirmationEvidence | None,
     *,
@@ -298,6 +410,9 @@ def run_preflight(
     shared_rate_limit_db: str | None = None,
     billing_evidence: BillingEvidenceBundle | None = None,
     utility_confirmation: UtilityConfirmationEvidence | None = None,
+    controls: ControlsReport | None = None,
+    utility_baseline: UtilityBaseline | None = None,
+    tool_call_protocol: ToolCallProtocol = ToolCallProtocol.TEXT_V2,
 ) -> PreflightReport:
     """跑完全部零成本检查;任何一项失败都不应进入付费步骤。
 
@@ -349,6 +464,16 @@ def run_preflight(
         target = next(settings for name, settings in roles if name == "target")
         checks.append(
             _utility_confirmation_check(utility_confirmation, target=target.run_configuration())
+        )
+    elif _requires_utility_baseline(seed_plan_json):
+        target = next(settings for name, settings in roles if name == "target")
+        checks.extend(
+            _utility_baseline_checks(
+                controls,
+                utility_baseline,
+                expected_target=target.run_configuration(),
+                expected_tool_protocol=tool_call_protocol,
+            )
         )
     checks.append(_golden_check(golden_fixtures))
     checks.append(_database_check(database_url))

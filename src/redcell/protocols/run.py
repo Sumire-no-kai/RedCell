@@ -23,9 +23,9 @@ from redcell.protocols.strategy import StrategyCatalogueSummary
 from redcell.reliability import ReliabilityPolicy, SelectionReliabilityPolicy
 from redcell.versions import (
     ATTACK_PATH_SIGNATURE_VERSION,
-    EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
     FINDING_SIGNATURE_VERSION,
     LEVEL1_SCORER_VERSION,
+    SUPPORTED_EXPERIMENT_CONDITIONS_SCHEMA_VERSIONS,
 )
 
 
@@ -223,6 +223,8 @@ class ArenaRunConfiguration(RedCellModel):
     defense: str
     enforce_permissions: bool
     enforce_confirmation: bool
+    tool_call_protocol_version: str | None = None
+    """None preserves v3 evidence; every v4 Run records text-v2 or native-v1 explicitly."""
 
 
 class ExperimentConditions(RedCellModel):
@@ -286,7 +288,7 @@ class ExperimentConditions(RedCellModel):
             "actor": self.actor,
             "target": self.target.model_dump(mode="json", exclude_none=True),
             "attacker": self.attacker.model_dump(mode="json", exclude_none=True),
-            "arena": self.arena.model_dump(mode="json"),
+            "arena": self.arena.model_dump(mode="json", exclude_none=True),
             "request_timeouts": (
                 self.request_timeouts.model_dump(mode="json")
                 if self.request_timeouts is not None
@@ -391,7 +393,7 @@ class Run(RedCellModel):
             self.__dict__["experiment_fingerprint"] = expected
         elif (
             self.experiment_conditions.conditions_schema_version
-            == EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+            in SUPPORTED_EXPERIMENT_CONDITIONS_SCHEMA_VERSIONS
             and self.experiment_fingerprint != expected
         ):
             raise ValueError("experiment_fingerprint 与 experiment_conditions 不一致")
@@ -414,7 +416,7 @@ class Run(RedCellModel):
             return False
         if (
             self.experiment_conditions.conditions_schema_version
-            != EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+            not in SUPPORTED_EXPERIMENT_CONDITIONS_SCHEMA_VERSIONS
         ):
             return False
         return self.experiment_fingerprint == self.experiment_conditions.fingerprint()

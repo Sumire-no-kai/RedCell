@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from redcell.arena.support_agent import ToolCallProtocol
 from redcell.budget import BudgetLimits
 from redcell.cli import ExitCode, app
 from redcell.config import (
@@ -14,6 +15,7 @@ from redcell.config import (
     ProviderSettings,
     TargetSettings,
 )
+from redcell.controls import UTILITY_CONTEXT_VERSION, ControlsReport, controls_conditions
 from redcell.gate_analysis import PHASE_0_5_SEED_PLAN_DIGEST
 from redcell.gate_billing_evidence import (
     BillingEvidenceBundle,
@@ -25,11 +27,13 @@ from redcell.gate_billing_evidence import (
 from redcell.gate_preflight import run_preflight
 from redcell.protocols.run import Run, UsageAccountingMode
 from redcell.storage import RunStore
+from redcell.utility_baseline import UtilityBaseline
 
 runner = CliRunner()
 
 FROZEN_SEED_PLAN = Path("docs/PHASE0_5_SEED_PLAN.json").resolve()
 GOLDEN_FIXTURES = Path("tests/fixtures/level1-golden-v2.json").resolve()
+PHASE_0_5D_SEED_PLAN = Path("docs/PHASE0_5D_SEED_PLAN.json").resolve()
 
 ROLES = ("target", "attacker", "controller")
 
@@ -118,6 +122,35 @@ def test_fully_configured_environment_passes(tmp_path) -> None:
     report = _report(tmp_path)
 
     assert report.passed, report.summary()
+
+
+def test_replacement_experiment_preflight_rejects_incompatible_utility_baseline(tmp_path) -> None:
+    roles = _roles()
+    target = next(settings for name, settings in roles if name == "target")
+    conditions = controls_conditions(target=target.run_configuration())
+    controls = ControlsReport(
+        conditions=conditions,
+        utility_context_fingerprint=conditions.utility_context_fingerprint(),
+        utility_context_version=UTILITY_CONTEXT_VERSION,
+    )
+    report = run_preflight(
+        seed_plan_json=PHASE_0_5D_SEED_PLAN,
+        database_url=_db(tmp_path),
+        golden_fixtures=GOLDEN_FIXTURES,
+        roles=roles,
+        shared_rate_limit_db=f"sqlite:///{tmp_path / 'shared-rate-limit.db'}",
+        billing_evidence=_billing_evidence(roles),
+        controls=controls,
+        utility_baseline=UtilityBaseline(
+            context_fingerprint="f" * 64,
+            negative_repeats=20,
+            per_task={"task": 20},
+        ),
+        tool_call_protocol=ToolCallProtocol.TEXT_V2,
+    )
+
+    assert not report.passed
+    assert not _check(report, "utility_baseline_context_mismatch").passed
 
 
 @pytest.mark.parametrize(

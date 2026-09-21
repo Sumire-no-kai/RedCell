@@ -299,7 +299,7 @@ def test_regression_context_omits_optional_legacy_provider_fields() -> None:
         "actor": conditions.actor,
         "target": conditions.target.model_dump(mode="json", exclude_none=True),
         "attacker": conditions.attacker.model_dump(mode="json", exclude_none=True),
-        "arena": conditions.arena.model_dump(mode="json"),
+        "arena": conditions.arena.model_dump(mode="json", exclude_none=True),
         "request_timeouts": None,
         "execution_host": None,
         "strategy_catalogue": None,

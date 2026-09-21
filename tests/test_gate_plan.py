@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from redcell.arena.support_agent import ToolCallProtocol
 from redcell.gate_analysis import (
     PHASE_0_5_SEED_PLAN_DIGEST,
     SeedPlan,
@@ -35,9 +36,33 @@ def test_gate_plan_freezes_500_attempts_and_disables_reserves() -> None:
     assert len(plan.cells) == 120
     assert plan.plan_version == GATE_PLAN_VERSION
     assert plan.execution_host_profile is ExecutionHostProfile.WINDOWS_WAKELOCK_V1
+    assert plan.tool_call_protocol_version == ToolCallProtocol.TEXT_V2.value
     assert all("--execution-host-profile" in cell.argv for cell in plan.cells)
+    assert all(
+        cell.argv[cell.argv.index("--tool-call-protocol") + 1] == ToolCallProtocol.TEXT_V2.value
+        for cell in plan.cells
+    )
     assert all(cell.enabled_initially for cell in plan.cells[:72])
     assert not any(cell.enabled_initially for cell in plan.cells[72:])
+
+
+def test_v2_gate_plan_without_explicit_tool_protocol_still_loads() -> None:
+    seed_plan = SeedPlan.model_validate_json(SEED_PLAN_PATH.read_text(encoding="utf-8"))
+    payload = build_gate_plan(
+        seed_plan,
+        max_attempts=500,
+        database_url="sqlite:///runs/phase-0-5.db",
+        report_directory="runs/phase-0-5",
+    ).model_dump(mode="python")
+    payload["plan_version"] = "phase-0.5-gate-plan-v2"
+    payload.pop("tool_call_protocol_version")
+    for cell in payload["cells"]:
+        flag = cell["argv"].index("--tool-call-protocol")
+        del cell["argv"][flag : flag + 2]
+
+    loaded = GatePlan.model_validate(payload)
+
+    assert loaded.tool_call_protocol_version is None
 
 
 def test_gate_plan_refuses_a_different_attempt_cap_or_seed_plan() -> None:
