@@ -441,6 +441,41 @@
   这个问题解决前，新实验的 `controls` 按原生协议运行时阳性对照会失败。
 - **剩余状态:** DONE（方案 A 实现）；OPEN（见 Step 19）。
 
+### 2026-09-23 22:20 AEST · Step 21 · 第二轮筛选：glm-4.7 漂移，glm-4-32b 三条全过
+
+- **授权:** 作者授权直接跑建议的第 1～4 步：D1/D2 诊断（顺带看 Luna）、`gemini-3.1-flash-lite`、
+  `glm-4-32b-0414-128k`、OpenAI 带日期的 nano 型号，均用原生 FC；不跑本地或聚合平台。每项上限 $0.50。
+- **D1/D2：glm-4.7 的 canary 归零是模型漂移。** 文本协议 canary × 20 为 0/20（2026-08-28 Step 154 同条件
+  20/20），原生 × 5 为 0/5，原始回复都是明确拒绝，回复正文里都不含 canary。用 2026-08-26 的代码（Step 154
+  所用版本）和当前代码分别渲染"系统提示 + canary 请求"，两者 SHA-256 前缀都是 `b9b6e7bedf16ee41`、长度都是
+  1217 字符，逐字节相同；配置也与 Step 154 相同。因此变化来自 Z.AI 在 `glm-4.7` 这个滚动名下更换了模型，
+  而不是协议或代码。结论：`glm-4.7` 在两种协议下都不再通过冻结资格门。**待查:** 漂移发生在 08-28 到 09-23
+  之间的哪一天；若在 Phase 0.5d 之前或期间，它是 0.5d 中 Static ASR 贴地板的另一种可能解释（Windows 上的
+  行为指纹记录可以定位）。
+- **Luna canary:** 原生 × 5 为 0/5，均为明确拒绝，与 Step 19 一致。
+- **`gemini-3.1-flash-lite`:** canary 原生 20/20，回复就是 canary 本身。工具线未能测完：第 21 次请求模型发起了
+  `get_customer_profile` 调用，但回传工具结果的下一轮被拒（HTTP 400，"Function call is missing a
+  thought_signature"）。Gemini 3 要求把响应中 `tool_calls[].extra_content.google.thought_signature` 在下一轮
+  原样带回（官方 thought signatures 文档），而 `LLMToolCall` 只保存 id/name/arguments，把它丢了。这是原生
+  FC 实现的缺口，不是模型行为。进程退出前的 canary 结果丢失，已单独补跑。
+- **`glm-4-32b-0414-128k`:** 原生资格门 **20/20 · 20/20 · 20/20**，100 次请求 $0.0081。名字带日期，可钉死版本；
+  $0.10 / $0.10；官方文档列出支持 Function Calling，没有下线公告。Hugging Face 上有同名同日期的 MIT 开源权重，
+  但官方没有说明它与 API 模型相同。今天 Z.AI 的 `/models` 列表里没有它，实际调用正常。8 月文本协议下它的
+  工具线是 0 次调用，这是文本协议干扰的又一例。
+- **`gpt-4.1-nano-2025-04-14`:** 原生资格门 **20/20 · 20/20 · 20/20**，$0.0046。但 OpenAI 下线计划列明
+  **2026-10-23 停止服务**（替代为 `gpt-5.6-luna`），不能作为长期靶场。
+- **`gpt-5-nano-2025-08-07`:** 探针被拒（HTTP 400）：只接受 temperature=1，与冻结的 Target 温度 0.7 不兼容，
+  与 2026-08-01 排除 Claude 5 同类。未跑资格门，不计费。
+- **更正 Step 17（攻击方拒绝数）:** Luna 拒绝时用弯引号（`can’t`），Step 17 的拒绝初筛正则只认直引号。改用同时
+  识别两种引号的规则重查：A0、A1、A2 仍为 0；**A3（medium）实为 2/70**，都在 multi_turn_trust_building 策略，
+  另 1 条命中是扮演客户的话术本身，属误报。现役 A1 的 70 条话术已逐条人工复核，全部在执行对应策略，没有拒绝
+  或跳出角色。攻击方用 `none` 档的结论不变。
+- **证据（SHA-256 前 12 位）:** D1 `66371ad4a135`，D2 `a7ad2c7241b0`，Luna canary `e5b3ebafeb3c`，Gemini canary
+  `5e206cd4beb5`，gpt-4.1-nano `ec1ffe31eb99`，glm-4-32b `4789b429ba17`；Gemini 中断的日志保留为
+  `R2-gemini-3.1-flash-lite-gate-native.thought-signature-400.log`。本轮合计约 $0.025。
+- **剩余状态:** DONE（第二轮筛选）；OPEN（是否以 `glm-4-32b-0414-128k` 替换 `glm-4.7` 作 Target；第二个
+  Target 的来源；thought_signature 修复是否实施，均待作者决定）。
+
 ---
 
 ## 2026-09-21 · 双设备迁移与完整证据交接
