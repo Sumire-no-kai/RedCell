@@ -5,6 +5,67 @@
 
 ---
 
+## 2026-09-23 · Phase 0.5d 复盘与研究方向调整
+
+### 2026-09-23 13:02 AEST · Step 01 · 复盘 Phase 0.5d 为什么测不出控制器差异
+
+- **进度:** 在 macOS 开发机上复读交接摘要、2026-09-10 的失败归因记录、Phase 0.5 预注册设计，以及
+  Controller、历史投影、Generator 与 Executor 的实现，并于 2026-09-21 与作者讨论。本步骤只读，没有调用
+  Provider，没有改写任何冻结产物或 Gate 判定。
+- **结论:**
+  1. 0.5d 的 `EXPERIMENT_INVALID` 维持不变。它既不支持、也不否定 LLM Controller 假设。
+  2. 最直接的问题是量程。Target 迁移到 `glm-4.7` 后，现有日志中找不到标准防御下按 `CALIBRATION.md`
+     §9 完成的正式校准；Step 154 只是无防御的阳性资格门。0.5d 中 Static×off 320k ASR 上界低于 3.25%
+     （历史 11.11%），160k 时 `llm-memory` 与 `thompson-off` 各有 16/24 个 Run 的攻击路径数为 0。多数
+     配对是 0 对 0，主指标在这个区间里没有分辨率，任何方向的中等效应都测不出来。
+  3. 这是流程缺口，不只是 0.5d 的执行问题：preflight 不检查“当前 Target、防御等级与 codec 是否有合格
+     校准”。它与 2026-09-10 发现的 utility baseline 兼容性缺口属于同一类，本可在付费矩阵前零成本发现。
+  4. 研究层面：相关工作 v2 已把“自适应攻击者是否优于静态”判为次要贡献，防御分层归因（Paper B）才是
+     主问题；其最低门槛（至少 3 个不同权限语义的靶场、至少 2 个目标模型）尚未开始。
+- **0.5d 仍然有用的部分:** 它是第一个完整跑完并通过事件级审计的 144-cell 矩阵，runner、checkpoint、
+  计费、replay 与 Gate 链路得到端到端验证；Target 迁移后 Static ASR 的大幅变化，也是“目标模型本身
+  主导结果”的一个观测。
+- **剩余状态:** DONE（复盘）。
+
+### 2026-09-23 13:02 AEST · Step 02 · 方向调整与下一步顺序
+
+- **决策与理由:**
+  1. **Paper A 并入 Paper B（作者确认）。** Paper A 没有有效实验结果；等 Token 测量包转为 Paper B 的
+     方法章节与攻击者敏感性消融仪器。
+  2. **0.5e 不再作为独立研究启动。** 工具协议敏感性改写为 Paper B 的限制说明；若需要，另行登记为消融。
+  3. **Paper B 倾向采用原生 Function Calling（作者提出，冻结条件 OPEN）。** 现有文本协议下工具已在本地
+     真实执行，FC 改变的是调用表达，可去除“文本格式服从”这一混杂；代价是新的实验身份，须重跑 controls
+     并重新冻结 utility baseline。
+  4. **攻击者（OPEN）：** 以已登记的反馈驱动攻击者（M1，`FeedbackAttackDriver`）作为 Paper B 冻结仪器
+     的候选，另需至少一个冻结对照攻击者。M1 定位为机制验证，不扩成新的矩阵 Gate。
+- **下一步顺序:**
+  1. 零成本：审查并合并 `fix/replay-checkpoint-recovery`；从 0.5d 数据库离线计算 §9 校准现状；
+     preflight 增加校准状态检查与开跑前量程检查。
+  2. 核心设计（先讨论再实现）：新靶场 schema、M1-B 最小执行路径，以及内部审阅已登记的实现偏差
+     （在新版本修正，不回溯改旧实验）。
+  3. 付费测量（逐项授权）：标准防御校准、第二个目标模型资格门、FC 在线契约对照。
+- **剩余状态:** DONE（方向记录）；OPEN（内部需求文档相应章节待作者确认措辞；FC 与攻击者的冻结条件
+  待 Paper B 预注册）。
+
+### 2026-09-23 13:20 AEST · Step 03 · 审查待审分支 `fix/replay-checkpoint-recovery`
+
+- **进度:** 对 `master...fix/replay-checkpoint-recovery` 的源码改动逐段审查：replay checkpoint、原生
+  Function Calling、工具协议身份、GatePlan v3、preflight utility baseline 检查与 Controller prompt 版本。
+- **发现（合并前需修复）:**
+  1. 原生协议下，参数不是合法 JSON 的调用仍被原样写回 assistant 消息，却没有对应的 `role=tool` 回复；
+     OpenAI 兼容接口会以 400 拒绝下一次请求，Attempt 被记为基础设施失败而不是坏格式。
+  2. `controller-controls` 固定使用 prompt v1，而 `run` 已允许 v2；v2 无法得到同配置的契约对照。
+  3. `gate-preflight` 的工具协议参数与 GatePlan 中冻结的协议相互独立、没有交叉校验，可能用错协议的
+     controls 通过 preflight。
+  4. `experiment-conditions-v4` 允许工具协议字段为空，且指纹排除空值，非 CLI 构造路径可能丢失协议身份。
+  5. seed plan 读取失败时，新的 utility baseline 检查被跳过（fail-open）。
+- **次要:** 原生解码未拒绝重复调用 ID；工具 schema 在每次循环重复构建。
+- **边界:** 0.5d 使用的文本协议路径不受上述问题影响；replay checkpoint 部分未发现正确性问题。本步骤
+  只审查，未修改源码，未调用 Provider。
+- **剩余状态:** OPEN（在本分支修复 1–5 并补回归测试，四道门通过后再申请合并）。
+
+---
+
 ## 2026-09-21 · 双设备迁移与完整证据交接
 
 ### 2026-09-21 17:00 AEST · Step 01 · 审计公共 Git、本地私有资料与 Windows 原始证据
@@ -118,6 +179,33 @@
 - **边界:** draft PR 仍未创建；这不影响 Mac clone 或代码传输，但下一位开发者不能把该分支当成已
   进入 PR 审查。852 项测试证据对应 `b284e9d`，此后只有迁移文档更新，未改源码或测试。
 - **剩余状态:** DONE（可迁移状态与判断信息）；OPEN（创建 draft PR、Mac clone、Mac 四道门）。
+
+### 2026-09-21 17:47 AEST · Step 09 · macOS 开发机环境搭建与离线四道门复核
+
+- **进度:** 在 macOS 开发机上同步两个仓库：私有伴随仓库快进到 `bedf688`，`MANIFEST.sha256` 9/9
+  校验通过；公共仓库取得 `origin/fix/replay-checkpoint-recovery@701d6b1`，并建立本地 tracking 分支。
+  作者按交接文档把四个内部文件复制进公共 clone。它们均被忽略，其中两个 `docs/` 路径在 `master`
+  上通过 `.git/info/exclude` 覆盖，`git status` 干净。使用系统 Python 3.13.5 建立 `.venv`，按
+  `constraints/phase0-5.txt` 安装冻结依赖。
+- **决策与理由:**
+  1. 不额外安装 Python 3.12（作者偏好）。系统 3.13.5 满足 `requires-python >=3.11`；用冻结约束
+     固定依赖版本后，Mac 与 Windows 之间的差异只可能来自平台或解释器，不会来自依赖漂移。
+  2. 作者更正交接文档 §1/§6 的迁移建议：Mac 上的开发测试可以调用付费 API（作者提供 key 后），
+     但每次调用前须先告知作者要做什么测试。正式矩阵与长时间运行仍在 Windows。内部协作约定已同步
+     更新；交接快照原文不改写。
+  3. 开发日志继续记录在本文件，不另设私有日志。
+- **遇到的问题:** 公共 clone 中冻结 utility baseline 的 SHA-256（`59487c67…`）与私有仓库
+  `SOURCE_STATE.json` 记录的 Windows 源哈希（`2cd6b7d1…`）不一致。
+- **解决方式:** 该文件 857 字节，无 CR、无结尾换行；把换行全部转为 CRLF 后，哈希恰为
+  `2cd6b7d1…`。差异只来自私有仓库的 LF 规范化，内容一致。其余三个内部文件的哈希与 Windows 源一致。
+- **验证证据:** 在 `fix/replay-checkpoint-recovery@701d6b1`、macOS、Python 3.13.5 上：
+  `python -m pytest -p no:cacheprovider` 为 `852 passed in 13.93s`；`ruff check .` 通过；
+  `ruff format --check .` 为 147 files already formatted；`black --check src tests` 为 132 files
+  unchanged；`pip check` 无冲突。这些数字与 Windows 对 `b284e9d` 的记录一致（此后只有文档变更）。
+  `master@3fcc6bb` 上为 `827 passed`、Ruff format 144 files、Black 130 files，均通过。
+- **边界:** 只验证了离线套件；没有 Provider 调用，不构成实验证据。
+- **剩余状态:** DONE（Mac clone、Python 环境与离线四道门，关闭 Step 08 中对应的 OPEN 项）；
+  OPEN（公共 draft PR 仍未创建，待审分支尚未 review）。
 
 ---
 
