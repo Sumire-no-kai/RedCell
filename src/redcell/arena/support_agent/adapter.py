@@ -11,7 +11,12 @@ from __future__ import annotations
 
 import time
 
-from redcell.arena.support_agent.codec import TextToolCallCodec, ToolCallCodec
+from redcell.arena.support_agent.codec import (
+    NativeToolCallCodec,
+    TextToolCallCodec,
+    ToolCallCodec,
+    ToolCallProtocol,
+)
 from redcell.arena.support_agent.prompts import DefenseLevel, build_system_prompt
 from redcell.arena.support_agent.tools import SupportAgentTools, ToolExecution
 from redcell.llm.base import LLMMessage, LLMProvider
@@ -55,6 +60,7 @@ class ArenaAdapter(TargetAdapter):
         enforce_permissions: bool = True,
         enforce_confirmation: bool = True,
         codec: ToolCallCodec | None = None,
+        tool_call_protocol: ToolCallProtocol = ToolCallProtocol.TEXT_V2,
         model: str | None = None,
         temperature: float = 0.7,
         max_tokens: int | None = None,
@@ -71,9 +77,13 @@ class ArenaAdapter(TargetAdapter):
             enforce_confirmation=enforce_confirmation,
         )
         # 工具名单先建再建 codec:零参数裸名兜底要靠它才能落地(见 codec 的 __init__)。
-        self._codec = codec or TextToolCallCodec(
-            known_tools=[spec["name"] for spec in self._tools.specs()]
-        )
+        self._tool_specs = self._tools.specs()
+        if codec is not None:
+            self._codec = codec
+        elif tool_call_protocol is ToolCallProtocol.NATIVE_V1:
+            self._codec = NativeToolCallCodec()
+        else:
+            self._codec = TextToolCallCodec(known_tools=[spec["name"] for spec in self._tool_specs])
 
     # ── TargetAdapter 接口 ───────────────────────────────────────────────
 
@@ -111,6 +121,10 @@ class ArenaAdapter(TargetAdapter):
     def defense(self) -> DefenseLevel:
         return self._defense
 
+    @property
+    def tool_call_protocol_version(self) -> str:
+        return self._codec.version
+
     async def reset(self) -> None:
         self._tools.reset()
 
@@ -134,11 +148,18 @@ class ArenaAdapter(TargetAdapter):
         model_name = self._model
 
         for _ in range(self._max_tool_iterations):
+            native_tools = self._codec.provider_tools(self._tool_specs)
+            provider_options = (
+                {"tools": native_tools, "tool_choice": self._codec.provider_tool_choice}
+                if native_tools is not None
+                else {}
+            )
             response = await self._provider.complete(
                 messages,
                 model=self._model,
                 temperature=self._temperature,
                 max_tokens=self._max_tokens,
+                **provider_options,
             )
             prompt_tokens += response.prompt_tokens
             completion_tokens += response.completion_tokens
@@ -168,13 +189,7 @@ class ArenaAdapter(TargetAdapter):
                 )
                 side_effects.extend(result.side_effects)
 
-            messages.append(LLMMessage(role=Role.ASSISTANT, content=response.content))
-            messages.append(
-                LLMMessage(
-                    role=self._codec.results_role,
-                    content=self._codec.encode_results(executed),
-                )
-            )
+            messages.extend(self._codec.followup_messages(response, executed))
 
         return AdapterOutput(
             assistant_message=visible,
@@ -192,7 +207,10 @@ class ArenaAdapter(TargetAdapter):
                 latency_ms=(time.perf_counter() - started) * 1000,
                 model=model_name,
                 temperature=self._temperature,
-                extra={"defense": self._defense.value},
+                extra={
+                    "defense": self._defense.value,
+                    "tool_call_protocol_version": self._codec.version,
+                },
             ),
         )
 

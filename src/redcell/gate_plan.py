@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
+from redcell.arena.support_agent.codec import ToolCallProtocol
 from redcell.gate_analysis import (
     FORMAL_MAX_ATTEMPTS,
     FORMAL_RUN_TOKENS,
@@ -19,7 +20,8 @@ from redcell.gate_analysis import (
 from redcell.protocols.common import RedCellModel
 from redcell.protocols.run import ExecutionHostProfile, GenerationMemoryMode, SearchSelector
 
-GATE_PLAN_VERSION = "phase-0.5-gate-plan-v2"
+GATE_PLAN_VERSION = "phase-0.5-gate-plan-v3"
+HOST_BOUND_GATE_PLAN_VERSION = "phase-0.5-gate-plan-v2"
 LEGACY_GATE_PLAN_VERSION = "phase-0.5-gate-plan-v1"
 
 
@@ -59,11 +61,16 @@ class GatePlanCell(RedCellModel):
 
 
 class GatePlan(RedCellModel):
-    plan_version: Literal["phase-0.5-gate-plan-v1", "phase-0.5-gate-plan-v2"] = GATE_PLAN_VERSION
+    plan_version: Literal[
+        "phase-0.5-gate-plan-v1",
+        "phase-0.5-gate-plan-v2",
+        "phase-0.5-gate-plan-v3",
+    ] = GATE_PLAN_VERSION
     seed_plan_digest: str
     database_url: str
     report_directory: str
     execution_host_profile: ExecutionHostProfile | None = None
+    tool_call_protocol_version: str | None = None
     max_attempts: int = Field(ge=1)
     primary_cells: int
     reserve_cells: int
@@ -92,19 +99,29 @@ class GatePlan(RedCellModel):
         )
         seed_plan = SeedPlan(experiment=frozen.experiment, primary=primary, reserve=reserve)
         require_frozen_seed_plan(seed_plan)
-        if self.plan_version == GATE_PLAN_VERSION and self.execution_host_profile is None:
-            raise ValueError("v2 Gate plan 必须冻结 execution_host_profile")
+        if (
+            self.plan_version in {HOST_BOUND_GATE_PLAN_VERSION, GATE_PLAN_VERSION}
+            and self.execution_host_profile is None
+        ):
+            raise ValueError("v2/v3 Gate plan 必须冻结 execution_host_profile")
         if (
             self.plan_version == LEGACY_GATE_PLAN_VERSION
             and self.execution_host_profile is not None
         ):
             raise ValueError("v1 Gate plan 不得携带 execution_host_profile")
+        if self.plan_version == GATE_PLAN_VERSION:
+            if self.tool_call_protocol_version is None:
+                raise ValueError("v3 Gate plan 必须冻结 tool_call_protocol_version")
+            ToolCallProtocol(self.tool_call_protocol_version)
+        elif self.tool_call_protocol_version is not None:
+            raise ValueError("v1/v2 Gate plan 不得携带 tool_call_protocol_version")
         expected = _build_cells(
             seed_plan,
             max_attempts=self.max_attempts,
             database_url=self.database_url,
             report_directory=self.report_directory,
             execution_host_profile=self.execution_host_profile,
+            tool_call_protocol_version=self.tool_call_protocol_version,
         )
         if self.primary_cells != len(primary) * len(_TREATMENTS):
             raise ValueError("Gate plan primary_cells does not match its frozen allocation")
@@ -122,6 +139,7 @@ def _build_cells(
     database_url: str,
     report_directory: str,
     execution_host_profile: ExecutionHostProfile | None,
+    tool_call_protocol_version: str | None,
 ) -> list[GatePlanCell]:
     cells: list[GatePlanCell] = []
     for role, seeds in (
@@ -151,6 +169,8 @@ def _build_cells(
                 ]
                 if execution_host_profile is not None:
                     argv.extend(["--execution-host-profile", execution_host_profile.value])
+                if tool_call_protocol_version is not None:
+                    argv.extend(["--tool-call-protocol", tool_call_protocol_version])
                 cells.append(
                     GatePlanCell(
                         seed=seed,
@@ -173,6 +193,7 @@ def build_gate_plan(
     database_url: str,
     report_directory: str,
     execution_host_profile: ExecutionHostProfile = ExecutionHostProfile.WINDOWS_WAKELOCK_V1,
+    tool_call_protocol: ToolCallProtocol = ToolCallProtocol.TEXT_V2,
 ) -> GatePlan:
     """Build commands without executing a Provider or touching the run database."""
     if max_attempts != FORMAL_MAX_ATTEMPTS:
@@ -188,12 +209,14 @@ def build_gate_plan(
         database_url=database_url,
         report_directory=report_directory,
         execution_host_profile=execution_host_profile,
+        tool_call_protocol_version=tool_call_protocol.value,
     )
     return GatePlan(
         seed_plan_digest=seed_plan_digest(seed_plan),
         database_url=database_url,
         report_directory=report_directory,
         execution_host_profile=execution_host_profile,
+        tool_call_protocol_version=tool_call_protocol.value,
         max_attempts=max_attempts,
         primary_cells=len(seed_plan.primary) * len(_TREATMENTS),
         reserve_cells=len(seed_plan.reserve) * len(_TREATMENTS),

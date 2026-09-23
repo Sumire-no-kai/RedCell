@@ -19,13 +19,33 @@ from pydantic import Field
 from redcell.protocols.common import RedCellModel, Role
 
 
+class LLMToolDefinition(RedCellModel):
+    """Provider-neutral function definition carried by native tool calling."""
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+
+
+class LLMToolCall(RedCellModel):
+    """A provider-returned native function call before arena validation/execution."""
+
+    id: str
+    name: str
+    arguments_json: str
+
+
 class LLMMessage(RedCellModel):
     role: Role
     content: str
+    tool_calls: list[LLMToolCall] = Field(default_factory=list)
+    tool_call_id: str | None = None
+    name: str | None = None
 
 
 class LLMResponse(RedCellModel):
     content: str
+    tool_calls: list[LLMToolCall] = Field(default_factory=list)
     model: str = "unknown"
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -76,6 +96,8 @@ class LLMProvider(ABC):
         model: str | None = None,
         temperature: float = 0.0,
         max_tokens: int | None = None,
+        tools: list[LLMToolDefinition] | None = None,
+        tool_choice: str | None = None,
     ) -> LLMResponse: ...
 
 

@@ -15,6 +15,7 @@ import pytest
 
 from redcell.llm import (
     LLMMessage,
+    LLMToolDefinition,
     OpenAICompatibleProvider,
     ProviderConfigurationError,
     ProviderProtocolError,
@@ -153,6 +154,58 @@ async def test_request_body_carries_model_messages_and_temperature() -> None:
     assert seen["temperature"] == 0.7
     assert seen["max_tokens"] == 512
     assert seen["messages"] == [{"role": "user", "content": "查一下订单"}]
+
+
+async def test_native_tools_are_sent_and_structured_calls_are_parsed() -> None:
+    import json
+
+    seen: dict[str, object] = {}
+    body = {
+        "model": "glm-4.7",
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "search_faq",
+                                "arguments": '{"topic":"refund"}',
+                            },
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json=body)
+
+    response = await _provider(httpx.MockTransport(handler)).complete(
+        _user("refund"),
+        tools=[
+            LLMToolDefinition(
+                name="search_faq",
+                description="Search FAQ",
+                parameters={"type": "object", "properties": {}},
+            )
+        ],
+        tool_choice="auto",
+    )
+
+    tools = seen["tools"]
+    assert isinstance(tools, list)
+    assert seen["tool_choice"] == "auto"
+    assert tools[0]["function"]["name"] == "search_faq"
+    assert response.tool_calls[0].id == "call-1"
+    assert response.tool_calls[0].arguments_json == '{"topic":"refund"}'
 
 
 async def test_max_tokens_is_omitted_when_not_set() -> None:

@@ -21,7 +21,13 @@ import httpx
 import structlog
 from pydantic import Field
 
-from redcell.llm.base import LLMMessage, LLMProvider, LLMResponse
+from redcell.llm.base import (
+    LLMMessage,
+    LLMProvider,
+    LLMResponse,
+    LLMToolCall,
+    LLMToolDefinition,
+)
 from redcell.protocols.common import RedCellModel
 from redcell.protocols.run import ProviderExtraBody, UsageAccountingMode
 from redcell.shared_rate_limit import SQLiteRateLimiter
@@ -232,14 +238,21 @@ class OpenAICompatibleProvider(LLMProvider):
         model: str | None = None,
         temperature: float = 0.0,
         max_tokens: int | None = None,
+        tools: list[LLMToolDefinition] | None = None,
+        tool_choice: str | None = None,
     ) -> LLMResponse:
         payload: dict[str, Any] = {
             "model": model or self._model,
-            "messages": [{"role": m.role.value, "content": m.content} for m in messages],
+            "messages": [_message_payload(message) for message in messages],
             "temperature": temperature,
         }
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        if tools is not None:
+            payload["tools"] = [
+                {"type": "function", "function": tool.model_dump(mode="json")} for tool in tools
+            ]
+            payload["tool_choice"] = tool_choice or "auto"
         # 标准字段先填,厂商专属的 extra_body 后合并——调用方若真的需要覆盖
         # 标准字段(不该发生,但不无谓地挡住),让 extra_body 赢,便于排查。
         payload.update(self._extra_body)
@@ -423,6 +436,7 @@ class OpenAICompatibleProvider(LLMProvider):
             raise ProviderProtocolError(
                 f"{self._name} 的 message.content 不是字符串:{type(content).__name__}"
             )
+        tool_calls = _native_tool_calls(message, provider=self._name)
 
         usage_value = data.get("usage")
         usage = usage_value if isinstance(usage_value, dict) else {}
@@ -481,6 +495,7 @@ class OpenAICompatibleProvider(LLMProvider):
 
         return LLMResponse(
             content=content,
+            tool_calls=tool_calls,
             # 用**服务端回传的** model 串;它与请求串不一致就是模型漂移的证据。
             model=str(data.get("model") or self._model),
             prompt_tokens=prompt_tokens,
@@ -491,6 +506,44 @@ class OpenAICompatibleProvider(LLMProvider):
             cost_usd=cost,
             raw=raw,
         )
+
+
+def _message_payload(message: LLMMessage) -> dict[str, Any]:
+    payload: dict[str, Any] = {"role": message.role.value, "content": message.content}
+    if message.tool_calls:
+        payload["tool_calls"] = [
+            {
+                "id": call.id,
+                "type": "function",
+                "function": {"name": call.name, "arguments": call.arguments_json},
+            }
+            for call in message.tool_calls
+        ]
+    if message.tool_call_id is not None:
+        payload["tool_call_id"] = message.tool_call_id
+    if message.name is not None:
+        payload["name"] = message.name
+    return payload
+
+
+def _native_tool_calls(message: dict[str, Any], *, provider: str) -> list[LLMToolCall]:
+    raw_calls = message.get("tool_calls")
+    if raw_calls is None:
+        return []
+    if not isinstance(raw_calls, list):
+        raise ProviderProtocolError(f"{provider} 的 message.tool_calls 不是数组")
+    parsed: list[LLMToolCall] = []
+    for index, raw in enumerate(raw_calls):
+        function = raw.get("function") if isinstance(raw, dict) else None
+        call_id = raw.get("id") if isinstance(raw, dict) else None
+        name = function.get("name") if isinstance(function, dict) else None
+        arguments = function.get("arguments") if isinstance(function, dict) else None
+        if not all(isinstance(value, str) and value for value in (call_id, name)) or not isinstance(
+            arguments, str
+        ):
+            raise ProviderProtocolError(f"{provider} 的 message.tool_calls[{index}] 结构不完整")
+        parsed.append(LLMToolCall(id=call_id, name=name, arguments_json=arguments))
+    return parsed
 
 
 _DAILY_QUOTA_MARKERS = ("perday", "per_day", "requestsperday")

@@ -15,9 +15,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from redcell.arena.support_agent.codec import TOOL_CALL_CODEC_VERSION
 from redcell.protocols.run import ExperimentConditions, Run
 from redcell.storage import RunStore
-from redcell.versions import EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+from redcell.versions import (
+    EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
+    HOST_BOUND_EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
+)
 
 # 一份定死的条件。字段值刻意用非默认值,免得改默认值时测试察觉不到。
 _PINNED_PAYLOAD = {
@@ -58,6 +64,14 @@ def _pinned() -> ExperimentConditions:
     return ExperimentConditions.model_validate(json.loads(json.dumps(_PINNED_PAYLOAD)))
 
 
+def _current() -> ExperimentConditions:
+    """A genuine current-schema record: v4 must carry the tool-call protocol."""
+    payload = json.loads(json.dumps(_PINNED_PAYLOAD))
+    payload["arena"]["tool_call_protocol_version"] = TOOL_CALL_CODEC_VERSION
+    payload["conditions_schema_version"] = EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+    return ExperimentConditions.model_validate(payload)
+
+
 def test_experiment_fingerprint_is_pinned_to_a_literal() -> None:
     """摘要漂了就该在这里失败,而不是等历史证据读不出来才发现。
 
@@ -74,7 +88,7 @@ def test_regression_context_fingerprint_is_pinned_to_a_literal() -> None:
 def test_the_schema_version_stays_out_of_the_digest() -> None:
     """版本描述的是摘要的出处,不是被摘要的条件 —— 进了摘要就自我指涉了。"""
     versioned = _pinned().model_copy(
-        update={"conditions_schema_version": EXPERIMENT_CONDITIONS_SCHEMA_VERSION}
+        update={"conditions_schema_version": HOST_BOUND_EXPERIMENT_CONDITIONS_SCHEMA_VERSION}
     )
 
     assert versioned.fingerprint() == PINNED_FINGERPRINT
@@ -100,9 +114,7 @@ def test_a_record_from_an_older_schema_stays_readable() -> None:
 
 def test_a_current_schema_record_still_rejects_a_forged_fingerprint() -> None:
     """版本对得上时校验必须照常生效,否则这个机制就成了绕过校验的后门。"""
-    conditions = _pinned().model_copy(
-        update={"conditions_schema_version": EXPERIMENT_CONDITIONS_SCHEMA_VERSION}
-    )
+    conditions = _current()
 
     try:
         Run(
@@ -127,9 +139,7 @@ def test_current_and_legacy_runs_in_a_fresh_database_round_trip_together(tmp_pat
     碰巧存在的数据。
     """
     url = f"sqlite:///{(tmp_path / 'runs.db').as_posix()}"
-    conditions = _pinned().model_copy(
-        update={"conditions_schema_version": EXPERIMENT_CONDITIONS_SCHEMA_VERSION}
-    )
+    conditions = _current()
     current_run = Run(
         target_name="support-agent",
         policy_version="v1",
@@ -154,3 +164,25 @@ def test_current_and_legacy_runs_in_a_fresh_database_round_trip_together(tmp_pat
 
     assert len(loaded) == 2
     assert [run.conditions_fingerprint_verified for run in loaded] == [True, False]
+
+
+def test_current_schema_requires_the_tool_call_protocol() -> None:
+    """Without the protocol a v4 digest is identical whichever codec actually ran."""
+    payload = json.loads(json.dumps(_PINNED_PAYLOAD))
+    payload["conditions_schema_version"] = EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+
+    with pytest.raises(ValueError, match="工具调用协议"):
+        ExperimentConditions.model_validate(payload)
+
+
+def test_an_older_schema_cannot_claim_a_tool_call_protocol() -> None:
+    payload = json.loads(json.dumps(_PINNED_PAYLOAD))
+    payload["arena"]["tool_call_protocol_version"] = TOOL_CALL_CODEC_VERSION
+    payload["conditions_schema_version"] = HOST_BOUND_EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+
+    with pytest.raises(ValueError, match="工具调用协议"):
+        ExperimentConditions.model_validate(payload)
+
+
+def test_the_tool_call_protocol_enters_the_current_digest() -> None:
+    assert _current().fingerprint() != PINNED_FINGERPRINT

@@ -9,10 +9,19 @@ from redcell.arena.support_agent import (
     SYSTEM_PROMPT_CANARY,
     ArenaAdapter,
     DefenseLevel,
+    NativeToolCallCodec,
     TextToolCallCodec,
+    ToolCallProtocol,
 )
 from redcell.arena.support_agent import tools as arena_tools
-from redcell.llm import LLMProviderExhaustedError, LLMResponse, ScriptedProvider
+from redcell.llm import (
+    LLMMessage,
+    LLMProvider,
+    LLMProviderExhaustedError,
+    LLMResponse,
+    LLMToolCall,
+    ScriptedProvider,
+)
 from redcell.protocols import (
     AdapterInput,
     Message,
@@ -43,6 +52,29 @@ def test_codec_extracts_calls_and_strips_them_from_visible_text() -> None:
     assert decoded.malformed == 0
     assert "<tool_call>" not in decoded.visible
     assert "Let me check that for you." in decoded.visible
+
+
+def test_native_codec_preserves_provider_call_id_and_rejects_bad_arguments() -> None:
+    codec = NativeToolCallCodec()
+    decoded = codec.decode(
+        LLMResponse(
+            content="",
+            tool_calls=[
+                LLMToolCall(
+                    id="call-1",
+                    name="search_faq",
+                    arguments_json='{"topic":"refund"}',
+                ),
+                LLMToolCall(id="call-2", name="search_faq", arguments_json="not-json"),
+            ],
+        )
+    )
+
+    assert [(call.id, call.name) for call in decoded.calls] == [("call-1", "search_faq")]
+    assert decoded.calls[0].arguments == {"topic": "refund"}
+    assert decoded.malformed == 1
+    assert codec.system_suffix([]) == ""
+    assert codec.provider_tool_choice == "auto"
 
 
 def test_codec_counts_malformed_calls_instead_of_silently_dropping_them() -> None:
@@ -272,6 +304,58 @@ async def test_adapter_surfaces_malformed_count_for_calibration() -> None:
     result = await adapter.send(_input("查订单"))
 
     assert result.tool_calls == []
+    assert result.malformed_tool_calls == 1
+
+
+class _NativeProvider(LLMProvider):
+    """Returns queued native responses and records every request's messages."""
+
+    def __init__(self, responses: list[LLMResponse]) -> None:
+        self._responses = list(responses)
+        self.requests: list[list[LLMMessage]] = []
+
+    @property
+    def name(self) -> str:
+        return "native-fake"
+
+    async def complete(self, messages, **_options) -> LLMResponse:
+        self.requests.append(list(messages))
+        return self._responses.pop(0)
+
+
+async def test_native_malformed_call_still_gets_a_matching_tool_reply() -> None:
+    """Every echoed call id needs a role=tool reply, or the next request is rejected.
+
+    The malformed call is not executed and not recorded as a tool result; it only
+    receives a format error so the conversation stays protocol-valid.
+    """
+    provider = _NativeProvider(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    LLMToolCall(
+                        id="call-1", name="search_faq", arguments_json='{"topic":"refund"}'
+                    ),
+                    LLMToolCall(id="call-2", name="search_faq", arguments_json="not-json"),
+                ],
+            ),
+            LLMResponse(content="Here is the refund policy."),
+        ]
+    )
+    adapter = ArenaAdapter(provider, tool_call_protocol=ToolCallProtocol.NATIVE_V1)
+
+    result = await adapter.send(_input("What is the refund policy?"))
+
+    followup = provider.requests[1]
+    assistant = next(message for message in followup if message.tool_calls)
+    replies = [message for message in followup if message.role is Role.TOOL]
+    assert [call.id for call in assistant.tool_calls] == ["call-1", "call-2"]
+    assert [reply.tool_call_id for reply in replies] == ["call-1", "call-2"]
+    assert json.loads(replies[0].content)["status"] == "ok"
+    assert json.loads(replies[1].content)["status"] == "invalid_arguments"
+    assert [call.id for call in result.tool_calls] == ["call-1"]
+    assert len(result.tool_results) == 1
     assert result.malformed_tool_calls == 1
 
 

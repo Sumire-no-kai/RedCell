@@ -15,6 +15,7 @@ from scripts.run_gate_matrix import (
     _subprocess_env,
 )
 
+from redcell.arena.support_agent.codec import TOOL_CALL_CODEC_VERSION
 from redcell.gate_analysis import GateCondition, SeedPlan
 from redcell.gate_plan import SeedRole, build_gate_plan
 from redcell.gate_runner import (
@@ -605,7 +606,10 @@ def _finished_run(
             target=provider,
             attacker=provider,
             arena=ArenaRunConfiguration(
-                defense="standard", enforce_permissions=True, enforce_confirmation=True
+                defense="standard",
+                enforce_permissions=True,
+                enforce_confirmation=True,
+                tool_call_protocol_version=TOOL_CALL_CODEC_VERSION,
             ),
             strategy_catalogue=StrategyCatalogue(
                 version="phase0.5-v1", strategies=PHASE_0_STRATEGIES

@@ -176,9 +176,12 @@ def load_frozen_utility_baseline(
     path: Path = PHASE0_5_UTILITY_BASELINE_PATH,
 ) -> UtilityBaseline | None:
     """读取已冻结的基线;没有就是没有,不造一个默认值出来。"""
-    if not path.exists():
+    resolved = path
+    if path == PHASE0_5_UTILITY_BASELINE_PATH and not path.exists():
+        resolved = Path(__file__).resolve().parents[2] / path
+    if not resolved.exists():
         return None
-    return UtilityBaseline.model_validate_json(path.read_text(encoding="utf-8"))
+    return UtilityBaseline.model_validate_json(resolved.read_text(encoding="utf-8"))
 
 
 def freeze_utility_baseline(

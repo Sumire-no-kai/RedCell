@@ -15,10 +15,11 @@ import json
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Collection
+from enum import StrEnum
 from typing import Any, NamedTuple
 
 from redcell.arena.support_agent.tools import ToolExecution
-from redcell.llm.base import LLMResponse
+from redcell.llm.base import LLMMessage, LLMResponse, LLMToolCall, LLMToolDefinition
 from redcell.protocols.adapter import ToolCall
 from redcell.protocols.common import Role, new_id
 
@@ -53,6 +54,28 @@ class ToolCallCodec(ABC):
         """
         return Role.USER
 
+    @property
+    @abstractmethod
+    def version(self) -> str:
+        """Stable experiment identity for this request/response contract."""
+
+    def provider_tools(self, specs: list[dict[str, Any]]) -> list[LLMToolDefinition] | None:
+        return None
+
+    @property
+    def provider_tool_choice(self) -> str | None:
+        return None
+
+    def followup_messages(
+        self,
+        response: LLMResponse,
+        executed: list[tuple[ToolCall, ToolExecution]],
+    ) -> list[LLMMessage]:
+        return [
+            LLMMessage(role=Role.ASSISTANT, content=response.content),
+            LLMMessage(role=self.results_role, content=self.encode_results(executed)),
+        ]
+
     @abstractmethod
     def system_suffix(self, specs: list[dict[str, Any]]) -> str:
         """需要追加到 system prompt 的工具说明。
@@ -76,6 +99,14 @@ v1 → v2(2026-08-12):接受 `<tool_call>tool_name</tool_call>` 这种零参数�
 并把「无标记的裸 JSON 工具调用」计入 malformed。**这会改变同一模型输出的解码结果**,
 因此凡是声称"同条件可比"的指纹都必须带上它 —— 见 `utility_context_payload`。
 """
+
+NATIVE_TOOL_CALL_CODEC_VERSION = "native-function-calling-v1"
+
+
+class ToolCallProtocol(StrEnum):
+    TEXT_V2 = TOOL_CALL_CODEC_VERSION
+    NATIVE_V1 = NATIVE_TOOL_CALL_CODEC_VERSION
+
 
 _OPEN_TAG = "<tool_call>"
 _CLOSE_TAG = "</tool_call>"
@@ -137,6 +168,10 @@ class TextToolCallCodec(ToolCallCodec):
         "这个词确实是我们的工具" —— 说不准就宁可继续计坏格式。
         """
         self._known_tools = frozenset(known_tools or ())
+
+    @property
+    def version(self) -> str:
+        return TOOL_CALL_CODEC_VERSION
 
     def system_suffix(self, specs: list[dict[str, Any]]) -> str:
         lines = []
@@ -232,6 +267,106 @@ class TextToolCallCodec(ToolCallCodec):
             status = "error" if result.rejected else "ok"
             parts.append(f'<tool_result name="{call.name}" status="{status}">{body}</tool_result>')
         return "\n".join(parts)
+
+
+class NativeToolCallCodec(ToolCallCodec):
+    """Translate structured provider function calls into arena calls."""
+
+    @property
+    def version(self) -> str:
+        return NATIVE_TOOL_CALL_CODEC_VERSION
+
+    @property
+    def results_role(self) -> Role:
+        return Role.TOOL
+
+    @property
+    def provider_tool_choice(self) -> str:
+        return "auto"
+
+    def system_suffix(self, specs: list[dict[str, Any]]) -> str:
+        return ""
+
+    def provider_tools(self, specs: list[dict[str, Any]]) -> list[LLMToolDefinition]:
+        return [LLMToolDefinition.model_validate(spec) for spec in specs]
+
+    def decode(self, response: LLMResponse) -> DecodedReply:
+        calls: list[ToolCall] = []
+        malformed = 0
+        for native in response.tool_calls:
+            arguments = _native_arguments(native)
+            if arguments is None:
+                malformed += 1
+                continue
+            calls.append(ToolCall(id=native.id, name=native.name, arguments=arguments))
+        return DecodedReply(visible=response.content.strip(), calls=calls, malformed=malformed)
+
+    def encode_results(self, executed: list[tuple[ToolCall, ToolExecution]]) -> str:
+        return "\n".join(self._result_content(result) for _call, result in executed)
+
+    def followup_messages(
+        self,
+        response: LLMResponse,
+        executed: list[tuple[ToolCall, ToolExecution]],
+    ) -> list[LLMMessage]:
+        # The API requires a role=tool reply for every call id echoed in the assistant
+        # message. A call whose arguments did not parse was never executed; it gets an
+        # explicit format error that stays distinct from a business rejection.
+        decodable = [
+            native for native in response.tool_calls if _native_arguments(native) is not None
+        ]
+        if [native.id for native in decodable] != [call.id for call, _ in executed]:
+            raise ValueError("executed tool calls do not match the decodable native calls")
+        results = iter(executed)
+        messages = [
+            LLMMessage(
+                role=Role.ASSISTANT,
+                content=response.content,
+                tool_calls=response.tool_calls,
+            )
+        ]
+        for native in response.tool_calls:
+            if _native_arguments(native) is None:
+                content = _INVALID_ARGUMENTS_RESULT
+            else:
+                _call, result = next(results)
+                content = self._result_content(result)
+            messages.append(
+                LLMMessage(
+                    role=Role.TOOL,
+                    content=content,
+                    tool_call_id=native.id,
+                    name=native.name,
+                )
+            )
+        return messages
+
+    @staticmethod
+    def _result_content(result: ToolExecution) -> str:
+        return json.dumps(
+            {
+                "status": "error" if result.rejected else "ok",
+                "content": result.error if result.rejected else result.content,
+            },
+            ensure_ascii=False,
+        )
+
+
+_INVALID_ARGUMENTS_RESULT = json.dumps(
+    {
+        "status": "invalid_arguments",
+        "content": "Arguments were not a JSON object; the call was not executed.",
+    }
+)
+
+
+def _native_arguments(native: LLMToolCall) -> dict[str, Any] | None:
+    """Parsed arguments of a native call, or None when it counts as malformed."""
+    try:
+        arguments = json.loads(native.arguments_json)
+    except json.JSONDecodeError:
+        return None
+    return arguments if isinstance(arguments, dict) else None
 
 
 def _as_tool_call(payload: object) -> ToolCall | None:

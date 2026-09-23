@@ -837,6 +837,19 @@ def test_a_newly_added_optional_field_does_not_change_existing_fingerprints() ->
     assert without.utility_context_fingerprint() == with_price.utility_context_fingerprint()
 
 
+def test_tool_protocol_changes_utility_context_without_rewriting_text_v2_baseline() -> None:
+    text = controls_conditions(target=_target())
+    native = controls_conditions(
+        target=_target(),
+        tool_call_protocol_version="native-function-calling-v1",
+    )
+
+    text_payload = text.utility_context_payload()
+    assert text_payload["tool_call_codec_version"] == TOOL_CALL_CODEC_VERSION
+    assert "tool_call_protocol_version" not in text_payload["negative_arena"]
+    assert text.utility_context_fingerprint() != native.utility_context_fingerprint()
+
+
 # ── 裁决证据(2026-08-11)─────────────────────────────────────────────────
 
 

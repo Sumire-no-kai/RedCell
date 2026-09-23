@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from redcell.arena.support_agent import ToolCallProtocol
 from redcell.budget import BudgetLimits
 from redcell.cli import ExitCode, app
 from redcell.config import (
@@ -14,7 +15,8 @@ from redcell.config import (
     ProviderSettings,
     TargetSettings,
 )
-from redcell.gate_analysis import PHASE_0_5_SEED_PLAN_DIGEST
+from redcell.controls import UTILITY_CONTEXT_VERSION, ControlsReport, controls_conditions
+from redcell.gate_analysis import PHASE_0_5_SEED_PLAN_DIGEST, SeedPlan
 from redcell.gate_billing_evidence import (
     BillingEvidenceBundle,
     BillingRole,
@@ -22,14 +24,17 @@ from redcell.gate_billing_evidence import (
     billing_evidence_template,
     billing_subject_fingerprint,
 )
+from redcell.gate_plan import build_gate_plan
 from redcell.gate_preflight import run_preflight
 from redcell.protocols.run import Run, UsageAccountingMode
 from redcell.storage import RunStore
+from redcell.utility_baseline import UtilityBaseline
 
 runner = CliRunner()
 
 FROZEN_SEED_PLAN = Path("docs/PHASE0_5_SEED_PLAN.json").resolve()
 GOLDEN_FIXTURES = Path("tests/fixtures/level1-golden-v2.json").resolve()
+PHASE_0_5D_SEED_PLAN = Path("docs/PHASE0_5D_SEED_PLAN.json").resolve()
 
 ROLES = ("target", "attacker", "controller")
 
@@ -118,6 +123,103 @@ def test_fully_configured_environment_passes(tmp_path) -> None:
     report = _report(tmp_path)
 
     assert report.passed, report.summary()
+
+
+def test_replacement_experiment_preflight_rejects_incompatible_utility_baseline(tmp_path) -> None:
+    roles = _roles()
+    target = next(settings for name, settings in roles if name == "target")
+    conditions = controls_conditions(target=target.run_configuration())
+    controls = ControlsReport(
+        conditions=conditions,
+        utility_context_fingerprint=conditions.utility_context_fingerprint(),
+        utility_context_version=UTILITY_CONTEXT_VERSION,
+    )
+    report = run_preflight(
+        seed_plan_json=PHASE_0_5D_SEED_PLAN,
+        database_url=_db(tmp_path),
+        golden_fixtures=GOLDEN_FIXTURES,
+        roles=roles,
+        shared_rate_limit_db=f"sqlite:///{tmp_path / 'shared-rate-limit.db'}",
+        billing_evidence=_billing_evidence(roles),
+        controls=controls,
+        utility_baseline=UtilityBaseline(
+            context_fingerprint="f" * 64,
+            negative_repeats=20,
+            per_task={"task": 20},
+        ),
+        gate_plan=_phase_0_5d_plan(ToolCallProtocol.TEXT_V2),
+    )
+
+    assert not report.passed
+    assert _check(report, "gate_plan").passed
+    assert not _check(report, "utility_baseline_context_mismatch").passed
+
+
+def _phase_0_5d_plan(protocol: ToolCallProtocol):
+    seed_plan = SeedPlan.model_validate_json(PHASE_0_5D_SEED_PLAN.read_text(encoding="utf-8"))
+    return build_gate_plan(
+        seed_plan,
+        max_attempts=500,
+        database_url="sqlite:///runs/phase-0-5d.db",
+        report_directory="runs/phase-0-5d",
+        tool_call_protocol=protocol,
+    )
+
+
+def _replacement_preflight(tmp_path, *, seed_plan_json=PHASE_0_5D_SEED_PLAN, gate_plan=None):
+    roles = _roles()
+    target = next(settings for name, settings in roles if name == "target")
+    conditions = controls_conditions(target=target.run_configuration())
+    return run_preflight(
+        seed_plan_json=seed_plan_json,
+        database_url=_db(tmp_path),
+        golden_fixtures=GOLDEN_FIXTURES,
+        roles=roles,
+        shared_rate_limit_db=f"sqlite:///{tmp_path / 'shared-rate-limit.db'}",
+        billing_evidence=_billing_evidence(roles),
+        controls=ControlsReport(
+            conditions=conditions,
+            utility_context_fingerprint=conditions.utility_context_fingerprint(),
+            utility_context_version=UTILITY_CONTEXT_VERSION,
+        ),
+        utility_baseline=UtilityBaseline(
+            context_fingerprint=conditions.utility_context_fingerprint(),
+            negative_repeats=20,
+            per_task={"task": 20},
+        ),
+        gate_plan=gate_plan,
+    )
+
+
+def test_preflight_takes_the_tool_protocol_from_the_gate_plan(tmp_path) -> None:
+    """Text-v2 controls must not pass preflight for a matrix planned with native calls."""
+    report = _replacement_preflight(
+        tmp_path, gate_plan=_phase_0_5d_plan(ToolCallProtocol.NATIVE_V1)
+    )
+
+    assert not report.passed
+    mismatch = _check(report, "controls_tool_protocol_mismatch")
+    assert not mismatch.passed
+    assert ToolCallProtocol.NATIVE_V1.value in mismatch.detail
+
+
+def test_replacement_experiment_preflight_requires_the_gate_plan(tmp_path) -> None:
+    report = _replacement_preflight(tmp_path, gate_plan=None)
+
+    assert not report.passed
+    assert not _check(report, "gate_plan_missing").passed
+
+
+def test_invalid_seed_plan_reports_undetermined_utility_evidence(tmp_path) -> None:
+    """An unreadable seed plan must not silently drop the experiment-specific checks."""
+    broken = tmp_path / "seed-plan.json"
+    broken.write_text("{not json", encoding="utf-8")
+
+    report = _replacement_preflight(tmp_path, seed_plan_json=broken)
+
+    assert not report.passed
+    assert not _check(report, "seed_plan").passed
+    assert not _check(report, "utility_evidence_undetermined").passed
 
 
 @pytest.mark.parametrize(

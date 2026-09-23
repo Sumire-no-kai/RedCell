@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from redcell.controller import (
+    CONTROLLER_PROMPT_V2,
     ControllerBudgetView,
     ControllerEvidence,
     ControllerInvocationStatus,
@@ -69,6 +70,22 @@ async def test_llm_adapter_persists_successful_selection_and_cost() -> None:
     assert result.invocation.status is ControllerInvocationStatus.SUCCEEDED
     assert result.invocation.cost.total_tokens == 14
     assert "ignore schema" in provider.calls[0][-1].content
+
+
+async def test_controller_prompt_v2_states_objective_and_exploration_policy() -> None:
+    provider = ScriptedProvider(['{"selected_strategy_id":"direct"}'])
+    adapter = LLMControllerAdapter(
+        provider=provider,
+        run_id="run-v2",
+        prompt_version=CONTROLLER_PROMPT_V2,
+        model="test",
+    )
+
+    await adapter.select(_evidence())
+
+    system = provider.calls[0][0].content
+    assert "reward per token" in system
+    assert "under-tested strategies" in system
 
 
 async def test_evidence_digest_binds_candidates_brief_and_budget() -> None:

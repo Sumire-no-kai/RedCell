@@ -26,6 +26,7 @@ from redcell.versions import (
     EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
     FINDING_SIGNATURE_VERSION,
     LEVEL1_SCORER_VERSION,
+    SUPPORTED_EXPERIMENT_CONDITIONS_SCHEMA_VERSIONS,
 )
 
 
@@ -223,6 +224,8 @@ class ArenaRunConfiguration(RedCellModel):
     defense: str
     enforce_permissions: bool
     enforce_confirmation: bool
+    tool_call_protocol_version: str | None = None
+    """None preserves v3 evidence; every v4 Run records text-v2 or native-v1 explicitly."""
 
 
 class ExperimentConditions(RedCellModel):
@@ -265,6 +268,24 @@ class ExperimentConditions(RedCellModel):
     Gate 只采信验得过的 Run。
     """
 
+    @model_validator(mode="after")
+    def _protocol_identity_matches_schema(self) -> ExperimentConditions:
+        """v4 exists to bind the tool-call protocol into the fingerprint.
+
+        The fingerprint drops None fields so that v3 evidence still verifies; a v4
+        record without the protocol would therefore hash the same whichever codec ran.
+        """
+        protocol = self.arena.tool_call_protocol_version
+        is_v4 = self.conditions_schema_version == EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+        if is_v4 and not protocol:
+            raise ValueError(f"{EXPERIMENT_CONDITIONS_SCHEMA_VERSION} 必须记录工具调用协议")
+        if not is_v4 and protocol is not None:
+            raise ValueError(
+                f"只有 {EXPERIMENT_CONDITIONS_SCHEMA_VERSION} 可以记录工具调用协议;"
+                f"实际为 {self.conditions_schema_version}"
+            )
+        return self
+
     def fingerprint(self) -> str:
         payload = json.dumps(
             self.model_dump(mode="json", exclude_none=True, exclude={"conditions_schema_version"}),
@@ -286,7 +307,7 @@ class ExperimentConditions(RedCellModel):
             "actor": self.actor,
             "target": self.target.model_dump(mode="json", exclude_none=True),
             "attacker": self.attacker.model_dump(mode="json", exclude_none=True),
-            "arena": self.arena.model_dump(mode="json"),
+            "arena": self.arena.model_dump(mode="json", exclude_none=True),
             "request_timeouts": (
                 self.request_timeouts.model_dump(mode="json")
                 if self.request_timeouts is not None
@@ -391,7 +412,7 @@ class Run(RedCellModel):
             self.__dict__["experiment_fingerprint"] = expected
         elif (
             self.experiment_conditions.conditions_schema_version
-            == EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+            in SUPPORTED_EXPERIMENT_CONDITIONS_SCHEMA_VERSIONS
             and self.experiment_fingerprint != expected
         ):
             raise ValueError("experiment_fingerprint 与 experiment_conditions 不一致")
@@ -414,7 +435,7 @@ class Run(RedCellModel):
             return False
         if (
             self.experiment_conditions.conditions_schema_version
-            != EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+            not in SUPPORTED_EXPERIMENT_CONDITIONS_SCHEMA_VERSIONS
         ):
             return False
         return self.experiment_fingerprint == self.experiment_conditions.fingerprint()

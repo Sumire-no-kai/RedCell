@@ -14,7 +14,13 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Sequence
 
-from redcell.llm.base import LLMMessage, LLMProvider, LLMProviderExhaustedError, LLMResponse
+from redcell.llm.base import (
+    LLMMessage,
+    LLMProvider,
+    LLMProviderExhaustedError,
+    LLMResponse,
+    LLMToolDefinition,
+)
 
 
 class ScriptedRule:
@@ -81,6 +87,8 @@ class ScriptedProvider(LLMProvider):
         model: str | None = None,
         temperature: float = 0.0,
         max_tokens: int | None = None,
+        tools: list[LLMToolDefinition] | None = None,
+        tool_choice: str | None = None,
     ) -> LLMResponse:
         self.calls.append(list(messages))
         content = self._resolve(messages)

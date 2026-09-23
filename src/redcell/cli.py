@@ -23,6 +23,7 @@ from redcell.arena.support_agent import (
     SUPPORT_AGENT_POLICY,
     ArenaAdapter,
     DefenseLevel,
+    ToolCallProtocol,
 )
 from redcell.attacker_control import (
     AttackerControlConditions,
@@ -40,7 +41,7 @@ from redcell.config import (
     load_target,
 )
 from redcell.console import ensure_utf8_output
-from redcell.controller import LLMControllerAdapter
+from redcell.controller import CONTROLLER_PROMPT_V1, CONTROLLER_PROMPT_V2, LLMControllerAdapter
 from redcell.controller_controls import (
     ControllerContractReport,
     run_controller_contract_controls,
@@ -100,6 +101,7 @@ from redcell.protocols.run import (
 )
 from redcell.protocols.strategy import StrategyCatalogue, select_applicable
 from redcell.randomness import controller_seed_for
+from redcell.replay_checkpoint import ReplayPersistenceError, save_replay_json
 from redcell.report import ReportData, write_report
 from redcell.scoring.level1 import Level1Scorer
 from redcell.search import (
@@ -113,11 +115,15 @@ from redcell.strategies import PHASE_0_STRATEGIES
 from redcell.utility_baseline import (
     PHASE0_5_UTILITY_BASELINE_PATH,
     freeze_utility_baseline,
+    load_frozen_utility_baseline,
     utility_baseline_json,
 )
 from redcell.utility_confirmation import load_utility_confirmation_evidence
-from redcell.validator import ValidationReport, validate_attack_paths
-from redcell.versions import EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+from redcell.validator import ReplayStoppedError, ValidationReport, validate_attack_paths
+from redcell.versions import (
+    EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
+    HOST_BOUND_EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
+)
 
 app = typer.Typer(
     add_completion=False,
@@ -215,6 +221,7 @@ def _arena_adapter(
     defense: DefenseLevel,
     enforce_permissions: bool = True,
     enforce_confirmation: bool = True,
+    tool_call_protocol_version: str | None = None,
 ) -> ArenaAdapter:
     """让实际 Target 调用与落盘的实验条件使用同一份配置。"""
     return ArenaAdapter(
@@ -222,6 +229,9 @@ def _arena_adapter(
         defense=defense,
         enforce_permissions=enforce_permissions,
         enforce_confirmation=enforce_confirmation,
+        tool_call_protocol=ToolCallProtocol(
+            tool_call_protocol_version or ToolCallProtocol.TEXT_V2.value
+        ),
         model=configuration.model,
         temperature=configuration.temperature,
         max_tokens=configuration.max_tokens,
@@ -238,6 +248,7 @@ def _experiment_conditions(
     enforce_confirmation: bool,
     execution_host: ExecutionHostConfiguration | None = None,
     declared_controller_timeout_seconds: float | None = None,
+    tool_call_protocol_version: str | None = None,
 ) -> ExperimentConditions:
     """把会影响结论的配置冻结进 Run；绝不把凭据写入 SQLite。"""
     if providers is None:
@@ -285,11 +296,17 @@ def _experiment_conditions(
             defense=defense.value,
             enforce_permissions=enforce_permissions,
             enforce_confirmation=enforce_confirmation,
+            tool_call_protocol_version=tool_call_protocol_version,
         ),
         request_timeouts=request_timeouts,
         execution_host=execution_host,
         # 新 Run 必须自带 schema 版本,否则它的摘要日后也只能"保留但验不了"。
-        conditions_schema_version=EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
+        # 没有协议身份的条件只能来自 v3 记录的 resume;照实标 v3,不冒充 v4。
+        conditions_schema_version=(
+            EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+            if tool_call_protocol_version is not None
+            else HOST_BOUND_EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+        ),
     )
 
 
@@ -320,6 +337,14 @@ def run(
     enforce_confirmation: Annotated[
         bool, typer.Option(help="靶场是否强制「高危动作先问过用户」(校准旋钮 ④)")
     ] = True,
+    tool_call_protocol: Annotated[
+        ToolCallProtocol,
+        typer.Option(help="Target 工具协议：text-tool-call-codec-v2 / native-function-calling-v1"),
+    ] = ToolCallProtocol.TEXT_V2,
+    controller_prompt_version: Annotated[
+        str,
+        typer.Option(help="LLM Controller prompt 身份：controller-prompt-v1 / v2"),
+    ] = CONTROLLER_PROMPT_V1,
     per_strategy: Annotated[
         int | None,
         typer.Option(
@@ -375,6 +400,10 @@ def run(
         raise typer.BadParameter("非法 search 或 cross-attempt-memory 值") from exc
     if selector is SearchSelector.LLM and max_tokens is None:
         raise typer.BadParameter("--search llm 必须设置 --max-tokens，Controller 需要总 Token 预算")
+    if controller_prompt_version not in {CONTROLLER_PROMPT_V1, CONTROLLER_PROMPT_V2}:
+        raise typer.BadParameter("不支持的 --controller-prompt-version")
+    if selector is not SearchSelector.LLM and controller_prompt_version != CONTROLLER_PROMPT_V1:
+        raise typer.BadParameter("只有 --search llm 可以选择 Controller prompt v2")
     execution_host = None
     if execution_host_profile is not None:
         try:
@@ -438,6 +467,7 @@ def run(
         enforce_confirmation=enforce_confirmation,
         execution_host=execution_host,
         declared_controller_timeout_seconds=declared_controller_timeout_seconds,
+        tool_call_protocol_version=tool_call_protocol.value,
     )
     conditions = conditions.model_copy(
         update={
@@ -459,7 +489,7 @@ def run(
                     provider=controller_configuration,
                     connection_id=f"controller:{controller_configuration.provider}",
                     connection_fingerprint=controller_configuration.base_url,
-                    prompt_version="controller-prompt-v1",
+                    prompt_version=controller_prompt_version,
                     evidence_policy_version="controller-evidence-v1",
                     thinking_disabled=controller_configuration.extra_body.thinking_disabled,
                 )
@@ -475,6 +505,7 @@ def run(
         defense=defense,
         enforce_permissions=enforce_permissions,
         enforce_confirmation=enforce_confirmation,
+        tool_call_protocol_version=conditions.arena.tool_call_protocol_version,
     )
 
     run_record = Run(
@@ -511,7 +542,7 @@ def run(
             driver=LLMControllerAdapter(
                 provider=controller_provider,
                 run_id=run_record.id,
-                prompt_version="controller-prompt-v1",
+                prompt_version=controller_prompt_version,
                 model=controller_configuration.model,
                 temperature=controller_configuration.temperature,
                 max_tokens=controller_configuration.max_tokens,
@@ -622,6 +653,7 @@ def resume(
             enforce_confirmation=conditions.arena.enforce_confirmation,
             execution_host=conditions.execution_host,
             declared_controller_timeout_seconds=declared_controller_timeout_seconds,
+            tool_call_protocol_version=conditions.arena.tool_call_protocol_version,
         )
         controller_configuration = None
         if conditions.search is not None and conditions.search.selector is SearchSelector.LLM:
@@ -669,6 +701,7 @@ def resume(
         defense=defense,
         enforce_permissions=conditions.arena.enforce_permissions,
         enforce_confirmation=conditions.arena.enforce_confirmation,
+        tool_call_protocol_version=conditions.arena.tool_call_protocol_version,
     )
     controller = None
     driver = None
@@ -807,6 +840,10 @@ def gate_report(
         Path | None,
         typer.Option(help="三角色计费 Token coverage 的非凭据证据 JSON；缺失时报告保持 INCOMPLETE"),
     ] = None,
+    utility_baseline_json: Annotated[
+        Path | None,
+        typer.Option(help="本次实验冻结的 utility baseline；不得跨 Target 或工具协议复用"),
+    ] = PHASE0_5_UTILITY_BASELINE_PATH,
 ) -> None:
     """从已落盘的 Run/Event/Finding 重建冻结的 Phase 0.5 Gate 分析。"""
     confirmation_paths = (
@@ -883,6 +920,16 @@ def gate_report(
         if billing_evidence_json is not None
         else None
     )
+    utility_baseline = (
+        load_frozen_utility_baseline(utility_baseline_json)
+        if utility_baseline_json is not None
+        else None
+    )
+    if utility_baseline_json is not None and utility_baseline is None:
+        typer.secho(
+            f"找不到 utility baseline:{utility_baseline_json}", fg=typer.colors.RED, err=True
+        )
+        raise typer.Exit(ExitCode.BAD_CONFIG)
     with RunStore(db) as store:
         result = build_gate_report(
             store,
@@ -896,6 +943,7 @@ def gate_report(
             seed_plan=seed_plan,
             matrix_state=matrix_state,
             billing_evidence=billing_evidence,
+            utility_baseline=utility_baseline,
         )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(result.model_dump_json(indent=2), encoding="utf-8")
@@ -915,6 +963,10 @@ def gate_plan(
         Path | None,
         typer.Option(help="每个正式 Run 的报告目录；默认按 seed plan 的实验身份隔离"),
     ] = None,
+    tool_call_protocol: Annotated[
+        ToolCallProtocol,
+        typer.Option(help="冻结进计划并传给每个正式 Run 的 Target 工具协议"),
+    ] = ToolCallProtocol.TEXT_V2,
     out: Annotated[Path, typer.Option(help="只读执行清单 JSON 输出路径")] = Path(
         "runs/gate-plan.json"
     ),
@@ -928,6 +980,7 @@ def gate_plan(
             max_attempts=max_attempts,
             database_url=db,
             report_directory=str(report_directory),
+            tool_call_protocol=tool_call_protocol,
         )
     except (OSError, ValueError) as exc:
         typer.secho(f"Gate plan 配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
@@ -949,6 +1002,18 @@ def gate_preflight(
     billing_evidence_json: Annotated[
         Path | None,
         typer.Option(help="三角色计费 Token coverage 的非凭据证据 JSON；缺失即拒绝正式 Gate"),
+    ] = None,
+    controls_json: Annotated[
+        Path | None,
+        typer.Option(help="矩阵前、与计划配置一致的 controls JSON"),
+    ] = None,
+    utility_baseline_json: Annotated[
+        Path | None,
+        typer.Option(help="矩阵前冻结且与 controls context 一致的 utility baseline"),
+    ] = PHASE0_5_UTILITY_BASELINE_PATH,
+    gate_plan_json: Annotated[
+        Path | None,
+        typer.Option(help="已生成的 Gate plan；工具协议以其中冻结的值为准"),
     ] = None,
     utility_confirmation_assessment_json: Annotated[
         Path | None,
@@ -1011,12 +1076,30 @@ def gate_preflight(
             if billing_evidence_json is not None
             else None
         )
+        controls_result = (
+            ControlsReport.from_report_json(controls_json.read_text(encoding="utf-8"))
+            if controls_json is not None
+            else None
+        )
+        utility_baseline = (
+            load_frozen_utility_baseline(utility_baseline_json)
+            if utility_baseline_json is not None
+            else None
+        )
+        gate_plan = (
+            GatePlan.model_validate_json(gate_plan_json.read_text(encoding="utf-8"))
+            if gate_plan_json is not None
+            else None
+        )
         report = run_preflight(
             seed_plan_json=seed_plan_json,
             database_url=db,
             golden_fixtures=golden_fixtures,
             billing_evidence=billing_evidence,
             utility_confirmation=utility_confirmation,
+            controls=controls_result,
+            utility_baseline=utility_baseline,
+            gate_plan=gate_plan,
         )
     except (OSError, ValueError) as exc:
         typer.secho(f"Gate preflight 配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
@@ -1096,8 +1179,15 @@ def validate_paths(
         "runs/validation.json"
     ),
     repeats: Annotated[int, typer.Option(help="每条攻击路径重放次数；正式 Gate 必须为 5")] = 5,
+    checkpoint: Annotated[
+        Path | None, typer.Option(help="Replay checkpoint; automatically resume matching inputs")
+    ] = None,
 ) -> None:
     """只重放正式 320k 前缀中的攻击路径，不重跑 Generator 或 Controller。"""
+    checkpoint_path = checkpoint or out.with_name(f"{out.stem}.checkpoint.json")
+    if checkpoint_path.resolve() == out.resolve():
+        typer.secho("Checkpoint and final report must use different paths.", err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG)
     if repeats != 5:
         typer.secho("配置被拒绝:正式 Gate 的 repeats 必须固定为 5。", fg=typer.colors.RED, err=True)
         raise typer.Exit(ExitCode.BAD_CONFIG)
@@ -1135,6 +1225,7 @@ def validate_paths(
         defense=DefenseLevel(reference.arena.defense),
         enforce_permissions=reference.arena.enforce_permissions,
         enforce_confirmation=reference.arena.enforce_confirmation,
+        tool_call_protocol_version=reference.arena.tool_call_protocol_version,
     )
 
     async def _validate_and_close() -> ValidationReport:
@@ -1148,19 +1239,32 @@ def validate_paths(
                 target_configuration=target_configuration,
                 gate_context_fingerprint=evidence.runs[0].gate_context_fingerprint(),
                 run_ids=[run.id for run in evidence.runs],
+                checkpoint_path=checkpoint_path,
+                on_progress=lambda done, total: typer.echo(
+                    f"Replay checkpoint: {done}/{total} trials complete"
+                ),
             )
         finally:
             await target.aclose()
 
     try:
         report = asyncio.run(_validate_and_close())
+        save_replay_json(out, report)
+    except (ReplayStoppedError, ReplayPersistenceError) as exc:
+        typer.secho(f"Replay stopped: {exc}\nCheckpoint: {checkpoint_path}", err=True)
+        raise typer.Exit(1) from exc
     except ValueError as exc:
         typer.secho(f"Validation 执行被拒绝:{exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(ExitCode.BAD_CONFIG) from exc
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(report.model_dump_json(indent=2), encoding="utf-8")
     typer.echo(f"Validation: {out}")
     typer.echo(f"paths {len(report.results)} × {repeats} replays")
+    if not report.target_usage.usage_known:
+        typer.secho(
+            "Replay completed with unknown usage from failed/interrupted calls; "
+            "known token/cost totals are lower bounds, not complete billing evidence.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
 
 
 @app.command(name="controller-controls")
@@ -1168,8 +1272,15 @@ def controller_controls(
     out: Annotated[
         Path, typer.Option(help="冻结 Controller contract control JSON 输出路径")
     ] = Path("runs/controller-contract-controls.json"),
+    controller_prompt_version: Annotated[
+        str,
+        typer.Option(help="与正式 Run 相同的 Controller prompt 身份：controller-prompt-v1 / v2"),
+    ] = CONTROLLER_PROMPT_V1,
 ) -> None:
     """Run the fixed 12-case Controller preflight without a target or Gate seed."""
+    # Gate 要求 controls 与正式 Run 的 Controller 配置逐字段相同，prompt 版本也在其中。
+    if controller_prompt_version not in {CONTROLLER_PROMPT_V1, CONTROLLER_PROMPT_V2}:
+        raise typer.BadParameter("不支持的 --controller-prompt-version")
     try:
         provider, configuration = load_controller()
     except ProviderConfigError as exc:
@@ -1179,7 +1290,7 @@ def controller_controls(
     driver = LLMControllerAdapter(
         provider=provider,
         run_id="controller-contract-controls",
-        prompt_version="controller-contract-controls-v1",
+        prompt_version=controller_prompt_version,
         model=configuration.model,
         temperature=configuration.temperature,
         max_tokens=configuration.max_tokens,
@@ -1188,7 +1299,7 @@ def controller_controls(
         provider=configuration,
         connection_id=f"controller:{configuration.provider}",
         connection_fingerprint=configuration.base_url,
-        prompt_version="controller-prompt-v1",
+        prompt_version=controller_prompt_version,
         evidence_policy_version="controller-evidence-v1",
         thinking_disabled=configuration.extra_body.thinking_disabled,
     )
@@ -1211,6 +1322,10 @@ def controller_controls(
 @app.command(name="controls")
 def controls(
     out: Annotated[Path, typer.Option(help="明细输出目录")] = Path("runs"),
+    tool_call_protocol: Annotated[
+        ToolCallProtocol,
+        typer.Option(help="controls 使用的 Target 工具协议"),
+    ] = ToolCallProtocol.TEXT_V2,
 ) -> None:
     """校准之前的**阳性 / 阴性对照**(`CALIBRATION.md` §2)。
 
@@ -1240,6 +1355,7 @@ def controls(
             pair.target_configuration,
             defense=DefenseLevel.NONE,
             enforce_permissions=enforce_permissions,
+            tool_call_protocol_version=tool_call_protocol.value,
         )
 
     async def _run_controls():
@@ -1252,10 +1368,14 @@ def controls(
                     pair.target,
                     pair.target_configuration,
                     defense=DefenseLevel.STANDARD,
+                    tool_call_protocol_version=tool_call_protocol.value,
                 ),
                 scorer,
             )
-            conditions = controls_conditions(target=pair.target_configuration)
+            conditions = controls_conditions(
+                target=pair.target_configuration,
+                tool_call_protocol_version=tool_call_protocol.value,
+            )
             return ControlsReport(
                 positive=positive,
                 negative=negative,

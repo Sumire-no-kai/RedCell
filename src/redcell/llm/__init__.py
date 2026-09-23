@@ -3,6 +3,8 @@ from redcell.llm.base import (
     LLMProvider,
     LLMProviderExhaustedError,
     LLMResponse,
+    LLMToolCall,
+    LLMToolDefinition,
 )
 from redcell.llm.fingerprint import (
     PROBE_SET_VERSION,
@@ -28,6 +30,8 @@ __all__ = [
     "LLMProvider",
     "LLMProviderExhaustedError",
     "LLMResponse",
+    "LLMToolCall",
+    "LLMToolDefinition",
     "ModelFingerprint",
     "OpenAICompatibleProvider",
     "ProviderConfigurationError",

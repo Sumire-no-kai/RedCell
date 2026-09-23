@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from redcell.arena.support_agent import SUPPORT_AGENT_POLICY
+from redcell.arena.support_agent.codec import TOOL_CALL_CODEC_VERSION
 from redcell.budget import BudgetLimits
 from redcell.gate_analysis import GateCondition, SeedPlan, TokenPrefix, gate_condition_for
 from redcell.gate_validation import select_validation_evidence
@@ -92,6 +93,7 @@ def _run(seed: int, condition: GateCondition) -> Run:
             defense="standard",
             enforce_permissions=True,
             enforce_confirmation=True,
+            tool_call_protocol_version=TOOL_CALL_CODEC_VERSION,
         ),
         strategy_catalogue=StrategyCatalogue(
             version="phase0.5-v1", strategies=list(PHASE_0_STRATEGIES)
