@@ -15,6 +15,8 @@ temperature / cost。它们可以复用同一个实现类、甚至同一个模�
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -81,8 +83,15 @@ class ProviderSettings(BaseSettings):
     output_usd_per_mtok: float | None = Field(default=None, ge=0.0)
     cached_input_usd_per_mtok: float | None = Field(default=None, ge=0.0)
 
+    max_tokens_parameter: Literal["max_completion_tokens"] | None = None
+    """输出上限走哪个请求字段;留空发标准 `max_tokens`。
+
+    OpenAI 推理模型(如 gpt-6-luna)拒收 `max_tokens`,只认 `max_completion_tokens`,
+    且该上限同时覆盖推理 token —— 开推理时要相应调大 `max_tokens`(2026-09-23 实测)。
+    """
+
     extra_body: ProviderExtraBody = Field(default_factory=ProviderExtraBody)
-    """受类型约束并入请求的厂商字段；当前只允许 `thinking.type`。
+    """受类型约束并入请求的厂商字段；当前只允许 `thinking.type` 与 `reasoning_effort`。
 
     ⚠️ **这是一个隐藏旋钮,不是普通配置。** 2026-08-06 实测:GLM 的
     `{"thinking": {"type": "disabled"}}` 能把延迟压到约 1/12,但同时改变了
@@ -117,6 +126,7 @@ class ProviderSettings(BaseSettings):
             extra_body=self.extra_body,
             usage_accounting_mode=self.usage_accounting_mode,
             usage_covers_billed_tokens=self.usage_covers_billed_tokens,
+            max_tokens_parameter=self.max_tokens_parameter,
         )
 
     def build(self, *, name: str) -> OpenAICompatibleProvider:
@@ -147,6 +157,7 @@ class ProviderSettings(BaseSettings):
             min_interval_seconds=(60.0 / self.rpm) if self.rpm > 0 else 0.0,
             max_concurrency=self.max_concurrency,
             extra_body=self.extra_body,
+            max_tokens_parameter=self.max_tokens_parameter,
             usage_accounting_mode=self.usage_accounting_mode,
             usage_covers_billed_tokens=self.usage_covers_billed_tokens,
             shared_limiter=_shared_limiter(
