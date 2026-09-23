@@ -37,12 +37,14 @@ from redcell.gate_analysis import (
     PHASE_0_5B_EXPERIMENT,
     SeedPlan,
     require_frozen_seed_plan,
+    seed_plan_digest,
 )
 from redcell.gate_billing_evidence import (
     BillingEvidenceBundle,
     BillingRole,
     billing_evidence_failures,
 )
+from redcell.gate_plan import GatePlan
 from redcell.golden import evaluate_golden
 from redcell.protocols.common import RedCellModel
 from redcell.protocols.run import ProviderRunConfiguration
@@ -192,35 +194,65 @@ def _shared_rate_limit_check(database_url: str | None, formal_database_url: str)
     return PreflightCheck(name="shared_rate_limit", passed=True, detail=f"{database_url} 可用")
 
 
-def _seed_plan_check(seed_plan_json: Path) -> PreflightCheck:
+def _load_seed_plan(seed_plan_json: Path) -> tuple[SeedPlan | None, PreflightCheck]:
+    """Parse the seed plan once; every experiment-specific check depends on the result."""
     try:
         seed_plan = SeedPlan.model_validate_json(seed_plan_json.read_text(encoding="utf-8"))
         require_frozen_seed_plan(seed_plan)
     except (OSError, ValueError) as exc:
-        return PreflightCheck(name="seed_plan", passed=False, detail=str(exc))
+        return None, PreflightCheck(name="seed_plan", passed=False, detail=str(exc))
     shape = f"{len(seed_plan.primary)} primary + {len(seed_plan.reserve)} reserve"
-    return PreflightCheck(
+    return seed_plan, PreflightCheck(
         name="seed_plan",
         passed=True,
         detail=f"{shape},digest 与冻结值一致",
     )
 
 
-def _requires_utility_confirmation(seed_plan_json: Path) -> bool:
-    """Only Phase 0.5b is governed by the frozen post-failure amendment."""
-    try:
-        seed_plan = SeedPlan.model_validate_json(seed_plan_json.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    return seed_plan.experiment == PHASE_0_5B_EXPERIMENT
+def _gate_plan_checks(
+    gate_plan: GatePlan | None, seed_plan: SeedPlan
+) -> tuple[ToolCallProtocol | None, list[PreflightCheck]]:
+    """Take the tool protocol from the frozen Gate plan instead of a separate flag.
 
-
-def _requires_utility_baseline(seed_plan_json: Path) -> bool:
-    try:
-        seed_plan = SeedPlan.model_validate_json(seed_plan_json.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    return seed_plan.experiment not in {PHASE_0_5_EXPERIMENT, PHASE_0_5B_EXPERIMENT}
+    A second, independently typed protocol value could disagree with the plan that
+    actually dispatches the matrix; the plan is the only source of truth.
+    """
+    if gate_plan is None:
+        return None, [
+            PreflightCheck(
+                name="gate_plan_missing",
+                passed=False,
+                detail="替代实验必须读取已生成的 Gate plan，工具协议以计划中冻结的值为准",
+            )
+        ]
+    checks: list[PreflightCheck] = []
+    if gate_plan.seed_plan_digest != seed_plan_digest(seed_plan):
+        checks.append(
+            PreflightCheck(
+                name="gate_plan_seed_mismatch",
+                passed=False,
+                detail="Gate plan 与本次 seed plan 的 digest 不一致",
+            )
+        )
+    if gate_plan.tool_call_protocol_version is None:
+        checks.append(
+            PreflightCheck(
+                name="gate_plan_protocol_missing",
+                passed=False,
+                detail=f"{gate_plan.plan_version} 没有冻结工具协议；替代实验需要 v3 Gate plan",
+            )
+        )
+        return None, checks
+    protocol = ToolCallProtocol(gate_plan.tool_call_protocol_version)
+    if not checks:
+        checks.append(
+            PreflightCheck(
+                name="gate_plan",
+                passed=True,
+                detail=f"seed plan 一致；冻结工具协议 {protocol.value}",
+            )
+        )
+    return protocol, checks
 
 
 def _utility_baseline_checks(
@@ -228,7 +260,7 @@ def _utility_baseline_checks(
     baseline: UtilityBaseline | None,
     *,
     expected_target: ProviderRunConfiguration,
-    expected_tool_protocol: ToolCallProtocol,
+    expected_tool_protocol: ToolCallProtocol | None,
 ) -> list[PreflightCheck]:
     if controls is None:
         return [
@@ -261,7 +293,8 @@ def _utility_baseline_checks(
         if controls.conditions is not None
         else None
     )
-    if actual_protocol != expected_tool_protocol.value:
+    # Unknown expected protocol is already a failed gate_plan check; do not guess one here.
+    if expected_tool_protocol is not None and actual_protocol != expected_tool_protocol.value:
         checks.append(
             PreflightCheck(
                 name="controls_tool_protocol_mismatch",
@@ -412,7 +445,7 @@ def run_preflight(
     utility_confirmation: UtilityConfirmationEvidence | None = None,
     controls: ControlsReport | None = None,
     utility_baseline: UtilityBaseline | None = None,
-    tool_call_protocol: ToolCallProtocol = ToolCallProtocol.TEXT_V2,
+    gate_plan: GatePlan | None = None,
 ) -> PreflightReport:
     """跑完全部零成本检查;任何一项失败都不应进入付费步骤。
 
@@ -459,20 +492,33 @@ def run_preflight(
                 ),
             )
         )
-    checks.append(_seed_plan_check(seed_plan_json))
-    if _requires_utility_confirmation(seed_plan_json):
-        target = next(settings for name, settings in roles if name == "target")
+    seed_plan, seed_plan_check = _load_seed_plan(seed_plan_json)
+    checks.append(seed_plan_check)
+    target = next(settings for name, settings in roles if name == "target")
+    if seed_plan is None:
+        # Which utility evidence applies depends on the experiment; without a valid
+        # seed plan it cannot be determined, so say so instead of silently skipping it.
+        checks.append(
+            PreflightCheck(
+                name="utility_evidence_undetermined",
+                passed=False,
+                detail="seed plan 无效，无法确定本实验需要的 utility 证据",
+            )
+        )
+    elif seed_plan.experiment == PHASE_0_5B_EXPERIMENT:
+        # Only Phase 0.5b is governed by the frozen post-failure amendment.
         checks.append(
             _utility_confirmation_check(utility_confirmation, target=target.run_configuration())
         )
-    elif _requires_utility_baseline(seed_plan_json):
-        target = next(settings for name, settings in roles if name == "target")
+    elif seed_plan.experiment != PHASE_0_5_EXPERIMENT:
+        protocol, plan_checks = _gate_plan_checks(gate_plan, seed_plan)
+        checks.extend(plan_checks)
         checks.extend(
             _utility_baseline_checks(
                 controls,
                 utility_baseline,
                 expected_target=target.run_configuration(),
-                expected_tool_protocol=tool_call_protocol,
+                expected_tool_protocol=protocol,
             )
         )
     checks.append(_golden_check(golden_fixtures))

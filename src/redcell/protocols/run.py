@@ -23,6 +23,7 @@ from redcell.protocols.strategy import StrategyCatalogueSummary
 from redcell.reliability import ReliabilityPolicy, SelectionReliabilityPolicy
 from redcell.versions import (
     ATTACK_PATH_SIGNATURE_VERSION,
+    EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
     FINDING_SIGNATURE_VERSION,
     LEVEL1_SCORER_VERSION,
     SUPPORTED_EXPERIMENT_CONDITIONS_SCHEMA_VERSIONS,
@@ -266,6 +267,24 @@ class ExperimentConditions(RedCellModel):
     新建条件必须显式传当前版本;`Run.conditions_fingerprint_verified` 据此表态,
     Gate 只采信验得过的 Run。
     """
+
+    @model_validator(mode="after")
+    def _protocol_identity_matches_schema(self) -> ExperimentConditions:
+        """v4 exists to bind the tool-call protocol into the fingerprint.
+
+        The fingerprint drops None fields so that v3 evidence still verifies; a v4
+        record without the protocol would therefore hash the same whichever codec ran.
+        """
+        protocol = self.arena.tool_call_protocol_version
+        is_v4 = self.conditions_schema_version == EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+        if is_v4 and not protocol:
+            raise ValueError(f"{EXPERIMENT_CONDITIONS_SCHEMA_VERSION} 必须记录工具调用协议")
+        if not is_v4 and protocol is not None:
+            raise ValueError(
+                f"只有 {EXPERIMENT_CONDITIONS_SCHEMA_VERSION} 可以记录工具调用协议;"
+                f"实际为 {self.conditions_schema_version}"
+            )
+        return self
 
     def fingerprint(self) -> str:
         payload = json.dumps(

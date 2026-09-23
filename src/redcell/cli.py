@@ -120,7 +120,10 @@ from redcell.utility_baseline import (
 )
 from redcell.utility_confirmation import load_utility_confirmation_evidence
 from redcell.validator import ReplayStoppedError, ValidationReport, validate_attack_paths
-from redcell.versions import EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+from redcell.versions import (
+    EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
+    HOST_BOUND_EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
+)
 
 app = typer.Typer(
     add_completion=False,
@@ -298,7 +301,12 @@ def _experiment_conditions(
         request_timeouts=request_timeouts,
         execution_host=execution_host,
         # 新 Run 必须自带 schema 版本,否则它的摘要日后也只能"保留但验不了"。
-        conditions_schema_version=EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
+        # 没有协议身份的条件只能来自 v3 记录的 resume;照实标 v3,不冒充 v4。
+        conditions_schema_version=(
+            EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+            if tool_call_protocol_version is not None
+            else HOST_BOUND_EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+        ),
     )
 
 
@@ -1003,10 +1011,10 @@ def gate_preflight(
         Path | None,
         typer.Option(help="矩阵前冻结且与 controls context 一致的 utility baseline"),
     ] = PHASE0_5_UTILITY_BASELINE_PATH,
-    tool_call_protocol: Annotated[
-        ToolCallProtocol,
-        typer.Option(help="计划矩阵使用的 Target 工具协议"),
-    ] = ToolCallProtocol.TEXT_V2,
+    gate_plan_json: Annotated[
+        Path | None,
+        typer.Option(help="已生成的 Gate plan；工具协议以其中冻结的值为准"),
+    ] = None,
     utility_confirmation_assessment_json: Annotated[
         Path | None,
         typer.Option(help="Phase 0.5b post-failure amendment 的版本化合并裁定 JSON"),
@@ -1078,6 +1086,11 @@ def gate_preflight(
             if utility_baseline_json is not None
             else None
         )
+        gate_plan = (
+            GatePlan.model_validate_json(gate_plan_json.read_text(encoding="utf-8"))
+            if gate_plan_json is not None
+            else None
+        )
         report = run_preflight(
             seed_plan_json=seed_plan_json,
             database_url=db,
@@ -1086,7 +1099,7 @@ def gate_preflight(
             utility_confirmation=utility_confirmation,
             controls=controls_result,
             utility_baseline=utility_baseline,
-            tool_call_protocol=tool_call_protocol,
+            gate_plan=gate_plan,
         )
     except (OSError, ValueError) as exc:
         typer.secho(f"Gate preflight 配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
@@ -1259,8 +1272,15 @@ def controller_controls(
     out: Annotated[
         Path, typer.Option(help="冻结 Controller contract control JSON 输出路径")
     ] = Path("runs/controller-contract-controls.json"),
+    controller_prompt_version: Annotated[
+        str,
+        typer.Option(help="与正式 Run 相同的 Controller prompt 身份：controller-prompt-v1 / v2"),
+    ] = CONTROLLER_PROMPT_V1,
 ) -> None:
     """Run the fixed 12-case Controller preflight without a target or Gate seed."""
+    # Gate 要求 controls 与正式 Run 的 Controller 配置逐字段相同，prompt 版本也在其中。
+    if controller_prompt_version not in {CONTROLLER_PROMPT_V1, CONTROLLER_PROMPT_V2}:
+        raise typer.BadParameter("不支持的 --controller-prompt-version")
     try:
         provider, configuration = load_controller()
     except ProviderConfigError as exc:
@@ -1270,7 +1290,7 @@ def controller_controls(
     driver = LLMControllerAdapter(
         provider=provider,
         run_id="controller-contract-controls",
-        prompt_version=CONTROLLER_PROMPT_V1,
+        prompt_version=controller_prompt_version,
         model=configuration.model,
         temperature=configuration.temperature,
         max_tokens=configuration.max_tokens,
@@ -1279,7 +1299,7 @@ def controller_controls(
         provider=configuration,
         connection_id=f"controller:{configuration.provider}",
         connection_fingerprint=configuration.base_url,
-        prompt_version="controller-prompt-v1",
+        prompt_version=controller_prompt_version,
         evidence_policy_version="controller-evidence-v1",
         thinking_disabled=configuration.extra_body.thinking_disabled,
     )

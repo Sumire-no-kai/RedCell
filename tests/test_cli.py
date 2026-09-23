@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 from redcell.arena.support_agent import MAX_TOOL_ITERATIONS, DefenseLevel
 from redcell.arena.support_agent.benign import BENIGN_TASKS
 from redcell.budget import BudgetLimits
-from redcell.cli import OFFLINE_NOTICE, ExitCode, _arena_adapter, app
+from redcell.cli import OFFLINE_NOTICE, ExitCode, _arena_adapter, _experiment_conditions, app
 from redcell.config import ProviderConfigError
 from redcell.controls import (
     DEFAULT_NEGATIVE_REPEATS,
@@ -41,7 +41,10 @@ from redcell.protocols import (
 )
 from redcell.protocols.run import ProviderRunConfiguration, Run, RunStatus
 from redcell.storage import RunStore
-from redcell.versions import EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+from redcell.versions import (
+    EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
+    HOST_BOUND_EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
+)
 
 runner = CliRunner()
 
@@ -82,6 +85,79 @@ def test_controller_controls_writes_the_fixed_preflight_report(workspace, monkey
     report = json.loads((workspace / "runs" / "controller-controls.json").read_text())
     assert len(report["outcomes"]) == 12
     assert all(outcome["passed"] and outcome["known_usage"] for outcome in report["outcomes"])
+    assert report["controller"]["prompt_version"] == "controller-prompt-v1"
+
+
+def test_controller_controls_can_certify_the_v2_prompt(workspace, monkeypatch) -> None:
+    """A v2 Run needs controls produced with the same prompt, not v1 relabelled."""
+    provider = ScriptedProvider(['{"selected_strategy_id":"direct"}'] * 12, tokens_per_call=(3, 1))
+
+    async def aclose() -> None:
+        return None
+
+    monkeypatch.setattr(provider, "aclose", aclose, raising=False)
+    configuration = ProviderRunConfiguration(
+        provider="scripted",
+        base_url="http://local.test",
+        model="scripted",
+        temperature=0.0,
+        max_tokens=64,
+        rpm=0.0,
+        max_concurrency=1,
+        input_usd_per_mtok=0.0,
+        output_usd_per_mtok=0.0,
+    )
+    monkeypatch.setattr("redcell.cli.load_controller", lambda: (provider, configuration))
+
+    result = runner.invoke(
+        app,
+        [
+            "controller-controls",
+            "--out",
+            "runs/controller-controls.json",
+            "--controller-prompt-version",
+            "controller-prompt-v2",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    report = json.loads((workspace / "runs" / "controller-controls.json").read_text())
+    assert report["controller"]["prompt_version"] == "controller-prompt-v2"
+    system_prompts = {call[0].content for call in provider.calls}
+    assert len(system_prompts) == 1
+    assert "reward per token" in next(iter(system_prompts))
+
+
+def test_controller_controls_rejects_an_unknown_prompt_version(workspace) -> None:
+    result = runner.invoke(
+        app,
+        ["controller-controls", "--controller-prompt-version", "controller-prompt-v9"],
+    )
+
+    assert result.exit_code == 2
+
+
+def test_conditions_without_a_protocol_are_labelled_as_the_older_schema() -> None:
+    """Resuming a v3 Run rebuilds conditions without a protocol; they must stay v3.
+
+    Labelling them v4 would either fail validation or claim an identity the
+    original Run never recorded.
+    """
+    common = {
+        "online": False,
+        "providers": None,
+        "actor": "customer_a",
+        "defense": DefenseLevel.STANDARD,
+        "enforce_permissions": True,
+        "enforce_confirmation": True,
+    }
+
+    legacy = _experiment_conditions(**common, tool_call_protocol_version=None)
+    current = _experiment_conditions(**common, tool_call_protocol_version="text-tool-call-codec-v2")
+
+    assert legacy.conditions_schema_version == HOST_BOUND_EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+    assert current.conditions_schema_version == EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+    assert legacy.fingerprint() != current.fingerprint()
 
 
 # ── run ──────────────────────────────────────────────────────────────────

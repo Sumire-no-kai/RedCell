@@ -64,6 +64,103 @@
   只审查，未修改源码，未调用 Provider。
 - **剩余状态:** OPEN（在本分支修复 1–5 并补回归测试，四道门通过后再申请合并）。
 
+### 2026-09-23 14:20 AEST · Step 04 · 开始修复审查发现的 5 个问题
+
+- **进度:** 作者授权在 `fix/replay-checkpoint-recovery` 上修复 Step 03 的问题 1–5，每个问题补回归测试。
+  两个次要问题（重复调用 ID、schema 重复构建）不在本轮范围，保留为 TODO。
+- **边界:** 不修改文本协议行为、冻结的 Phase 0.5d 产物、Gate 阈值或历史指纹；不调用 Provider。
+- **剩余状态:** IN PROGRESS。
+
+### 2026-09-23 14:35 AEST · Step 05 · 问题 1：原生协议坏参数调用缺少配对回复
+
+- **现象:** 模型一次返回多个原生工具调用、其中一个参数不是合法 JSON 对象时，下一次请求的 assistant
+  消息列出了全部调用 ID，却只有成功解码的调用有 `role=tool` 回复。OpenAI 兼容接口要求每个 ID 都有
+  回复，会以 400 拒绝请求。
+- **原因:** `NativeToolCallCodec.followup_messages` 原样回显 `response.tool_calls`，但只为已执行的调用
+  生成回复。
+- **解决方式:** 按原始调用顺序为每个 ID 生成回复：已执行的返回工具结果；未能解码的返回固定的
+  `invalid_arguments` 状态，说明调用未执行，与业务拒绝（`error`）区分。解码判定抽成共用函数，
+  `decode` 与回复生成使用同一规则；两者不一致时抛出异常，不静默错配。坏格式调用仍只计入
+  `malformed_tool_calls`，不进入 `tool_calls` / `tool_results`。
+- **验证证据:** 新增 adapter 级测试（假 Provider 返回一个合法调用加一个坏参数调用）：原代码下失败，
+  回复只有 `call-1`；修复后通过，`tests/test_arena_adapter.py` 全部通过。
+- **剩余状态:** DONE。
+
+### 2026-09-23 14:45 AEST · Step 06 · 问题 2：`controller-controls` 无法对 prompt v2 做契约对照
+
+- **现象:** `run --search llm` 已允许 `--controller-prompt-version controller-prompt-v2`，但
+  `controller-controls` 固定使用 v1，产出的报告也记录 v1。
+- **影响:** Gate 逐字段比对 controls 与正式 Run 的 Controller 配置，v2 实验会被判
+  `controller_controls_environment_mismatch`（fail-closed 本身正确），但没有任何途径产出匹配的报告，
+  v2 永远无法通过契约对照。
+- **解决方式:** `controller-controls` 增加与 `run` 相同的 `--controller-prompt-version` 选项，默认 v1；
+  实际发送的 system prompt 与报告中冻结的 `prompt_version` 使用同一个值，未知版本以用法错误拒绝。
+- **决策与理由:** 不放宽 Gate 的逐字段比对。对照必须用与正式 Run 相同的 prompt 实际跑出来，不能把
+  v1 的结果改标为 v2。
+- **验证证据:** 新增两个 CLI 测试：v2 报告记录 v2，且 12 次调用实际收到的都是 v2 system prompt；
+  未知版本返回退出码 2。原有 v1 测试补充断言报告记录 v1。3 个相关测试全部通过。
+- **剩余状态:** DONE。
+
+### 2026-09-23 15:05 AEST · Step 07 · 问题 3：preflight 的工具协议未与 Gate plan 绑定
+
+- **现象:** `gate-preflight --tool-call-protocol` 是独立参数，默认 text-v2，与 GatePlan v3 中冻结并派发给
+  每个子 Run 的协议互不校验。计划用原生协议、preflight 忘记传参时，会拿 text-v2 的 controls 和 baseline
+  通过检查，问题要到最终 Gate 才暴露，正是 2026-09-10 那类“付费后才发现”的缺口。
+- **解决方式:** 删除 preflight 的独立协议参数，改为 `--gate-plan-json`。替代实验（非 0.5 / 0.5b）必须
+  提供 Gate plan：缺失记 `gate_plan_missing`；plan 与 seed plan 的 digest 不一致记
+  `gate_plan_seed_mismatch`；v1/v2 plan 没有冻结协议记 `gate_plan_protocol_missing`；通过后以 plan 中的
+  协议比对 controls。
+- **决策与理由:** 只保留一个事实来源，而不是在两处各写一个协议值再比较。被删除的参数只存在于本未合并
+  分支，没有兼容负担；0.5 / 0.5b 的 preflight 路径不变。
+- **验证证据:** 新增测试：原生协议 plan 配 text-v2 controls 时 `controls_tool_protocol_mismatch` 失败且
+  写明计划协议；缺少 plan 时 `gate_plan_missing` 失败。原有 baseline 不兼容测试改为传入 plan，并断言
+  `gate_plan` 检查通过。`tests/test_gate_preflight.py` 全部通过。
+- **剩余状态:** DONE。0.5d runbook 是历史记录，未改写；今后的 runbook 需要写入 `--gate-plan-json`。
+
+### 2026-09-23 15:05 AEST · Step 08 · 问题 5：seed plan 无效时 utility 检查被静默略过
+
+- **更正 Step 03 的严重度:** 复核发现 seed plan 读取或解析失败时，`seed_plan` 检查本身已经失败，
+  整个 preflight 不会通过。Step 03 所说“除非其他检查失败，否则不会报告”不成立；实际问题是报告里不
+  出现 utility 检查，读报告的人看不出缺了哪类证据。
+- **原因:** seed plan 在三个函数里各自解析，其中两个在出错时返回 False，等于默默跳过。
+- **解决方式:** 只解析一次；解析失败时追加失败的 `utility_evidence_undetermined`，明确说明无法确定
+  本实验需要哪类 utility 证据。0.5b 与替代实验的分支改为基于同一个解析结果。
+- **验证证据:** 新增测试写入无效 seed plan，断言 `seed_plan` 与 `utility_evidence_undetermined` 都失败。
+- **剩余状态:** DONE。
+
+### 2026-09-23 15:30 AEST · Step 09 · 问题 4：v4 实验条件可以不带工具协议
+
+- **现象:** `ArenaRunConfiguration.tool_call_protocol_version` 可为空，指纹又会排除空值。任何不经 CLI 构造
+  的 v4 条件都可以不带协议，此时文本协议与原生协议的 Run 指纹完全相同，本分支新增的协议身份绑定失效。
+- **遇到的问题:** 直接加“v4 必须带协议”的校验会打断旧实验恢复：`resume` 恢复 v3 Run 时，会重建一份
+  协议为空、却被标成 v4 的条件再比对指纹。全量测试里另有 15 个 Gate 相关测试的夹具也在构造
+  “v4 但无协议”的条件。
+- **解决方式:**
+  1. `ExperimentConditions` 新增模型校验：v4 必须记录协议；其他版本不得记录协议。
+  2. CLI 按内容标注 schema：有协议标 v4，没有协议的只可能来自 v3 记录的恢复，照实标 v3。v3 的指纹
+     本来就不含该字段，所以恢复时的指纹比对不变。
+  3. 新增常量 `HOST_BOUND_EXPERIMENT_CONDITIONS_SCHEMA_VERSION` 表示 v3，命名沿用 GatePlan 的
+     `HOST_BOUND_GATE_PLAN_VERSION`。
+  4. Gate 测试夹具代表当前正式 Run，改为显式记录 text-v2 协议；指纹钉扎测试中 `_pinned()` 是 v3 形状，
+     “版本不进摘要”一条改用 v3 标签，两条“当前版本”测试改用真正的 v4 记录。钉扎字面量未改。
+- **决策与理由:** 选择修正标注而不是放宽校验。放宽会让 v4 标签失去意义；把恢复出的条件继续标成 v4，
+  等于替原始 Run 声明一个它从未记录过的身份。
+- **验证证据:** 新增 4 个测试：v4 缺协议被拒、v3 带协议被拒、协议进入 v4 指纹、无协议的 CLI 条件标为 v3；
+  全量 `862 passed`。
+- **剩余状态:** DONE。
+
+### 2026-09-23 15:45 AEST · Step 10 · 修复后全量质量门与提交
+
+- **进度:** 问题 1–5 全部修复，共新增 10 个回归测试；提交到 `fix/replay-checkpoint-recovery` 并更新 PR #59。
+- **遇到的问题:** 首次 Ruff lint 报 2 处 import 顺序（新增到测试文件的 import 位置不对），只用
+  `ruff check --select I --fix` 整理了这两处 import，没有改动其他代码。
+- **验证证据:** macOS、Python 3.13.5：`python -m pytest -p no:cacheprovider` 为 `862 passed`；
+  `ruff check .` 通过；`ruff format --check .` 为 147 files already formatted；`black --check src tests`
+  为 132 files unchanged；`git diff --check` 通过。没有 Provider 调用，冻结的 0.5d 产物未改动，
+  指纹钉扎字面量未改。
+- **剩余状态:** DONE（问题 1–5）；TODO（次要问题：原生解码未拒绝重复调用 ID、工具 schema 每次循环重建）；
+  OPEN（PR #59 转为 ready 并合并需作者确认；Windows 端合并后需按新 CLI 在 preflight 中传 `--gate-plan-json`）。
+
 ---
 
 ## 2026-09-21 · 双设备迁移与完整证据交接

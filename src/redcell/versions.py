@@ -5,8 +5,9 @@ FINDING_SIGNATURE_VERSION = "finding-signature-v2"
 ATTACK_PATH_SIGNATURE_VERSION = "attack-path-signature-v2"
 
 EXPERIMENT_CONDITIONS_SCHEMA_VERSION = "experiment-conditions-v4"
+HOST_BOUND_EXPERIMENT_CONDITIONS_SCHEMA_VERSION = "experiment-conditions-v3"
 SUPPORTED_EXPERIMENT_CONDITIONS_SCHEMA_VERSIONS = frozenset(
-    {"experiment-conditions-v3", EXPERIMENT_CONDITIONS_SCHEMA_VERSION}
+    {HOST_BOUND_EXPERIMENT_CONDITIONS_SCHEMA_VERSION, EXPERIMENT_CONDITIONS_SCHEMA_VERSION}
 )
 """`ExperimentConditions` 的 schema 版本,绑定 `experiment_fingerprint` 的出处。⭐
 

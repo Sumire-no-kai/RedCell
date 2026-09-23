@@ -19,7 +19,7 @@ from enum import StrEnum
 from typing import Any, NamedTuple
 
 from redcell.arena.support_agent.tools import ToolExecution
-from redcell.llm.base import LLMMessage, LLMResponse, LLMToolDefinition
+from redcell.llm.base import LLMMessage, LLMResponse, LLMToolCall, LLMToolDefinition
 from redcell.protocols.adapter import ToolCall
 from redcell.protocols.common import Role, new_id
 
@@ -294,12 +294,8 @@ class NativeToolCallCodec(ToolCallCodec):
         calls: list[ToolCall] = []
         malformed = 0
         for native in response.tool_calls:
-            try:
-                arguments = json.loads(native.arguments_json)
-            except json.JSONDecodeError:
-                malformed += 1
-                continue
-            if not isinstance(arguments, dict):
+            arguments = _native_arguments(native)
+            if arguments is None:
                 malformed += 1
                 continue
             calls.append(ToolCall(id=native.id, name=native.name, arguments=arguments))
@@ -313,6 +309,15 @@ class NativeToolCallCodec(ToolCallCodec):
         response: LLMResponse,
         executed: list[tuple[ToolCall, ToolExecution]],
     ) -> list[LLMMessage]:
+        # The API requires a role=tool reply for every call id echoed in the assistant
+        # message. A call whose arguments did not parse was never executed; it gets an
+        # explicit format error that stays distinct from a business rejection.
+        decodable = [
+            native for native in response.tool_calls if _native_arguments(native) is not None
+        ]
+        if [native.id for native in decodable] != [call.id for call, _ in executed]:
+            raise ValueError("executed tool calls do not match the decodable native calls")
+        results = iter(executed)
         messages = [
             LLMMessage(
                 role=Role.ASSISTANT,
@@ -320,15 +325,20 @@ class NativeToolCallCodec(ToolCallCodec):
                 tool_calls=response.tool_calls,
             )
         ]
-        messages.extend(
-            LLMMessage(
-                role=Role.TOOL,
-                content=self._result_content(result),
-                tool_call_id=call.id,
-                name=call.name,
+        for native in response.tool_calls:
+            if _native_arguments(native) is None:
+                content = _INVALID_ARGUMENTS_RESULT
+            else:
+                _call, result = next(results)
+                content = self._result_content(result)
+            messages.append(
+                LLMMessage(
+                    role=Role.TOOL,
+                    content=content,
+                    tool_call_id=native.id,
+                    name=native.name,
+                )
             )
-            for call, result in executed
-        )
         return messages
 
     @staticmethod
@@ -340,6 +350,23 @@ class NativeToolCallCodec(ToolCallCodec):
             },
             ensure_ascii=False,
         )
+
+
+_INVALID_ARGUMENTS_RESULT = json.dumps(
+    {
+        "status": "invalid_arguments",
+        "content": "Arguments were not a JSON object; the call was not executed.",
+    }
+)
+
+
+def _native_arguments(native: LLMToolCall) -> dict[str, Any] | None:
+    """Parsed arguments of a native call, or None when it counts as malformed."""
+    try:
+        arguments = json.loads(native.arguments_json)
+    except json.JSONDecodeError:
+        return None
+    return arguments if isinstance(arguments, dict) else None
 
 
 def _as_tool_call(payload: object) -> ToolCall | None:

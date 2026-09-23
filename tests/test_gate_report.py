@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 from redcell._base import CostRecord
 from redcell.arena.support_agent import SUPPORT_AGENT_POLICY
 from redcell.arena.support_agent.benign import BENIGN_TASKS
+from redcell.arena.support_agent.codec import TOOL_CALL_CODEC_VERSION
 from redcell.attacker_control import (
     AttackerControlConditions,
     AttackerControlReport,
@@ -184,6 +185,7 @@ def _formal_run(seed: int, condition: GateCondition) -> Run:
             defense="standard",
             enforce_permissions=True,
             enforce_confirmation=True,
+            tool_call_protocol_version=TOOL_CALL_CODEC_VERSION,
         ),
         strategy_catalogue=catalogue,
         search=SearchConfiguration(selector=selector),
