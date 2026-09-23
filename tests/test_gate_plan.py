@@ -36,10 +36,11 @@ def test_gate_plan_freezes_500_attempts_and_disables_reserves() -> None:
     assert len(plan.cells) == 120
     assert plan.plan_version == GATE_PLAN_VERSION
     assert plan.execution_host_profile is ExecutionHostProfile.WINDOWS_WAKELOCK_V1
-    assert plan.tool_call_protocol_version == ToolCallProtocol.TEXT_V2.value
+    # 2026-09-23: new experiments default to native function calling.
+    assert plan.tool_call_protocol_version == ToolCallProtocol.NATIVE_V1.value
     assert all("--execution-host-profile" in cell.argv for cell in plan.cells)
     assert all(
-        cell.argv[cell.argv.index("--tool-call-protocol") + 1] == ToolCallProtocol.TEXT_V2.value
+        cell.argv[cell.argv.index("--tool-call-protocol") + 1] == ToolCallProtocol.NATIVE_V1.value
         for cell in plan.cells
     )
     assert all(cell.enabled_initially for cell in plan.cells[:72])

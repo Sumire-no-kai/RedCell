@@ -7,7 +7,10 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from redcell.arena.support_agent.codec import ToolCallProtocol
+from redcell.arena.support_agent.codec import (
+    NEW_EXPERIMENT_TOOL_CALL_PROTOCOL,
+    ToolCallProtocol,
+)
 from redcell.gate_analysis import (
     FORMAL_MAX_ATTEMPTS,
     FORMAL_RUN_TOKENS,
@@ -193,7 +196,7 @@ def build_gate_plan(
     database_url: str,
     report_directory: str,
     execution_host_profile: ExecutionHostProfile = ExecutionHostProfile.WINDOWS_WAKELOCK_V1,
-    tool_call_protocol: ToolCallProtocol = ToolCallProtocol.TEXT_V2,
+    tool_call_protocol: ToolCallProtocol = NEW_EXPERIMENT_TOOL_CALL_PROTOCOL,
 ) -> GatePlan:
     """Build commands without executing a Provider or touching the run database."""
     if max_attempts != FORMAL_MAX_ATTEMPTS:

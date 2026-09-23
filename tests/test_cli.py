@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from redcell.arena.support_agent import MAX_TOOL_ITERATIONS, DefenseLevel
+from redcell.arena.support_agent import MAX_TOOL_ITERATIONS, DefenseLevel, ToolCallProtocol
 from redcell.arena.support_agent.benign import BENIGN_TASKS
 from redcell.budget import BudgetLimits
 from redcell.cli import OFFLINE_NOTICE, ExitCode, _arena_adapter, _experiment_conditions, app
@@ -240,6 +240,33 @@ async def test_arena_adapter_uses_the_same_target_model_and_temperature_as_the_s
     )
 
     assert seen == [("frozen-target-model", 0.23, 512)]
+
+
+def test_arena_adapter_reads_a_missing_protocol_as_historical_text() -> None:
+    """Resume and replay pass the recorded protocol, which is `None` before v4 conditions.
+
+    Those runs used the text codec. Only new-experiment entry points default to native
+    (2026-09-23); this fallback must not follow that default, or an old run would be
+    resumed or replayed under a different protocol without any error.
+    """
+    configuration = ProviderRunConfiguration(
+        provider="recording",
+        base_url="https://target.example.invalid/v1",
+        model="frozen-target-model",
+        temperature=0.7,
+        max_tokens=512,
+        rpm=0,
+        max_concurrency=1,
+    )
+
+    legacy = _arena_adapter(
+        ScriptedProvider(default="ok"),
+        configuration,
+        defense=DefenseLevel.STANDARD,
+        tool_call_protocol_version=None,
+    )
+
+    assert legacy.tool_call_protocol_version == ToolCallProtocol.TEXT_V2.value
 
 
 def test_module_help_survives_a_legacy_windows_output_encoding(workspace) -> None:

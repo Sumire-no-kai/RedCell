@@ -20,6 +20,7 @@ from typing import Annotated
 import typer
 
 from redcell.arena.support_agent import (
+    NEW_EXPERIMENT_TOOL_CALL_PROTOCOL,
     SUPPORT_AGENT_POLICY,
     ArenaAdapter,
     DefenseLevel,
@@ -339,8 +340,11 @@ def run(
     ] = True,
     tool_call_protocol: Annotated[
         ToolCallProtocol,
-        typer.Option(help="Target 工具协议：text-tool-call-codec-v2 / native-function-calling-v1"),
-    ] = ToolCallProtocol.TEXT_V2,
+        typer.Option(
+            help="Target 工具协议：native-function-calling-v1(新实验默认)/ "
+            "text-tool-call-codec-v2(仅用于复现旧实验)"
+        ),
+    ] = NEW_EXPERIMENT_TOOL_CALL_PROTOCOL,
     controller_prompt_version: Annotated[
         str,
         typer.Option(help="LLM Controller prompt 身份：controller-prompt-v1 / v2"),
@@ -965,8 +969,8 @@ def gate_plan(
     ] = None,
     tool_call_protocol: Annotated[
         ToolCallProtocol,
-        typer.Option(help="冻结进计划并传给每个正式 Run 的 Target 工具协议"),
-    ] = ToolCallProtocol.TEXT_V2,
+        typer.Option(help="冻结进计划并传给每个正式 Run 的 Target 工具协议(新实验默认原生)"),
+    ] = NEW_EXPERIMENT_TOOL_CALL_PROTOCOL,
     out: Annotated[Path, typer.Option(help="只读执行清单 JSON 输出路径")] = Path(
         "runs/gate-plan.json"
     ),
@@ -1324,8 +1328,8 @@ def controls(
     out: Annotated[Path, typer.Option(help="明细输出目录")] = Path("runs"),
     tool_call_protocol: Annotated[
         ToolCallProtocol,
-        typer.Option(help="controls 使用的 Target 工具协议"),
-    ] = ToolCallProtocol.TEXT_V2,
+        typer.Option(help="controls 使用的 Target 工具协议(新实验默认原生)"),
+    ] = NEW_EXPERIMENT_TOOL_CALL_PROTOCOL,
 ) -> None:
     """校准之前的**阳性 / 阴性对照**(`CALIBRATION.md` §2)。
 
