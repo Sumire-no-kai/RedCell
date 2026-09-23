@@ -15,6 +15,7 @@ import pytest
 
 from redcell.llm import (
     LLMMessage,
+    LLMToolCall,
     LLMToolDefinition,
     OpenAICompatibleProvider,
     ProviderConfigurationError,
@@ -206,6 +207,98 @@ async def test_native_tools_are_sent_and_structured_calls_are_parsed() -> None:
     assert tools[0]["function"]["name"] == "search_faq"
     assert response.tool_calls[0].id == "call-1"
     assert response.tool_calls[0].arguments_json == '{"topic":"refund"}'
+
+
+def _gemini_tool_call_body(extra_content: object) -> dict[str, object]:
+    call: dict[str, object] = {
+        "id": "call-1",
+        "type": "function",
+        "function": {"name": "get_customer_profile", "arguments": '{"customer_id":"customer_b"}'},
+    }
+    if extra_content is not None:
+        call["extra_content"] = extra_content
+    return {
+        "model": "gemini-3.1-flash-lite",
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": None, "tool_calls": [call]},
+                "finish_reason": "tool_calls",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+    }
+
+
+async def test_tool_call_extra_content_is_echoed_back_unchanged() -> None:
+    """2026-09-23: Gemini 3 returns a thought signature on each function call and rejects
+    the follow-up turn with HTTP 400 ("missing a thought_signature") unless it comes back
+    verbatim at `tool_calls[].extra_content`.
+    """
+    import json
+
+    signature = {"google": {"thought_signature": "opaque-signature=="}}
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json=_gemini_tool_call_body(signature))
+
+    provider = _provider(httpx.MockTransport(handler))
+    first = await provider.complete(_user("look up customer_b"))
+    assert first.tool_calls[0].extra_content == signature
+
+    await provider.complete(
+        [
+            *_user("look up customer_b"),
+            LLMMessage(role=Role.ASSISTANT, content="", tool_calls=first.tool_calls),
+            LLMMessage(role=Role.TOOL, content="{}", tool_call_id="call-1"),
+        ]
+    )
+
+    echoed = requests[1]["messages"][1]["tool_calls"][0]
+    assert echoed["extra_content"] == signature
+    assert echoed["id"] == "call-1"
+
+
+async def test_tool_call_without_extra_content_is_echoed_without_the_key() -> None:
+    """Providers that never send it (GLM, OpenAI) must see an unchanged payload."""
+    import json
+
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json=_gemini_tool_call_body(None))
+
+    provider = _provider(httpx.MockTransport(handler))
+    first = await provider.complete(_user("look up customer_b"))
+    assert first.tool_calls[0].extra_content is None
+
+    await provider.complete(
+        [
+            *_user("look up customer_b"),
+            LLMMessage(role=Role.ASSISTANT, content="", tool_calls=first.tool_calls),
+        ]
+    )
+
+    assert "extra_content" not in requests[1]["messages"][1]["tool_calls"][0]
+
+
+async def test_tool_call_extra_content_must_be_an_object() -> None:
+    provider = _provider(
+        httpx.MockTransport(
+            lambda _: httpx.Response(200, json=_gemini_tool_call_body("not-an-object"))
+        )
+    )
+
+    with pytest.raises(ProviderProtocolError, match="extra_content"):
+        await provider.complete(_user("look up customer_b"))
+
+
+def test_tool_call_extra_content_defaults_to_none() -> None:
+    call = LLMToolCall(id="call-1", name="search_faq", arguments_json="{}")
+
+    assert call.extra_content is None
 
 
 async def test_max_tokens_is_omitted_when_not_set() -> None:

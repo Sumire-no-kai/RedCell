@@ -476,6 +476,50 @@
 - **剩余状态:** DONE（第二轮筛选）；OPEN（是否以 `glm-4-32b-0414-128k` 替换 `glm-4.7` 作 Target；第二个
   Target 的来源；thought_signature 修复是否实施，均待作者决定）。
 
+### 2026-09-23 22:37 AEST · Step 22 · Target 换为 glm-4-32b；修复 Gemini thought_signature，Gemini 三条全过
+
+- **决策（作者）:** Target 由 `glm-4.7` 换为 `glm-4-32b-0414-128k`；thought_signature 缺口直接修复，修好后
+  测 Gemini 的工具线。
+- **修复（分支 `fix/gemini-thought-signature`，叠在 `feat/native-fc-default` 上）:** `LLMToolCall` 新增可选的
+  `extra_content`，provider 解析时原样保存响应里 `tool_calls[].extra_content`，下一轮请求再原样带回；不是对象
+  时报 `ProviderProtocolError`，不静默丢弃。原生编解码器生成下一轮消息时本就原样传递 `LLMToolCall`，无需改动。
+  该字段只在一次 `send` 内流转，不进 trace、实验条件或指纹；没有它的 provider（GLM、OpenAI）请求体与改前相同。
+- **测试:** 新增 5 个回归测试（provider 层解析与原样回传、缺省时不出现该键、类型校验、默认值；adapter 层下一轮
+  assistant 消息保留该字段）。用修复前的代码跑这 5 个测试全部失败，修复后全部通过。全量 872 passed；ruff、
+  ruff format、black、`git diff --check` 通过。
+- **Gemini 原生资格门（修复后）:** **20/20 · 20/20 · 20/20**，100 次请求 $0.0185（含 total−prompt 计入的隐藏思考），
+  0 截断，回传模型串与请求一致。证据 `gemini-3.1-flash-lite-positive-r20-native.json`，SHA-256 前 12 位
+  `58987bbf821f`。至此原生 FC 下有两个不同厂商的 Target 通过冻结资格门：`glm-4-32b-0414-128k` 与
+  `gemini-3.1-flash-lite`。
+- **`.env`（Mac，被忽略）:** 备份为 `.env.bak-2026-09-23-pre-glm4-32b` 后切换 Target：模型 `glm-4-32b-0414-128k`，
+  单价 0.10 / 0.10，缓存价官方未公布、按输入价 0.10 作保守上限；`EXTRA_BODY={}`（该模型无思考模式，资格门在不带
+  `thinking` 字段时通过）；`usage_covers_billed_tokens=false`（新模型账单对账前不得进入正式 Gate）；温度 0.7、
+  上限 512、并发 1 不变。离线加载确认配置与资格门运行时一致，key 未变。文件头的"当前选型"注释同步更新。
+- **私有 PRD:** 在攻击方迁移说明之前加了 Target 迁移说明（原因、资格门结果、账单与校准待重建）。待作者提交。
+- **注意事项:**
+  1. 两个 Target 在无防御下都是 20/20，标准防御下 ASR 是否落在 §9 的可测范围内，要靠原生 FC 下的校准回答。
+  2. Controller 目前也是 `gemini-3.1-flash-lite`。若 Gemini 作为第二个 Target，Controller 与该 Target 是同一个
+     模型，需要作者决定是否更换 Controller。
+  3. `gemini-3.1-flash-lite` 没有带日期的版本，存在与 glm-4.7 相同的漂移风险；思考不能完全关闭，是一个隐藏变量。
+  4. `glm-4-32b-0414-128k` 的账户并发上限未知，保守冻结为 1。
+- **剩余状态:** DONE（Target 切换、thought_signature 修复、Gemini 资格门）；OPEN（是否以 Gemini 作第二个 Target
+  及 Controller 是否更换；两个 Target 的账单对账；原生 FC 下的 controls、utility 基线与校准）。
+
+### 2026-09-23 22:40 AEST · Step 23 · Gemini 定为第二个 Target，Controller 待更换，PR 按序合并
+
+- **决策（作者）:**
+  1. `gemini-3.1-flash-lite` 作为第二个 Target（Paper B 至少需要 2 个 Target 模型）。主 Target 仍是
+     `glm-4-32b-0414-128k`。
+  2. Controller 不再使用 `gemini-3.1-flash-lite`：它成为 Target 后，Controller 与该 Target 会是同一个模型。
+     新 Controller 须与两个 Target 和 Attacker 都不是同一模型，并按 PRD 通过 `controller-contract-controls-v1`
+     才能冻结。候选与对照运行待作者确认（付费调用）。在新 Controller 冻结前，不以 Gemini 为 Target 运行任何
+     使用 LLM Controller 的实验。
+  3. 作者授权按 #59 → #60 → #61 → #62 的顺序直接合并这组叠加的 PR。
+- **运行方式:** 目前 CLI 只有一个 Target 位（`REDCELL_TARGET_*`）。以 Gemini 为 Target 时用进程级环境变量覆盖，
+  `.env` 里记下对应配置（被注释）。是否需要正式的多 Target 配置机制，留待实验设计时讨论。
+- **剩余状态:** OPEN（Controller 候选与 controller-controls；两个 Target 与 Attacker 的账单对账；原生 FC 下的
+  controls、utility 基线与校准）。
+
 ---
 
 ## 2026-09-21 · 双设备迁移与完整证据交接

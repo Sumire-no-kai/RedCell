@@ -516,18 +516,22 @@ class OpenAICompatibleProvider(LLMProvider):
 def _message_payload(message: LLMMessage) -> dict[str, Any]:
     payload: dict[str, Any] = {"role": message.role.value, "content": message.content}
     if message.tool_calls:
-        payload["tool_calls"] = [
-            {
-                "id": call.id,
-                "type": "function",
-                "function": {"name": call.name, "arguments": call.arguments_json},
-            }
-            for call in message.tool_calls
-        ]
+        payload["tool_calls"] = [_tool_call_payload(call) for call in message.tool_calls]
     if message.tool_call_id is not None:
         payload["tool_call_id"] = message.tool_call_id
     if message.name is not None:
         payload["name"] = message.name
+    return payload
+
+
+def _tool_call_payload(call: LLMToolCall) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "id": call.id,
+        "type": "function",
+        "function": {"name": call.name, "arguments": call.arguments_json},
+    }
+    if call.extra_content is not None:
+        payload["extra_content"] = call.extra_content
     return payload
 
 
@@ -547,7 +551,16 @@ def _native_tool_calls(message: dict[str, Any], *, provider: str) -> list[LLMToo
             arguments, str
         ):
             raise ProviderProtocolError(f"{provider} 的 message.tool_calls[{index}] 结构不完整")
-        parsed.append(LLMToolCall(id=call_id, name=name, arguments_json=arguments))
+        extra_content = raw.get("extra_content")
+        if extra_content is not None and not isinstance(extra_content, dict):
+            raise ProviderProtocolError(
+                f"{provider} 的 message.tool_calls[{index}].extra_content 不是对象"
+            )
+        parsed.append(
+            LLMToolCall(
+                id=call_id, name=name, arguments_json=arguments, extra_content=extra_content
+            )
+        )
     return parsed
 
 

@@ -359,6 +359,35 @@ async def test_native_malformed_call_still_gets_a_matching_tool_reply() -> None:
     assert result.malformed_tool_calls == 1
 
 
+async def test_native_followup_keeps_vendor_metadata_on_echoed_calls() -> None:
+    """The follow-up assistant message must carry each call exactly as the provider sent it,
+    including Gemini's thought signature in `extra_content` (HTTP 400 without it).
+    """
+    signature = {"google": {"thought_signature": "opaque-signature=="}}
+    provider = _NativeProvider(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    LLMToolCall(
+                        id="call-1",
+                        name="search_faq",
+                        arguments_json='{"topic":"refund"}',
+                        extra_content=signature,
+                    )
+                ],
+            ),
+            LLMResponse(content="Here is the refund policy."),
+        ]
+    )
+    adapter = ArenaAdapter(provider, tool_call_protocol=ToolCallProtocol.NATIVE_V1)
+
+    await adapter.send(_input("What is the refund policy?"))
+
+    assistant = next(message for message in provider.requests[1] if message.tool_calls)
+    assert assistant.tool_calls[0].extra_content == signature
+
+
 async def test_a_clean_defence_reports_zero_malformed() -> None:
     """靶场真的防住时,坏格式计数必须是 0 —— 否则这个指标区分不了任何东西。"""
     provider = ScriptedProvider(["抱歉,我不能提供其他客户的信息。"])
