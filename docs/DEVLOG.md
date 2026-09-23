@@ -542,6 +542,55 @@
 - **剩余状态:** DONE（合并与私有仓库同步）；OPEN（Controller 更换；两个 Target 与 Attacker 的账单对账；原生 FC
   下的 controls、utility 基线与校准；Windows 拉取 master 并同步 `.env`）。
 
+### 2026-09-23 23:32 AEST · Step 25 · `.env.example` 跟上今天的选型（PR #64）
+
+- **进度:** 公开模板的"当前选型"还停在 2026-08-06（FlashX + Gemini 攻击方）。改为今天的配置：Target
+  `glm-4-32b-0414-128k`、第二 Target `gemini-3.1-flash-lite`、Attacker `gpt-6-luna`、Controller 待更换；
+  "钉死版本"一节改写为哪些模型能钉、哪些不能，并记下 glm-4.7 的漂移；候选记录整段改为今天原生 FC 资格门的
+  结果，并注明 8 月的文本协议排除结论已失效；`EXTRA_BODY` 补上进程环境变量深度合并的坑；"已知未接线的设置"
+  一节已过时（temperature 与 max_tokens 现在都会进入 `ProviderRunConfiguration` 并传给 provider），改为
+  说明它们是冻结的实验条件。模板仍只含变量名与说明。
+- **流程决定（作者询问）:** 本仓库从未用过 issue（0 条），DEVLOG 与 PR 已经承担了记录与关联；今天这几项
+  不另开 issue，避免重复。将来跨机器、跨会话的大项工作若需要追踪，再按需开。
+- **剩余状态:** DONE。
+
+### 2026-09-23 23:32 AEST · Step 26 · 原生 FC 遗留清理与两个不自包含的测试（PR #65）
+
+- **进度:** 关掉 Step 10 与 Step 18 记的三个 TODO。① 原生调用 id 重复：id 由服务端生成、是下一轮
+  `role=tool` 回复的配对键，重复即协议损坏，在 `_native_tool_calls` 里与缺字段同等处理，抛
+  `ProviderProtocolError`。② 工具定义改为每次 `send` 构建一次，不再每轮工具循环重建，行为不变。
+  ③ `test_gate_report_exports_incomplete_state_for_empty_store` 与
+  `test_gate_report_cli_loads_protection_evidence` 依赖被忽略的私有基线文件（`load_frozen_utility_baseline`
+  找不到相对路径时回退到代码所在仓库的 `docs/`），改为各自写一份合成基线并显式传
+  `--utility-baseline-json`。
+- **验证:** 两个测试在没有 `docs/` 的 src 副本上通过（改前失败）；重复 id 的测试在改前代码上失败、改后通过；
+  全量 873 passed，四道门通过。
+- **剩余状态:** DONE。
+
+### 2026-09-23 23:32 AEST · Step 27 · `redcell positive-control`：资格门成为正式命令
+
+- **进度:** 今天两轮筛选用的是临时目录里的脚本（Step 17、19、21），能复现但不在代码库、没有测试。现在
+  成为 CLI 命令 `positive-control`，只跑阳性对照的三条冻结用例，默认原生 FC。
+- **设计:**
+  - `--env-file .env.candidate`：`load_target(env_file)` 用 `TargetSettings(_env_file=(".env", 候选))`
+    分层读取，候选逐键覆盖 `.env`，JSON 字段整个替换（与进程环境变量的深度合并不同）。⚠️ dotenv 的
+    `${...}` 引用只能指向同一文件前面的变量或进程环境，候选文件里写 `${GEMINI_API_KEY}` 会解析成空并沿用
+    `.env` 的 key；候选文件命名为 `.env.*`（已被 gitignore），直接写字面值。
+  - `run_positive_control(on_output=...)`：对照只保留命中与否，花费、截断、回传模型串只能从每回合的
+    `AdapterOutput` 拿；观察者抛出的异常原样中止对照。`--max-cost` 靠它实现：达到上限抛
+    `PositiveControlBudgetError`，产物写 `aborted="max_cost"`、`outcomes=[]`，退出码 3（RUN_FAILED），
+    不把部分结果伪装成资格门证据。与 `run --max-cost` 同一原则：provider 报不出成本时拒绝设上限（退出码 4）。
+  - `ArenaAdapter` 在 `trace_metadata.extra["truncated_responses"]` 记录 `finish_reason == "length"` 的次数：
+    截断的工具调用在命中率上与"防住了"分不开，思考不能关闭的模型需要这个计数。
+  - `--case` 只跑子集、`--keep-replies` 保存每回合可见回复，对应 Step 21 的 D1/D2 诊断；子集不算资格门。
+  - 产物 `PositiveControlReport`：Target 快照（无凭据）、协议、重复数、用例、逐用例结果、用量、中止原因、
+    回复；文件名 `positive-control-<model>.json`，同一目录可放多个候选。退出码：0 通过、5 未通过、3 中止、
+    4 配置被拒。没有离线模式，理由与 `controls` 相同。
+- **测试:** CLI 9 个（通过、默认原生、未通过、单用例诊断、未知用例、env-file 透传、上限中止、上限无法生效
+  时拒绝、无离线模式）；`load_target` 分层 2 个；观察者 2 个；截断计数 1 个。全量 887 passed，四道门通过。
+- **文档:** README 与 CALIBRATION §2 加入命令用法；`.env.example` 已在 Step 25 提及。
+- **剩余状态:** DONE。今天的临时脚本不再需要。
+
 ---
 
 ## 2026-09-21 · 双设备迁移与完整证据交接

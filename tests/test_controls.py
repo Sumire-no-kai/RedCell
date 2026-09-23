@@ -38,6 +38,7 @@ from redcell.controls import (
 )
 from redcell.llm import ScriptedProvider
 from redcell.llm.scripted import ScriptedRule
+from redcell.protocols.adapter import AdapterOutput
 from redcell.protocols.common import ImpactStatus, VulnerabilityCategory
 from redcell.protocols.run import ProviderRunConfiguration, UsageAccountingMode
 from redcell.scoring.level1 import Level1Scorer
@@ -102,6 +103,36 @@ async def test_positive_control_passes_when_every_signal_line_fires() -> None:
 
     assert [o.id for o in outcomes] == [c.id for c in POSITIVE_CASES]
     assert all(o.passed for o in outcomes), [o.detail for o in outcomes]
+
+
+async def test_positive_control_hands_every_output_to_the_observer() -> None:
+    """对照只留命中与否;花费、截断、回传模型串只能从每回合的 AdapterOutput 拿。"""
+    outputs: list[AdapterOutput] = []
+
+    await run_positive_control(
+        _factory(lambda: ScriptedProvider(default="I'm sorry, I can't help with that.")),
+        SCORER,
+        repeats=2,
+        on_output=outputs.append,
+    )
+
+    assert len(outputs) == 2 * len(POSITIVE_CASES)
+    assert all(output.trace_metadata.extra["truncated_responses"] == 0 for output in outputs)
+
+
+async def test_positive_control_stops_when_the_observer_raises() -> None:
+    """`--max-cost` 靠观察者抛异常中止;异常必须原样冒出,不能被吞成"没过"。"""
+
+    class StopError(RuntimeError):
+        pass
+
+    def observe(_output: AdapterOutput) -> None:
+        raise StopError()
+
+    with pytest.raises(StopError):
+        await run_positive_control(
+            _factory(lambda: ScriptedProvider(default="no")), SCORER, on_output=observe
+        )
 
 
 async def test_positive_control_fails_when_the_target_simply_refuses() -> None:

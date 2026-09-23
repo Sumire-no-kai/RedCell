@@ -48,9 +48,14 @@ from redcell.controller_controls import (
     run_controller_contract_controls,
 )
 from redcell.controls import (
+    DEFAULT_POSITIVE_REPEATS,
+    POSITIVE_CASES,
     UTILITY_CONTEXT_VERSION,
     ControlsAdjudicationReport,
     ControlsReport,
+    PositiveControlBudgetError,
+    PositiveControlReport,
+    PositiveControlUsage,
     assess_controls_adjudication,
     build_controls_adjudication_template,
     controls_conditions,
@@ -83,6 +88,7 @@ from redcell.orchestrator import (
     RunOrchestrator,
     RunResumeError,
 )
+from redcell.protocols.adapter import AdapterOutput
 from redcell.protocols.run import (
     ArenaRunConfiguration,
     ControllerRunConfiguration,
@@ -1401,6 +1407,142 @@ def controls(
     typer.echo(f"明细    {detail}")
 
     if not report_data.passed:
+        raise typer.Exit(ExitCode.CONTROL_FAILED)
+    raise typer.Exit(ExitCode.CLEAN)
+
+
+@app.command(name="positive-control")
+def positive_control(
+    env_file: Annotated[
+        Path | None,
+        typer.Option(
+            help="候选 Target 的 dotenv 文件,逐键覆盖 .env 的 REDCELL_TARGET_*;"
+            "给候选跑资格门时不必改动 .env(命名为 .env.* 以被 gitignore 覆盖)"
+        ),
+    ] = None,
+    tool_call_protocol: Annotated[
+        ToolCallProtocol,
+        typer.Option(help="Target 工具协议(新实验默认原生)"),
+    ] = NEW_EXPERIMENT_TOOL_CALL_PROTOCOL,
+    repeats: Annotated[
+        int, typer.Option(min=1, help="每条用例重复几次;资格门的冻结值是默认值")
+    ] = DEFAULT_POSITIVE_REPEATS,
+    case: Annotated[
+        list[str] | None,
+        typer.Option(help="只跑这些用例 id(可重复给出);默认三条全跑。子集只用于诊断,不算资格门"),
+    ] = None,
+    max_cost: Annotated[
+        float | None,
+        typer.Option(help="美元硬上限,达到即中止并按未完成记录;要求 Target 配了单价"),
+    ] = None,
+    keep_replies: Annotated[
+        bool, typer.Option(help="把每回合的可见回复写进产物,用于 canary 线归零时排除仪器问题")
+    ] = False,
+    out: Annotated[Path, typer.Option(help="产物目录")] = Path("runs"),
+) -> None:
+    """只跑阳性对照的 Target 资格门(`CALIBRATION.md` §2)。
+
+    `controls` 把阳性和阴性一起跑,而换靶场前先要回答的只有一个问题:
+    canary、工具调用与 Impact 三条链路能不能在这个候选上触发。三条用例每条
+    至少命中一次才算过;过了也只证明能力,不等于 utility、稳定性或 Gate 已通过。
+
+    与 `controls` 一样没有离线模式:脚本化 provider 配合地被攻破证明不了任何事。
+    """
+    known = {positive.id: positive for positive in POSITIVE_CASES}
+    if case:
+        unknown = [case_id for case_id in case if case_id not in known]
+        if unknown:
+            raise typer.BadParameter(f"未知的用例 id:{', '.join(unknown)};可选 {', '.join(known)}")
+        cases = [positive for positive in POSITIVE_CASES if positive.id in set(case)]
+    else:
+        cases = list(POSITIVE_CASES)
+    if max_cost is not None and max_cost <= 0:
+        raise typer.BadParameter("--max-cost 必须大于 0")
+
+    try:
+        provider, configuration = load_target(env_file)
+    except ProviderConfigError as exc:
+        typer.secho(f"配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG) from exc
+
+    if max_cost is not None and not getattr(provider, "reports_cost", False):
+        # 与 `run --max-cost` 同一条原则:provider 报不出成本时,上限永远不会触发,
+        # 那是一个假的安全网 —— 当场拒绝,不要让人以为花费被管住了。
+        asyncio.run(provider.aclose())
+        typer.secho(
+            "Target 没有配置单价,--max-cost 永远不会触发;补齐三项单价后再设上限。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(ExitCode.BAD_CONFIG)
+
+    usage = PositiveControlUsage()
+    replies: list[str] = []
+
+    def _observe(output: AdapterOutput) -> None:
+        usage.record(output)
+        if keep_replies:
+            replies.append(output.assistant_message)
+        if max_cost is not None and usage.cost_usd >= max_cost:
+            raise PositiveControlBudgetError(usage.cost_usd, max_cost)
+
+    def _make(enforce_permissions: bool) -> ArenaAdapter:
+        return _arena_adapter(
+            provider,
+            configuration,
+            defense=DefenseLevel.NONE,
+            enforce_permissions=enforce_permissions,
+            tool_call_protocol_version=tool_call_protocol.value,
+        )
+
+    async def _run_and_close():
+        try:
+            return await run_positive_control(
+                _make,
+                Level1Scorer(SUPPORT_AGENT_POLICY),
+                cases=cases,
+                repeats=repeats,
+                on_output=_observe,
+            )
+        finally:
+            await provider.aclose()
+
+    aborted: str | None = None
+    try:
+        outcomes = asyncio.run(_run_and_close())
+    except PositiveControlBudgetError:
+        outcomes = []
+        aborted = "max_cost"
+
+    report = PositiveControlReport(
+        target=configuration,
+        tool_call_protocol_version=tool_call_protocol.value,
+        repeats=repeats,
+        case_ids=[positive.id for positive in cases],
+        outcomes=outcomes,
+        usage=usage,
+        aborted=aborted,
+        replies=replies if keep_replies else None,
+    )
+    out.mkdir(parents=True, exist_ok=True)
+    safe_model = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in configuration.model)
+    detail = out / f"positive-control-{safe_model}.json"
+    detail.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+
+    typer.echo(f"模型    {configuration.model}  协议 {tool_call_protocol.value}")
+    typer.echo(report.summary())
+    typer.echo(f"明细    {detail}")
+
+    if aborted is not None:
+        typer.secho(
+            f"已中止:花费 ${usage.cost_usd:.4f} 达到 --max-cost {max_cost}。"
+            "结果不完整,不能当资格门证据。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(ExitCode.RUN_FAILED)
+    if not report.passed:
+        typer.secho("资格门未通过 —— 不要拿这个候选去跑校准。", fg=typer.colors.RED, err=True)
         raise typer.Exit(ExitCode.CONTROL_FAILED)
     raise typer.Exit(ExitCode.CLEAN)
 

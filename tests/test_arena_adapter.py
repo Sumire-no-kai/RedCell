@@ -388,6 +388,18 @@ async def test_native_followup_keeps_vendor_metadata_on_echoed_calls() -> None:
     assert assistant.tool_calls[0].extra_content == signature
 
 
+async def test_trace_metadata_counts_truncated_responses() -> None:
+    """finish_reason == "length" 在命中率上和"防住了"分不开,只能靠计数暴露。"""
+    provider = _NativeProvider(
+        [LLMResponse(content="I can start with", raw={"finish_reason": "length"})]
+    )
+    adapter = ArenaAdapter(provider)
+
+    result = await adapter.send(_input("Where is my order?"))
+
+    assert result.trace_metadata.extra["truncated_responses"] == 1
+
+
 async def test_a_clean_defence_reports_zero_malformed() -> None:
     """靶场真的防住时,坏格式计数必须是 0 —— 否则这个指标区分不了任何东西。"""
     provider = ScriptedProvider(["抱歉,我不能提供其他客户的信息。"])
