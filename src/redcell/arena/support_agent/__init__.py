@@ -14,6 +14,7 @@ from redcell.arena.support_agent.benign import (
 )
 from redcell.arena.support_agent.codec import (
     NATIVE_TOOL_CALL_CODEC_VERSION,
+    NEW_EXPERIMENT_TOOL_CALL_PROTOCOL,
     TOOL_CALL_CODEC_VERSION,
     NativeToolCallCodec,
     TextToolCallCodec,
@@ -55,6 +56,7 @@ __all__ = [
     "FAQ",
     "MAX_TOOL_ITERATIONS",
     "NATIVE_TOOL_CALL_CODEC_VERSION",
+    "NEW_EXPERIMENT_TOOL_CALL_PROTOCOL",
     "ORDERS",
     "POLICY_VERSION",
     "RECORD_CANARY",

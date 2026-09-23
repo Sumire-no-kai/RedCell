@@ -108,6 +108,19 @@ class ToolCallProtocol(StrEnum):
     NATIVE_V1 = NATIVE_TOOL_CALL_CODEC_VERSION
 
 
+NEW_EXPERIMENT_TOOL_CALL_PROTOCOL = ToolCallProtocol.NATIVE_V1
+"""新实验入口(`run` / `gate-plan` / `controls`)的默认 Target 工具协议。⭐
+
+2026-09-23 作者决定:新实验一律走原生 Function Calling。文本协议要求模型在自由文本里
+写出 `<tool_call>`,测到的一部分是"格式服从",而不是模型会不会发起调用 —— 同日用
+text-v2 测的四个 Target 候选工具线全部 0 次调用,就分不清是哪一种。
+
+这只是**新实验**的默认值。记录里没有协议字段的旧实验(v4 条件之前)一律按
+text-v2 解释,续跑与重放必须沿用它们落盘的协议,不能跟着这个默认值走;文本协议因此
+保留,只能显式选择。
+"""
+
+
 _OPEN_TAG = "<tool_call>"
 _CLOSE_TAG = "</tool_call>"
 _DECODER = json.JSONDecoder()
