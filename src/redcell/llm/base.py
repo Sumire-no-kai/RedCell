@@ -33,6 +33,13 @@ class LLMToolCall(RedCellModel):
     id: str
     name: str
     arguments_json: str
+    extra_content: dict[str, Any] | None = None
+    """Opaque vendor metadata on the call, echoed back unchanged in the next request.
+
+    Gemini 3 puts its thought signature at `tool_calls[].extra_content.google` and rejects
+    the follow-up turn with HTTP 400 when it is missing (2026-09-23). Only in-flight state:
+    it never enters traces, experiment conditions or fingerprints.
+    """
 
 
 class LLMMessage(RedCellModel):
