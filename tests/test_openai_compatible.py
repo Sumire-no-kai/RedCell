@@ -295,6 +295,20 @@ async def test_tool_call_extra_content_must_be_an_object() -> None:
         await provider.complete(_user("look up customer_b"))
 
 
+async def test_duplicate_native_tool_call_ids_are_a_protocol_error() -> None:
+    """Call ids pair each role=tool reply with its call; a duplicate makes the
+    follow-up ambiguous. The id comes from the server, so this is protocol damage,
+    not model behaviour, and is rejected like any other malformed structure.
+    """
+    body = _gemini_tool_call_body(None)
+    call = body["choices"][0]["message"]["tool_calls"][0]  # type: ignore[index]
+    body["choices"][0]["message"]["tool_calls"] = [call, dict(call)]  # type: ignore[index]
+    provider = _provider(httpx.MockTransport(lambda _: httpx.Response(200, json=body)))
+
+    with pytest.raises(ProviderProtocolError, match="id 重复"):
+        await provider.complete(_user("look up customer_b"))
+
+
 def test_tool_call_extra_content_defaults_to_none() -> None:
     call = LLMToolCall(id="call-1", name="search_faq", arguments_json="{}")
 

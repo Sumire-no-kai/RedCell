@@ -542,6 +542,7 @@ def _native_tool_calls(message: dict[str, Any], *, provider: str) -> list[LLMToo
     if not isinstance(raw_calls, list):
         raise ProviderProtocolError(f"{provider} 的 message.tool_calls 不是数组")
     parsed: list[LLMToolCall] = []
+    seen_ids: set[str] = set()
     for index, raw in enumerate(raw_calls):
         function = raw.get("function") if isinstance(raw, dict) else None
         call_id = raw.get("id") if isinstance(raw, dict) else None
@@ -551,6 +552,13 @@ def _native_tool_calls(message: dict[str, Any], *, provider: str) -> list[LLMToo
             arguments, str
         ):
             raise ProviderProtocolError(f"{provider} 的 message.tool_calls[{index}] 结构不完整")
+        # 调用 id 由服务端生成,是下一轮 role=tool 回复的配对键;重复 id 让回复无法配对,
+        # 属于协议损坏而不是模型行为,和缺字段一样直接报错。
+        if call_id in seen_ids:
+            raise ProviderProtocolError(
+                f"{provider} 的 message.tool_calls[{index}].id 重复:{call_id}"
+            )
+        seen_ids.add(call_id)
         extra_content = raw.get("extra_content")
         if extra_content is not None and not isinstance(extra_content, dict):
             raise ProviderProtocolError(
