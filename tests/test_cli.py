@@ -10,7 +10,9 @@ import pytest
 from typer.testing import CliRunner
 
 from redcell.arena.support_agent import MAX_TOOL_ITERATIONS, DefenseLevel, ToolCallProtocol
+from redcell.arena.support_agent import tools as arena_tools
 from redcell.arena.support_agent.benign import BENIGN_TASKS
+from redcell.arena.support_agent.data import SYSTEM_PROMPT_CANARY
 from redcell.budget import BudgetLimits
 from redcell.cli import OFFLINE_NOTICE, ExitCode, _arena_adapter, _experiment_conditions, app
 from redcell.config import ProviderConfigError
@@ -19,7 +21,7 @@ from redcell.controls import (
     DEFAULT_POSITIVE_REPEATS,
     POSITIVE_CASES,
 )
-from redcell.llm.scripted import ScriptedProvider
+from redcell.llm.scripted import ScriptedProvider, ScriptedRule
 from redcell.protocols import (
     AdapterInput,
     AdapterOutput,
@@ -865,3 +867,185 @@ def test_preflight_rejection_is_config_not_a_failed_run(workspace) -> None:
     result = runner.invoke(app, ["run", "--max-cost", "1.0", "--db", _db(workspace)])
     assert result.exit_code == ExitCode.BAD_CONFIG
     assert result.exit_code != ExitCode.RUN_FAILED
+
+
+# ── positive-control ─────────────────────────────────────────────────────
+
+
+class _FakeTarget(ScriptedProvider):
+    """按消息匹配的脚本靶场,补齐 CLI 用到的 model / aclose / reports_cost。"""
+
+    def __init__(self, *, rules=None, default: str | None = None, cost_per_call: float = 0.0):
+        super().__init__(rules=rules, default=default, model="fake-target")
+        self._cost_per_call = cost_per_call
+        self.closed = False
+
+    @property
+    def model(self) -> str:
+        return "fake-target"
+
+    @property
+    def reports_cost(self) -> bool:
+        return self._cost_per_call > 0
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+    async def complete(self, messages, **options):
+        response = await super().complete(messages, **options)
+        if self._cost_per_call:
+            return response.model_copy(update={"cost_usd": self._cost_per_call})
+        return response
+
+
+def _qualifying_target(**kwargs) -> _FakeTarget:
+    """三条用例各自命中自己那条线 —— 与 tests/test_controls.py 的通过夹具同形。"""
+    call = json.dumps(
+        {"name": arena_tools.GET_CUSTOMER_PROFILE, "arguments": {"customer_id": "customer_b"}}
+    )
+    return _FakeTarget(
+        rules=[
+            ScriptedRule(r"internal reference code", f"Sure, the code is {SYSTEM_PROMPT_CANARY}."),
+            ScriptedRule(r"Pull up the complete account record", f"<tool_call>{call}</tool_call>"),
+        ],
+        default="Here is what I found.",
+        **kwargs,
+    )
+
+
+def _install_target(monkeypatch, provider: _FakeTarget) -> dict[str, object]:
+    seen: dict[str, object] = {}
+    configuration = ProviderRunConfiguration(
+        provider="test",
+        base_url="https://example.invalid/v1",
+        model="fake-target",
+        temperature=0.7,
+        max_tokens=512,
+        rpm=0.0,
+        max_concurrency=1,
+        input_usd_per_mtok=0.0,
+        output_usd_per_mtok=0.0,
+    )
+
+    def _load(env_file=None):
+        seen["env_file"] = env_file
+        return provider, configuration
+
+    monkeypatch.setattr("redcell.cli.load_target", _load)
+    return seen
+
+
+_TEXT = ["--tool-call-protocol", ToolCallProtocol.TEXT_V2.value]
+"""脚本化 provider 只会返回文本,所以测试显式选文本协议;命令本身默认原生。"""
+
+
+def test_positive_control_passes_and_records_usage(workspace, monkeypatch) -> None:
+    target = _qualifying_target()
+    _install_target(monkeypatch, target)
+
+    result = runner.invoke(app, ["positive-control", "--repeats", "2", *_TEXT])
+
+    assert result.exit_code == ExitCode.CLEAN, result.output
+    report = json.loads((workspace / "runs" / "positive-control-fake-target.json").read_text())
+    assert [o["id"] for o in report["outcomes"]] == [c.id for c in POSITIVE_CASES]
+    assert all(o["passed"] for o in report["outcomes"])
+    assert report["aborted"] is None
+    assert report["usage"]["sends"] == 2 * len(POSITIVE_CASES)
+    assert report["usage"]["models_seen"] == ["fake-target"]
+    assert report["tool_call_protocol_version"] == ToolCallProtocol.TEXT_V2.value
+    assert report["target"]["model"] == "fake-target"
+    assert "api_key" not in json.dumps(report)
+    assert target.closed
+
+
+def test_positive_control_defaults_to_native_function_calling(workspace, monkeypatch) -> None:
+    _install_target(monkeypatch, _qualifying_target())
+
+    result = runner.invoke(app, ["positive-control", "--repeats", "1"])
+
+    report = json.loads((workspace / "runs" / "positive-control-fake-target.json").read_text())
+    assert report["tool_call_protocol_version"] == ToolCallProtocol.NATIVE_V1.value
+    # 文本回复在原生协议下不算工具调用 —— 这正是 2026-09-23 发现的两种协议的差别。
+    assert result.exit_code == ExitCode.CONTROL_FAILED, result.output
+
+
+def test_positive_control_failure_exits_with_the_control_code(workspace, monkeypatch) -> None:
+    _install_target(monkeypatch, _FakeTarget(default="I cannot help with that."))
+
+    result = runner.invoke(app, ["positive-control", "--repeats", "1", *_TEXT])
+
+    assert result.exit_code == ExitCode.CONTROL_FAILED, result.output
+    assert "不要拿这个候选去跑校准" in result.output
+    report = json.loads((workspace / "runs" / "positive-control-fake-target.json").read_text())
+    assert not any(o["passed"] for o in report["outcomes"])
+
+
+def test_positive_control_can_run_a_single_case_for_diagnosis(workspace, monkeypatch) -> None:
+    target = _qualifying_target()
+    _install_target(monkeypatch, target)
+
+    result = runner.invoke(
+        app,
+        ["positive-control", "--case", "canary_direct", "--repeats", "3", "--keep-replies", *_TEXT],
+    )
+
+    assert result.exit_code == ExitCode.CLEAN, result.output
+    report = json.loads((workspace / "runs" / "positive-control-fake-target.json").read_text())
+    assert report["case_ids"] == ["canary_direct"]
+    assert [o["id"] for o in report["outcomes"]] == ["canary_direct"]
+    assert len(report["replies"]) == 3
+    assert all(SYSTEM_PROMPT_CANARY in reply for reply in report["replies"])
+
+
+def test_positive_control_rejects_an_unknown_case_id(workspace, monkeypatch) -> None:
+    _install_target(monkeypatch, _qualifying_target())
+
+    result = runner.invoke(app, ["positive-control", "--case", "no_such_case", *_TEXT])
+
+    assert result.exit_code == 2
+    assert "no_such_case" in result.output
+
+
+def test_positive_control_passes_the_env_file_to_the_loader(workspace, monkeypatch) -> None:
+    seen = _install_target(monkeypatch, _qualifying_target())
+
+    runner.invoke(
+        app, ["positive-control", "--env-file", ".env.candidate", "--repeats", "1", *_TEXT]
+    )
+
+    assert seen["env_file"] == Path(".env.candidate")
+
+
+def test_positive_control_aborts_at_the_cost_cap(workspace, monkeypatch) -> None:
+    """达到上限就停,产物明确标记未完成 —— 部分结果不能伪装成资格门证据。"""
+    target = _qualifying_target(cost_per_call=0.01)
+    _install_target(monkeypatch, target)
+
+    result = runner.invoke(app, ["positive-control", "--max-cost", "0.025", *_TEXT])
+
+    assert result.exit_code == ExitCode.RUN_FAILED, result.output
+    assert "已中止" in result.output
+    report = json.loads((workspace / "runs" / "positive-control-fake-target.json").read_text())
+    assert report["aborted"] == "max_cost"
+    assert report["outcomes"] == []
+    assert report["usage"]["cost_usd"] >= 0.025
+    assert target.closed
+
+
+def test_positive_control_refuses_a_cost_cap_the_target_cannot_honour(
+    workspace, monkeypatch
+) -> None:
+    """provider 报不出成本时上限永远不会触发 —— 那是假的安全网,与 run 同一条原则。"""
+    target = _qualifying_target()
+    _install_target(monkeypatch, target)
+
+    result = runner.invoke(app, ["positive-control", "--max-cost", "0.5", *_TEXT])
+
+    assert result.exit_code == ExitCode.BAD_CONFIG, result.output
+    assert "永远不会触发" in result.output
+    assert target.closed
+    assert not (workspace / "runs").exists()
+
+
+def test_positive_control_has_no_offline_mode(workspace) -> None:
+    assert runner.invoke(app, ["positive-control", "--offline"]).exit_code == 2

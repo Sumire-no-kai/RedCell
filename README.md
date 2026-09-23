@@ -191,6 +191,16 @@ target runs at temperature 0.7 by protocol, so a single sample cannot establish
 "must succeed" — and a control that fails at random is worse than none, because
 it sends you looking for a broken chain that isn't there.
 
+To qualify a candidate target before touching `.env`, run only the positive
+half against an override file (`.env.*` files are gitignored):
+
+```bash
+redcell positive-control --env-file .env.candidate --max-cost 0.5
+```
+
+It reports per-case hits, spend, truncated responses and the model string the
+server actually returned, and exits `5` if any case never lands.
+
 The third checks the instrument itself:
 
 The attacker LLM is the *measuring instrument*. If it renders every strategy as

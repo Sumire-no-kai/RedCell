@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from enum import StrEnum
 
 from pydantic import Field, computed_field, model_validator
@@ -43,7 +44,7 @@ from redcell.arena.support_agent.codec import TOOL_CALL_CODEC_VERSION
 from redcell.arena.support_agent.policy import POLICY_VERSION
 from redcell.failures import FailureRecord
 from redcell.finding_identity import finding_signature
-from redcell.protocols.adapter import AdapterInput, Message, TargetAdapter
+from redcell.protocols.adapter import AdapterInput, AdapterOutput, Message, TargetAdapter
 from redcell.protocols.common import RedCellModel, Role, VulnerabilityCategory
 from redcell.protocols.finding import Finding
 from redcell.protocols.run import ArenaRunConfiguration, ProviderRunConfiguration
@@ -700,6 +701,7 @@ async def run_positive_control(
     cases: list[PositiveCase] | None = None,
     repeats: int = DEFAULT_POSITIVE_REPEATS,
     retry_policy: RetryPolicy | None = None,
+    on_output: Callable[[AdapterOutput], None] | None = None,
 ) -> list[ControlOutcome]:
     """在**移除防御措辞**的靶场上跑直白攻击,每条至少要得手一次。
 
@@ -708,6 +710,9 @@ async def run_positive_control(
             用工厂而不是单个 adapter,是因为其中一条 case 必须关掉权限层 ——
             那是唯一能验证"Impact 真的发生"这条路径的方式。
         repeats: 每条 case 重复几次,见 `DEFAULT_POSITIVE_REPEATS`。
+        on_output: 每次靶场回复后调用一次,拿到完整的 `AdapterOutput`。
+            对照本身只保留命中与否;花费、截断、回传模型串这些"这一轮到底
+            发生了什么"的信息只在这里能拿到。它抛出的异常会原样中止对照。
     """
     if repeats < 1:
         raise ValueError("repeats 至少为 1")
@@ -729,6 +734,8 @@ async def run_positive_control(
                 ),
                 policy=policy,
             )
+            if on_output is not None:
+                on_output(output)
             result = scorer.score(
                 [Turn(index=0, attacker_message=case.message, output=output)],
                 run_id="control",
@@ -760,6 +767,74 @@ async def run_positive_control(
             )
         )
     return outcomes
+
+
+class PositiveControlBudgetError(RuntimeError):
+    """资格门的美元硬上限被触及;对照在此中止,结果按未完成记录。"""
+
+    def __init__(self, cost_usd: float, max_cost_usd: float) -> None:
+        super().__init__(f"阳性资格门花费 ${cost_usd:.4f} 达到上限 ${max_cost_usd:.4f}")
+        self.cost_usd = cost_usd
+        self.max_cost_usd = max_cost_usd
+
+
+class PositiveControlUsage(RedCellModel):
+    """一次阳性资格门实际消耗的资源,只从 `AdapterOutput.trace_metadata` 汇总。
+
+    `sends` 是靶场回合数(一回合可能含多次工具循环请求),不是 HTTP 请求数;
+    `truncated_responses` 由 adapter 统计 `finish_reason == "length"` 的次数 ——
+    思考不能关闭的模型会用它暴露"上限被思考占满"。
+    """
+
+    sends: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float = 0.0
+    usage_known: bool = True
+    truncated_responses: int = 0
+    models_seen: list[str] = Field(default_factory=list)
+    """服务端回传的模型串;与请求串不一致就是漂移的证据。"""
+
+    def record(self, output: AdapterOutput) -> None:
+        trace = output.trace_metadata
+        self.sends += 1
+        self.prompt_tokens += trace.prompt_tokens
+        self.completion_tokens += trace.completion_tokens
+        self.cost_usd += trace.cost_usd
+        self.usage_known = self.usage_known and trace.usage_known
+        self.truncated_responses += int(trace.extra.get("truncated_responses", 0))
+        if trace.model and trace.model not in self.models_seen:
+            self.models_seen.append(trace.model)
+
+
+class PositiveControlReport(RedCellModel):
+    """`redcell positive-control` 的产物:候选 Target 的阳性资格门结果与开销。"""
+
+    target: ProviderRunConfiguration
+    tool_call_protocol_version: str
+    repeats: int = Field(ge=1)
+    case_ids: list[str]
+    outcomes: list[ControlOutcome] = Field(default_factory=list)
+    usage: PositiveControlUsage = Field(default_factory=PositiveControlUsage)
+    aborted: str | None = None
+    """非空表示对照没有跑完(如 `max_cost`),`outcomes` 为空,不能当资格门证据。"""
+
+    replies: list[str] | None = None
+    """`--keep-replies` 时逐回合的可见回复,供 canary 线归零时排除仪器问题。"""
+
+    @property
+    def passed(self) -> bool:
+        return self.aborted is None and bool(self.outcomes) and all(o.passed for o in self.outcomes)
+
+    def summary(self) -> str:
+        lines = [f"  {'PASS' if o.passed else 'FAIL'} {o.id}: {o.detail}" for o in self.outcomes]
+        usage = self.usage
+        lines.append(
+            f"用量    sends={usage.sends} tokens={usage.prompt_tokens}+{usage.completion_tokens}"
+            f" cost=${usage.cost_usd:.4f} truncated={usage.truncated_responses}"
+            f" models={','.join(usage.models_seen) or '-'}"
+        )
+        return "\n".join(lines)
 
 
 DEFAULT_NEGATIVE_REPEATS = 20

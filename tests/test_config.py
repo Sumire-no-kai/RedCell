@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from redcell.config import ProviderSettings
+from redcell.config import ProviderSettings, load_target
 from redcell.protocols.run import UsageAccountingMode
 
 
@@ -116,3 +118,75 @@ def test_unset_new_provider_fields_keep_historical_serialisation() -> None:
         "usage_accounting_mode",
         "usage_covers_billed_tokens",
     }
+
+
+_TARGET_VARS = (
+    "REDCELL_TARGET_PROVIDER",
+    "REDCELL_TARGET_BASE_URL",
+    "REDCELL_TARGET_API_KEY",
+    "REDCELL_TARGET_MODEL",
+    "REDCELL_TARGET_EXTRA_BODY",
+    "REDCELL_TARGET_MAX_TOKENS",
+)
+
+
+def _isolate_target_env(tmp_path, monkeypatch) -> None:
+    """Process env would override both files; the test is about the files."""
+    monkeypatch.chdir(tmp_path)
+    for name in _TARGET_VARS:
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.mark.asyncio
+async def test_load_target_layers_a_candidate_env_file_over_dotenv(tmp_path, monkeypatch) -> None:
+    """`positive-control --env-file`: the candidate file overrides `.env` key by key.
+
+    JSON fields are replaced whole, unlike process-env overrides, which
+    pydantic-settings deep-merges with the `.env` value (2026-09-23).
+    """
+    _isolate_target_env(tmp_path, monkeypatch)
+    (tmp_path / ".env").write_text(
+        "REDCELL_TARGET_PROVIDER=glm\n"
+        "REDCELL_TARGET_BASE_URL=https://base.invalid/v1\n"
+        "REDCELL_TARGET_API_KEY=not-a-real-key\n"
+        "REDCELL_TARGET_MODEL=base-model\n"
+        "REDCELL_TARGET_MAX_TOKENS=512\n"
+        'REDCELL_TARGET_EXTRA_BODY={"thinking": {"type": "disabled"}}\n',
+        encoding="utf-8",
+    )
+    (tmp_path / ".env.candidate").write_text(
+        "REDCELL_TARGET_PROVIDER=gemini\n"
+        "REDCELL_TARGET_MODEL=candidate-model\n"
+        "REDCELL_TARGET_MAX_TOKENS=4096\n"
+        "REDCELL_TARGET_EXTRA_BODY={}\n",
+        encoding="utf-8",
+    )
+
+    provider, configuration = load_target(Path(".env.candidate"))
+    try:
+        assert configuration.provider == "gemini"
+        assert configuration.model == "candidate-model"
+        assert configuration.max_tokens == 4096
+        assert configuration.base_url == "https://base.invalid/v1"
+        assert configuration.extra_body.thinking is None
+        assert provider.model == "candidate-model"
+    finally:
+        await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_load_target_env_file_works_without_a_dotenv(tmp_path, monkeypatch) -> None:
+    _isolate_target_env(tmp_path, monkeypatch)
+    (tmp_path / ".env.candidate").write_text(
+        "REDCELL_TARGET_PROVIDER=glm\n"
+        "REDCELL_TARGET_BASE_URL=https://candidate.invalid/v1\n"
+        "REDCELL_TARGET_API_KEY=not-a-real-key\n"
+        "REDCELL_TARGET_MODEL=candidate-model\n",
+        encoding="utf-8",
+    )
+
+    provider, configuration = load_target(Path(".env.candidate"))
+    try:
+        assert configuration.model == "candidate-model"
+    finally:
+        await provider.aclose()

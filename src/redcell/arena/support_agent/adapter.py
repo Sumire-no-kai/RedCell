@@ -144,6 +144,7 @@ class ArenaAdapter(TargetAdapter):
         usage_known = True
         cost_usd = 0.0
         malformed_tool_calls = 0
+        truncated_responses = 0
         visible = ""
         model_name = self._model
 
@@ -169,6 +170,10 @@ class ArenaAdapter(TargetAdapter):
             usage_known = usage_known and response.usage_known
             cost_usd += response.cost_usd
             model_name = response.model
+            # 上限把回复截断时,工具调用可能被截在 JSON 中间;这与"靶场防住了"在
+            # 命中率上看不出区别,只能靠这个计数暴露。
+            if response.raw.get("finish_reason") == "length":
+                truncated_responses += 1
 
             decoded = self._codec.decode(response)
             visible = decoded.visible
@@ -212,6 +217,7 @@ class ArenaAdapter(TargetAdapter):
                 extra={
                     "defense": self._defense.value,
                     "tool_call_protocol_version": self._codec.version,
+                    "truncated_responses": truncated_responses,
                 },
             ),
         )

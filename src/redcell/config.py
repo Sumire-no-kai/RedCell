@@ -15,6 +15,7 @@ temperature / cost。它们可以复用同一个实现类、甚至同一个模�
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field
@@ -265,13 +266,25 @@ def load_controller() -> tuple[OpenAICompatibleProvider, ProviderRunConfiguratio
     return settings.build(name="controller"), settings.run_configuration()
 
 
-def load_target() -> tuple[OpenAICompatibleProvider, ProviderRunConfiguration]:
+def load_target(
+    env_file: Path | None = None,
+) -> tuple[OpenAICompatibleProvider, ProviderRunConfiguration]:
     """构造 Target 的独立连接与不含凭据的运行快照。
 
     Replay validation 只会重放已冻结的攻击路径，不应顺带创建 attacker 或
     Controller 连接。把单独加载入口放在配置层，也避免 CLI 复制 env 解析规则。
+
+    Args:
+        env_file: 候选 Target 的 dotenv 文件,叠在 `.env` 之上逐键覆盖
+            (`positive-control --env-file`)。给候选跑资格门时不必改动冻结的 `.env`。
+            两个文件之间是整键替换,不像进程环境变量那样与 `.env` 的 JSON 深度合并。
+            ⚠️ dotenv 的 `${VAR}` 只能引用同一文件里前面的变量或进程环境;候选文件里
+            写 `${GEMINI_API_KEY}` 会解析成空、被当作未设置而沿用 `.env` 的 key。
+            候选文件命名为 `.env.*`,已被 gitignore 覆盖,可以直接写字面值。
     """
-    settings = TargetSettings()
+    settings = (
+        TargetSettings() if env_file is None else TargetSettings(_env_file=(".env", env_file))
+    )
     return settings.build(name="target"), settings.run_configuration()
 
 
