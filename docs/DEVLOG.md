@@ -520,6 +520,28 @@
 - **剩余状态:** OPEN（Controller 候选与 controller-controls；两个 Target 与 Attacker 的账单对账；原生 FC 下的
   controls、utility 基线与校准）。
 
+### 2026-09-23 22:52 AEST · Step 24 · 合并 #59–#62、恢复被关闭的 #60、同步私有伴随仓库
+
+- **进度:** 按作者授权的顺序合并 #59 → #60 → #61 → #62（merge commit，与仓库既有做法一致）。合并后 master
+  `9dc5189` 的树与测过的分支完全相同（`git diff` 为空），即全量 872 passed 的那一版。
+- **遇到的问题:** 合并 #59 时用了 `--delete-branch`。GitHub 没有把以该分支为 base 的 #60 改指 master，而是
+  **关闭了 #60**。
+- **解决方式:** 按原提交 `3b95c70`（已在 master 中，不引入新内容）恢复该分支，重新打开 #60，把 base 改为
+  master 后合并。之后每一步都先把下一个 PR 的 base 改为 master，再删除旧分支，#61、#62 未再出现问题。四个 PR
+  的分支合并后已删除，提交全部在 master。
+- **安全核对（作者询问 `.env` 是否上传过）:** `.env` 与所有 `.env.bak-*` 都被 `.gitignore` 覆盖，`.env.example`
+  只含变量名。对 4 个真实 key 值扫描：全部 288 个提交（本地与所有远程分支）、HEAD 的被跟踪文件、PR #59–#62 的
+  标题/正文/评论，均 0 命中。
+- **`.env`（被忽略）:** 备份为 `.env.bak-2026-09-23-pre-second-target` 后，记下第二个 Target（Gemini）的配置
+  （注释状态），当前生效配置不变。作者负责把 `.env` 同步到 Windows。
+- **私有伴随仓库:** 作者确认继续使用 `Sumire-no-kai/RedCell_Private_Data`（2026-09-21 迁移时建立，PRIVATE）。
+  提交 `7bd67f9`：AGENTS §4.4 的 Mac 证据更正；PRD 角色迁移（Target `glm-4-32b-0414-128k` 与第二 Target Gemini、
+  Attacker `gpt-6-luna`、Controller 待更换），并改正 PRD 中两处过时说明（A3 拒绝数应为 2/70；攻击效果比较的
+  校准对象不再是 glm-4.7）。MANIFEST 重算并通过 `shasum -c`；`SOURCE_STATE.json` 是 09-21 的迁移快照，不改；
+  推送前扫描 0 个 key。公开克隆中被忽略的 `PRD.md` / `AGENTS.md` 仍是旧版，待作者从私有仓库复制。
+- **剩余状态:** DONE（合并与私有仓库同步）；OPEN（Controller 更换；两个 Target 与 Attacker 的账单对账；原生 FC
+  下的 controls、utility 基线与校准；Windows 拉取 master 并同步 `.env`）。
+
 ---
 
 ## 2026-09-21 · 双设备迁移与完整证据交接
