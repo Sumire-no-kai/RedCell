@@ -63,7 +63,7 @@ from redcell.protocols import (
 from redcell.search import ControllerDecision, ControllerDecisionOutcome
 from redcell.storage import RunStore
 from redcell.strategies import PHASE_0_STRATEGIES
-from redcell.utility_baseline import UtilityBaseline
+from redcell.utility_baseline import UtilityBaseline, utility_baseline_json
 from redcell.validator import ReplayValidation, ValidationReport
 from redcell.versions import EXPERIMENT_CONDITIONS_SCHEMA_VERSION
 
@@ -563,6 +563,19 @@ def test_gate_report_cli_loads_protection_evidence(tmp_path, monkeypatch) -> Non
         '{"primary":[100,101,102,103,104,105,106,107,108,109,110,111],"reserve":[112,113,114,115,116,117,118,119]}',
         encoding="utf-8",
     )
+    # The frozen baseline is an ignored private file; the CLI's default path falls
+    # back to the package's repo root, so the test must supply its own copy.
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(
+        utility_baseline_json(
+            UtilityBaseline(
+                context_fingerprint="0" * 64,
+                negative_repeats=DEFAULT_NEGATIVE_REPEATS,
+                per_task={task.id: _BASELINE_COMPLETIONS for task in BENIGN_TASKS},
+            )
+        ),
+        encoding="utf-8",
+    )
 
     result = runner.invoke(
         app,
@@ -576,6 +589,8 @@ def test_gate_report_cli_loads_protection_evidence(tmp_path, monkeypatch) -> Non
             str(validation_path),
             "--seed-plan-json",
             str(seed_path),
+            "--utility-baseline-json",
+            str(baseline_path),
         ],
     )
 

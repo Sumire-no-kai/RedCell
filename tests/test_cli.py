@@ -41,6 +41,7 @@ from redcell.protocols import (
 )
 from redcell.protocols.run import ProviderRunConfiguration, Run, RunStatus
 from redcell.storage import RunStore
+from redcell.utility_baseline import UtilityBaseline, utility_baseline_json
 from redcell.versions import (
     EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
     HOST_BOUND_EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
@@ -57,6 +58,23 @@ def workspace(tmp_path, monkeypatch):
 
 def _db(path) -> str:
     return f"sqlite:///{path / 'cli.db'}"
+
+
+def _write_utility_baseline(path: Path) -> Path:
+    """`gate-report` refuses to run without a frozen utility baseline.
+
+    The real one is an ignored private file, and `load_frozen_utility_baseline`
+    falls back to the package's repo root when the relative path is missing —
+    so a test that relies on the default silently depends on the checkout it
+    runs in (it failed in a fresh worktree on 2026-09-23). Write a synthetic one.
+    """
+    baseline = UtilityBaseline(
+        context_fingerprint="0" * 64,
+        negative_repeats=DEFAULT_NEGATIVE_REPEATS,
+        per_task={task.id: DEFAULT_NEGATIVE_REPEATS for task in BENIGN_TASKS},
+    )
+    path.write_text(utility_baseline_json(baseline), encoding="utf-8")
+    return path
 
 
 def test_controller_controls_writes_the_fixed_preflight_report(workspace, monkeypatch) -> None:
@@ -388,7 +406,19 @@ def test_validation_rejects_an_incomplete_matrix_before_loading_target(
 
 
 def test_gate_report_exports_incomplete_state_for_empty_store(workspace) -> None:
-    result = runner.invoke(app, ["gate-report", "--db", _db(workspace), "--out", "gate.json"])
+    baseline = _write_utility_baseline(workspace / "baseline.json")
+    result = runner.invoke(
+        app,
+        [
+            "gate-report",
+            "--db",
+            _db(workspace),
+            "--out",
+            "gate.json",
+            "--utility-baseline-json",
+            str(baseline),
+        ],
+    )
 
     assert result.exit_code == 0, result.output
     assert "INCOMPLETE" in result.output

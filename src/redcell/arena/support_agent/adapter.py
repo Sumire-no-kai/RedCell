@@ -147,13 +147,15 @@ class ArenaAdapter(TargetAdapter):
         visible = ""
         model_name = self._model
 
+        # 工具定义在一次 send 内不变;建一次,每轮循环复用。
+        native_tools = self._codec.provider_tools(self._tool_specs)
+        provider_options = (
+            {"tools": native_tools, "tool_choice": self._codec.provider_tool_choice}
+            if native_tools is not None
+            else {}
+        )
+
         for _ in range(self._max_tool_iterations):
-            native_tools = self._codec.provider_tools(self._tool_specs)
-            provider_options = (
-                {"tools": native_tools, "tool_choice": self._codec.provider_tool_choice}
-                if native_tools is not None
-                else {}
-            )
             response = await self._provider.complete(
                 messages,
                 model=self._model,
