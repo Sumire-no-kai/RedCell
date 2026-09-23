@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, SerializerFunctionWrapHandler, model_serializer, model_validator
 
 from redcell.budget import BudgetLimit, BudgetLimits, BudgetUsage
 from redcell.failures import FailureRecord
@@ -70,15 +70,39 @@ class RunEvent(RedCellModel):
 
 
 class ThinkingConfiguration(RedCellModel):
-    """The sole approved vendor extension; unknown and secret fields are forbidden."""
+    """GLM / DeepSeek style thinking switch; unknown and secret fields are forbidden."""
 
     type: Literal["enabled", "disabled"]
+
+
+ReasoningEffort = Literal["none", "low", "medium", "high", "xhigh", "max"]
+"""OpenAI `reasoning_effort` values documented for gpt-6-luna (2026-09-23)."""
+
+
+def _drop_unset(data: dict, fields: tuple[str, ...], model: RedCellModel) -> dict:
+    """Omit optional fields added after evidence was frozen when they are unset.
+
+    Not every fingerprint over these models uses `exclude_none` (attacker-control
+    conditions hash the plain dump). A new key serialised as `null` would change
+    those digests and make historical reports fail to load. Dropping the key while
+    it is unset keeps every pre-existing configuration byte-identical.
+    """
+    for field in fields:
+        if getattr(model, field) is None:
+            data.pop(field, None)
+    return data
 
 
 class ProviderExtraBody(RedCellModel):
     """Versioned allowlist for non-standard provider payload fields."""
 
     thinking: ThinkingConfiguration | None = None
+    reasoning_effort: ReasoningEffort | None = None
+    """OpenAI reasoning models; `none` turns reasoning off (2026-09-23)."""
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict:
+        return _drop_unset(handler(self), ("reasoning_effort",), self)
 
     @property
     def thinking_disabled(self) -> bool:
@@ -111,6 +135,16 @@ class ProviderRunConfiguration(RedCellModel):
     """`None` preserves historical snapshots; new runtime settings always select a version."""
     usage_covers_billed_tokens: bool | None = None
     """`None` preserves historical snapshots; only explicit `True` permits a formal Gate."""
+    max_tokens_parameter: Literal["max_completion_tokens"] | None = None
+    """Request field that carries `max_tokens`; `None` sends the standard `max_tokens`.
+
+    OpenAI reasoning models reject `max_tokens` with HTTP 400 and require
+    `max_completion_tokens`, whose limit also covers reasoning tokens (2026-09-23).
+    """
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict:
+        return _drop_unset(handler(self), ("max_tokens_parameter",), self)
 
 
 class RequestTimeoutConfiguration(RedCellModel):

@@ -644,3 +644,30 @@ def test_boolean_token_counts_are_not_accepted_as_known_usage() -> None:
     assert not _is_token_count(1.5)
     assert _as_int(True) == 0
     assert _as_int(7) == 7
+
+
+async def test_max_tokens_parameter_renames_the_output_cap_field() -> None:
+    """2026-09-23:gpt-6-luna 对 `max_tokens` 返回 HTTP 400,只认 `max_completion_tokens`。"""
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json=_OK_BODY)
+
+    await _provider(
+        httpx.MockTransport(handler),
+        max_tokens_parameter="max_completion_tokens",
+        extra_body={"reasoning_effort": "none"},
+    ).complete(_user("你好"), temperature=1.0, max_tokens=512)
+
+    assert seen["max_completion_tokens"] == 512
+    assert "max_tokens" not in seen
+    assert seen["reasoning_effort"] == "none"
+    assert seen["temperature"] == 1.0
+
+
+def test_reasoning_effort_rejects_undocumented_values() -> None:
+    with pytest.raises(ValueError, match="reasoning_effort"):
+        _provider(extra_body={"reasoning_effort": "turbo"})

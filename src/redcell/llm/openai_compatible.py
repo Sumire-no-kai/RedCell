@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 import structlog
@@ -147,6 +147,7 @@ class OpenAICompatibleProvider(LLMProvider):
         min_interval_seconds: float = 0.0,
         max_concurrency: int = 0,
         extra_body: ProviderExtraBody | dict[str, Any] | None = None,
+        max_tokens_parameter: Literal["max_completion_tokens"] | None = None,
         usage_accounting_mode: UsageAccountingMode = UsageAccountingMode.PROMPT_COMPLETION_V1,
         usage_covers_billed_tokens: bool = False,
         shared_limiter: SQLiteRateLimiter | None = None,
@@ -180,6 +181,9 @@ class OpenAICompatibleProvider(LLMProvider):
                 因此启用它必须像旋钮①②③④一样显式声明、重跑阳性对照、写进
                 DEVLOG,不能当成一个默认打开的性能优化。字段名与取值均不校验——
                 厂商专属,校验属于滥用这层抽象的普适性。
+            max_tokens_parameter: 输出上限放进哪个请求字段。`None` 发标准 `max_tokens`;
+                OpenAI 推理模型拒收它(HTTP 400),须传 `"max_completion_tokens"`。
+                与 extra_body 一样属于实验条件,由配置显式给出,不按 base_url 暗猜。
             usage_accounting_mode: Provider usage 如何映射到计费账。默认沿用
                 prompt+completion；thinking 不可关闭且 total 覆盖全部计费 Token 的端点
                 使用 total-prompt。模式属于实验条件，不按 Provider 名称暗猜。
@@ -195,6 +199,7 @@ class OpenAICompatibleProvider(LLMProvider):
         self._extra_body = ProviderExtraBody.model_validate(extra_body or {}).model_dump(
             exclude_none=True
         )
+        self._max_tokens_field = max_tokens_parameter or "max_tokens"
         self._usage_accounting_mode = usage_accounting_mode
         self._usage_covers_billed_tokens = usage_covers_billed_tokens
         self._shared_limiter = shared_limiter
@@ -247,7 +252,7 @@ class OpenAICompatibleProvider(LLMProvider):
             "temperature": temperature,
         }
         if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
+            payload[self._max_tokens_field] = max_tokens
         if tools is not None:
             payload["tools"] = [
                 {"type": "function", "function": tool.model_dump(mode="json")} for tool in tools
