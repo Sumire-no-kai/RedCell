@@ -505,7 +505,7 @@
 - **剩余状态:** DONE（Target 切换、thought_signature 修复、Gemini 资格门）；OPEN（是否以 Gemini 作第二个 Target
   及 Controller 是否更换；两个 Target 的账单对账；原生 FC 下的 controls、utility 基线与校准）。
 
-### 2026-09-23 22:50 AEST · Step 23 · Gemini 定为第二个 Target，Controller 待更换，PR 按序合并
+### 2026-09-23 22:40 AEST · Step 23 · Gemini 定为第二个 Target，Controller 待更换，PR 按序合并
 
 - **决策（作者）:**
   1. `gemini-3.1-flash-lite` 作为第二个 Target（Paper B 至少需要 2 个 Target 模型）。主 Target 仍是
