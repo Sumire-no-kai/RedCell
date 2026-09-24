@@ -42,6 +42,12 @@
 - **远端状态:** 本机 `gh auth status` 显示 GitHub token 无效；当前沙箱内 `git ls-remote origin HEAD` 无法解析 `github.com`。尚未推送或创建 PR；先完成本地提交，再检查可用的远端访问方式。
 - **剩余状态:** DONE（本地实现和验证）；OPEN（推送/PR 受本机 GitHub 认证与 DNS 状态影响）。
 
+### 2026-09-24 20:26 AEST · Step 06 · 本地提交与远端状态更正
+
+- **进度:** 已在 `feat/m1b-feedback-run` 创建本地提交 `003d2b1`；提交前再次检查完整 staged diff，无无关文件或内部文档。远端 Issue/PR 搜索未发现现有 M1-B 条目。
+- **更正:** Step 05 的 DNS 与认证失败只发生在网络沙箱内；在获准的沙箱外只读检查中，`git ls-remote origin HEAD` 成功且 `gh auth status` 确认当前账号可用。之前把沙箱结果表述为本机状态过宽，特此更正。
+- **剩余状态:** DONE（本地提交）；IN PROGRESS（远端分支与 PR）。
+
 ## 2026-09-24 · 设计讨论结论与多靶场配置入口
 
 ### 2026-09-24 18:40 AEST · Step 01 · 设计讨论:方向确认
