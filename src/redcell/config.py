@@ -16,7 +16,7 @@ temperature / cost。它们可以复用同一个实现类、甚至同一个模�
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypeVar
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -222,6 +222,9 @@ class ControllerSettings(ProviderSettings):
     max_tokens: int = 512
 
 
+_S = TypeVar("_S", bound=ProviderSettings)
+
+
 class ProviderPair:
     """target 与 attacker 两个已建好的 provider,以及关闭它们的入口。"""
 
@@ -246,7 +249,28 @@ class ProviderPair:
         await self.attacker.aclose()
 
 
-def load_attacker() -> OpenAICompatibleProvider:
+def role_settings(cls: type[_S], env_file: Path | None = None) -> _S:
+    """读取一个模型位的配置;`env_file` 叠在 `.env` 之上逐键覆盖。
+
+    给候选模型(或第二个 Target)跑实验时不必改动冻结的 `.env`:把它的配置写进
+    `.env.<name>`(已被 gitignore 覆盖),命令行传 `--env-file`。被覆盖后的配置照常
+    写进实验条件与指纹,所以跑出来的 Run 身份完整;`resume` 用同一个文件才能恢复。
+
+    ⚠️ pydantic-settings 遇到不存在的 env 文件会**静默跳过**。路径拼错时如果照常
+    继续,就会用 `.env` 的模型跑出一个贴错标签的实验 —— 所以这里先确认文件存在。
+
+    ⚠️ 两个文件之间是整键替换,不像进程环境变量那样与 `.env` 的 JSON 深度合并;
+    dotenv 的 `${VAR}` 只能引用同一文件前面的变量或进程环境,候选文件里引用 `.env`
+    的变量会解析成空、被当作未设置而沿用 `.env` 的值,所以要直接写字面值。
+    """
+    if env_file is None:
+        return cls()
+    if not env_file.is_file():
+        raise ProviderConfigError(f"--env-file 指定的文件不存在:{env_file}")
+    return cls(_env_file=(".env", env_file))
+
+
+def load_attacker(env_file: Path | None = None) -> OpenAICompatibleProvider:
     """只建 attacker 一位。
 
     攻击方对照(`redcell attacker-control`)整个流程**不碰 target** ——
@@ -254,15 +278,17 @@ def load_attacker() -> OpenAICompatibleProvider:
     因此不该因为 target 那半边配置不全就拒绝启动:
     那会把一道"检查攻击方"的诊断,错误地卡在一个与它无关的前置条件上。
     """
-    settings = AttackerSettings()
+    settings = role_settings(AttackerSettings, env_file)
     provider = settings.build(name="attacker")
     provider.run_configuration = settings.run_configuration()
     return provider
 
 
-def load_controller() -> tuple[OpenAICompatibleProvider, ProviderRunConfiguration]:
+def load_controller(
+    env_file: Path | None = None,
+) -> tuple[OpenAICompatibleProvider, ProviderRunConfiguration]:
     """构造 Controller 的独立连接与不含凭据的运行快照。"""
-    settings = ControllerSettings()
+    settings = role_settings(ControllerSettings, env_file)
     return settings.build(name="controller"), settings.run_configuration()
 
 
@@ -275,23 +301,19 @@ def load_target(
     Controller 连接。把单独加载入口放在配置层，也避免 CLI 复制 env 解析规则。
 
     Args:
-        env_file: 候选 Target 的 dotenv 文件,叠在 `.env` 之上逐键覆盖
-            (`positive-control --env-file`)。给候选跑资格门时不必改动冻结的 `.env`。
-            两个文件之间是整键替换,不像进程环境变量那样与 `.env` 的 JSON 深度合并。
-            ⚠️ dotenv 的 `${VAR}` 只能引用同一文件里前面的变量或进程环境;候选文件里
-            写 `${GEMINI_API_KEY}` 会解析成空、被当作未设置而沿用 `.env` 的 key。
-            候选文件命名为 `.env.*`,已被 gitignore 覆盖,可以直接写字面值。
+        env_file: 叠在 `.env` 之上的 dotenv 文件,语义见 `role_settings`。
     """
-    settings = (
-        TargetSettings() if env_file is None else TargetSettings(_env_file=(".env", env_file))
-    )
+    settings = role_settings(TargetSettings, env_file)
     return settings.build(name="target"), settings.run_configuration()
 
 
-def load_providers() -> ProviderPair:
-    """从 env / `.env` 读出并建好两个 provider。配置不全时抛 ProviderConfigError。"""
-    target_settings = TargetSettings()
-    attacker_settings = AttackerSettings()
+def load_providers(env_file: Path | None = None) -> ProviderPair:
+    """从 env / `.env` 读出并建好两个 provider。配置不全时抛 ProviderConfigError。
+
+    `env_file` 叠在 `.env` 之上,语义见 `role_settings`。
+    """
+    target_settings = role_settings(TargetSettings, env_file)
+    attacker_settings = role_settings(AttackerSettings, env_file)
     return ProviderPair(
         target=target_settings.build(name="target"),
         attacker=attacker_settings.build(name="attacker"),

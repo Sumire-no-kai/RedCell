@@ -588,3 +588,30 @@ def test_billing_template_never_overwrites_reviewed_evidence(isolated_env, tmp_p
     assert result.exit_code == ExitCode.BAD_CONFIG
     assert "拒绝覆盖已有文件" in result.output
     assert evidence_path.read_text(encoding="utf-8") == "reviewed evidence must survive"
+
+
+def test_preflight_reads_roles_from_the_plans_env_file_and_rejects_a_missing_one(
+    tmp_path, monkeypatch
+) -> None:
+    """计划冻结了 env 文件时,preflight 按计划读三个模型位;文件不在就拒绝,不退回 .env。"""
+    monkeypatch.chdir(tmp_path)
+    seed_path = Path(__file__).parents[1] / "docs" / "PHASE0_5_SEED_PLAN.json"
+    seed_plan = SeedPlan.model_validate_json(seed_path.read_text(encoding="utf-8"))
+    plan = build_gate_plan(
+        seed_plan,
+        max_attempts=500,
+        database_url=f"sqlite:///{tmp_path / 'gate.db'}",
+        report_directory="runs/gate",
+        env_file=".env.missing",
+    )
+
+    report = run_preflight(
+        seed_plan_json=seed_path,
+        database_url=f"sqlite:///{tmp_path / 'gate.db'}",
+        golden_fixtures=Path("unused.json"),
+        gate_plan=plan,
+    )
+
+    assert not report.passed
+    assert [check.name for check in report.checks] == ["gate_plan_env_file"]
+    assert ".env.missing" in report.checks[0].detail

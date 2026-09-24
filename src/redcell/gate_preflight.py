@@ -27,9 +27,11 @@ from redcell.arena.support_agent.codec import TOOL_CALL_CODEC_VERSION, ToolCallP
 from redcell.config import (
     AttackerSettings,
     ControllerSettings,
+    ProviderConfigError,
     ProviderSettings,
     TargetSettings,
     load_shared_rate_limit_database_url,
+    role_settings,
 )
 from redcell.controls import ControlsReport
 from redcell.gate_analysis import (
@@ -425,12 +427,12 @@ def _database_check(database_url: str) -> PreflightCheck:
     return PreflightCheck(name="database", passed=True, detail=f"{database_url} 为空,可用")
 
 
-def load_role_settings() -> list[tuple[str, ProviderSettings]]:
-    """从环境与 `.env` 读三个模型位的配置。"""
+def load_role_settings(env_file: Path | None = None) -> list[tuple[str, ProviderSettings]]:
+    """从环境与 `.env` 读三个模型位的配置;`env_file` 逐键覆盖,见 `role_settings`。"""
     return [
-        ("target", TargetSettings()),
-        ("attacker", AttackerSettings()),
-        ("controller", ControllerSettings()),
+        ("target", role_settings(TargetSettings, env_file)),
+        ("attacker", role_settings(AttackerSettings, env_file)),
+        ("controller", role_settings(ControllerSettings, env_file)),
     ]
 
 
@@ -453,7 +455,15 @@ def run_preflight(
     "缺 Controller 配置会被拦下"这条断言就会在作者填好 `.env` 的那天变红 ——
     那不是回归,只是测试在观察开发机的状态。
     """
-    roles = load_role_settings() if roles is None else roles
+    if roles is None:
+        # 计划是唯一事实来源:各格 Run 用哪个 env 文件,preflight 就读哪个,不另设参数。
+        plan_env_file = gate_plan.env_file if gate_plan is not None else None
+        try:
+            roles = load_role_settings(Path(plan_env_file) if plan_env_file else None)
+        except ProviderConfigError as exc:
+            return PreflightReport(
+                checks=[PreflightCheck(name="gate_plan_env_file", passed=False, detail=str(exc))]
+            )
     expected_roles = {role.value for role in BillingRole}
     role_names = [name for name, _settings in roles]
     if len(role_names) != len(expected_roles) or set(role_names) != expected_roles:

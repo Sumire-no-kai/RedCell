@@ -117,3 +117,42 @@ def test_loaded_gate_plan_rejects_drift_before_execution(mutate, message) -> Non
 
     with pytest.raises(ValueError, match=message):
         GatePlan.model_validate(payload)
+
+
+def _plan(**kwargs) -> GatePlan:
+    seed_plan = SeedPlan.model_validate_json(SEED_PLAN_PATH.read_text(encoding="utf-8"))
+    return build_gate_plan(
+        seed_plan,
+        max_attempts=500,
+        database_url="sqlite:///runs/phase-0-5.db",
+        report_directory="runs/phase-0-5",
+        **kwargs,
+    )
+
+
+def test_gate_plan_without_env_file_serialises_exactly_as_before() -> None:
+    """不传 --env-file 时计划与 argv 必须和加入该字段之前逐字节相同。"""
+    plan = _plan()
+
+    assert "env_file" not in plan.model_dump(mode="json")
+    assert '"env_file"' not in plan.model_dump_json()
+    assert not any("--env-file" in cell.argv for cell in plan.cells)
+
+
+def test_gate_plan_freezes_the_env_file_into_every_cell() -> None:
+    plan = _plan(env_file=".env.gemini")
+
+    assert plan.env_file == ".env.gemini"
+    assert all(cell.argv[cell.argv.index("--env-file") + 1] == ".env.gemini" for cell in plan.cells)
+    assert GatePlan.model_validate_json(plan.model_dump_json()) == plan
+
+
+def test_loaded_gate_plan_rejects_a_cell_that_dropped_its_env_file() -> None:
+    """计划与各格 argv 不一致时,付费子进程启动前就要拒绝。"""
+    payload = _plan(env_file=".env.gemini").model_dump(mode="python")
+    argv = payload["cells"][0]["argv"]
+    flag = argv.index("--env-file")
+    del argv[flag : flag + 2]
+
+    with pytest.raises(ValueError, match="canonical frozen matrix"):
+        GatePlan.model_validate(payload)

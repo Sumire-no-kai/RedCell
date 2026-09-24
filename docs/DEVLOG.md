@@ -5,6 +5,49 @@
 
 ---
 
+## 2026-09-24 · 设计讨论结论与多靶场配置入口
+
+### 2026-09-24 18:40 AEST · Step 01 · 设计讨论:方向确认
+
+- **决策（作者）:**
+  1. **多靶场配置（Q1）选 A:** 把 `--env-file` 推广到所有读取模型配置的命令，前提是不影响实验。见 Step 02。
+  2. **靶场 schema（Q2）选 A:** 把"一个靶场"定义为可整体注册、整体切换的单位（policy、提示、工具模拟、
+     阳性用例、正常任务、攻击方简介），为 Paper B 至少 3 个权限语义不同的本地靶场做准备。现有客服靶场的
+     配置在顶层模块中被硬引用 13 处。新靶场各自的权限语义（例如组织内角色层级、需所有者确认的转移类操作）
+     属于研究设计，OPEN。
+  3. **M1-B（Q3）选 A:** 给 `run` 增加显式的攻击驱动器选项并写进实验条件，复用现有预算、记录与指纹管道；
+     新字段未使用时不进入序列化结果。范围按 PRD M1-B（小规模开发执行路径），具体设计 OPEN。
+  4. **PRD §2.9 实现偏差（Q5）:** 维持已定原则，在新版本修正，不回溯改旧实验。
+- **剩余状态:** DONE（方向）；OPEN（Q2 新靶场权限语义、Q3 选项范围）。
+
+### 2026-09-24 19:05 AEST · Step 02 · `--env-file` 推广到所有读取模型配置的命令
+
+- **进度:** 分支 `feat/env-file-everywhere`。`--env-file <文件>` 叠在 `.env` 之上逐键覆盖，现在被这些命令
+  接受：`run`、`resume`、`controls`、`positive-control`、`validate-paths`、`attacker-control`、
+  `controller-controls`、`gate-plan`、`billing-evidence-template`。`.env` 本身不动。
+- **设计:**
+  - 配置层新增 `role_settings(cls, env_file)`，`load_target/attacker/controller/providers` 与
+    `load_role_settings` 都经由它读取。**文件不存在直接报 `ProviderConfigError`**：pydantic-settings 会
+    静默跳过不存在的 env 文件，路径拼错时若照常继续，会用 `.env` 的模型跑出一个贴错标签的实验。
+  - `run --env-file` 只在 `--online` 时接受（离线路径不读配置，接受该参数会误导）。
+  - `resume` 需传同一个文件：当前配置算出的指纹与落盘指纹不一致即拒绝恢复，忘传或传错都在碰到 Target
+    之前被拦下。
+  - `GatePlan` 新增可选 `env_file`，冻结进每一格 argv；计划校验会拒绝与之不一致的 argv。
+    `gate-preflight` 按计划中冻结的文件读取三个模型位（与工具协议一样以计划为唯一来源，不另设参数），
+    文件缺失时给出失败检查 `gate_plan_env_file`，不退回 `.env`。`env_file` 未设置时不进入序列化结果。
+- **对实验的影响（作者要求确认）:**
+  - 不传 `--env-file` 时，配置读取路径与改前相同（`role_settings` 直接返回 `cls()`）。
+  - 用 master 代码与本分支代码分别生成同一份 Gate 计划，JSON 的 SHA-256 前缀相同（`3f888601dcb404da`）。
+  - 新测试 `test_experiment_identity_depends_on_resolved_config_not_on_the_file`：同一份配置不论全写在
+    `.env` 还是由 env 文件覆盖而来，实验条件指纹相同；覆盖成不同模型则指纹不同。即 `--env-file` 不引入新的
+    实验身份，也不会让不同模型混在同一身份下。
+- **测试:** 新增 11 个（env 文件缺失、各模型位分层、指纹只由最终配置决定、计划不带 env 文件时序列化不变、
+  计划冻结 env 文件、argv 被篡改时拒绝、preflight 按计划读文件且缺失时拒绝、`run` 离线拒绝、`run` 与
+  `resume` 透传、`gate-plan` 冻结与缺失时拒绝）。除"序列化不变"外，其余 10 个在 master 代码上失败、本分支
+  通过。现有测试中 7 处用无参 lambda 替换配置加载函数的替身改为接受 `env_file=None`，断言未改。全量
+  899 passed；ruff、ruff format、black、`git diff --check` 通过。`.env.example` 增加用法说明。
+- **剩余状态:** DONE。
+
 ## 2026-09-23 · Phase 0.5d 复盘与研究方向调整
 
 ### 2026-09-23 13:02 AEST · Step 01 · 复盘 Phase 0.5d 为什么测不出控制器差异
