@@ -174,6 +174,22 @@
   预注册另行讨论。
 - **剩余状态:** OPEN（文档 §7 列出 8 项待作者确认；确认 1、2、3、6 即可开始 PR-1）。
 
+### 2026-09-24 21:38 AEST · Step 05 · 作者对靶场方案的决定
+
+- **决策（作者）:**
+  1. `ArenaDefinition` 契约与注册表：方案 (a)，注册表在 Python 里写死（与 policy 不用 YAML 同一理由）。
+  2. 靶场身份进入 `ArenaRunConfiguration`：方案 (a)，新增 `arena_id` / `arena_version`，未设置时不序列化。
+  3. Policy 新增 `ActorPolicy.role`、`ToolPolicy.allowed_roles`、`Policy.untrusted_content_tools`，
+     `is_tool_forbidden` 增加 actor 参数。**附带要求：** 字段落地后整体复核一遍方案确实可行。PR-1 以一个
+     角色分级的最小 policy 走通 scorer 的越权判定作为可行性证据。
+  6. 四步 PR 顺序照方案执行：注册表重构 → 靶场 A → 靶场 C → 间接文档注入策略。
+  - 4（靶场 A 是否给低等级角色多加身份）作者询问意见，待答复；建议写在方案 §4.7：不加测试身份，
+    改加纯数据记录；若要单独测同级越界，最多加一个 L1 身份并配一条阳性用例。
+  - 5、7、8 暂缓，不阻塞 PR-1。
+- **进度:** 方案文档 §7 改为状态表，加 §4.7。PR-1 分支 `refactor/arena-registry` 从本分支开出（叠在
+  PR #70 之上，避免 DEVLOG 冲突），合并顺序 #70 → PR-1。
+- **剩余状态:** DONE（决策记录）；IN PROGRESS（PR-1）。
+
 ## 2026-09-23 · Phase 0.5d 复盘与研究方向调整
 
 ### 2026-09-23 13:02 AEST · Step 01 · 复盘 Phase 0.5d 为什么测不出控制器差异
