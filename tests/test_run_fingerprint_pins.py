@@ -18,10 +18,14 @@ from pathlib import Path
 import pytest
 
 from redcell.arena.support_agent.codec import TOOL_CALL_CODEC_VERSION
+from redcell.feedback_attacker import feedback_strategy_digest
 from redcell.protocols.run import ExperimentConditions, Run
+from redcell.protocols.strategy import StrategyCatalogue
 from redcell.storage import RunStore
+from redcell.strategies.library import PHASE_0_STRATEGIES
 from redcell.versions import (
     EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
+    FEEDBACK_EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
     HOST_BOUND_EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
 )
 
@@ -58,6 +62,7 @@ _PINNED_PAYLOAD = {
 
 PINNED_FINGERPRINT = "5f912888e1c020f01e4a06b9616ed17a670aacc80bf34b9f53d4d98aa9c1c4a9"
 PINNED_REGRESSION_CONTEXT = "cae963ba87dfbf00f5eaba679eeb52383d98eaaa2aa9b2abb03dabb629d281c1"
+PINNED_V4_FINGERPRINT = "51d295e820ed2b9c04154917794f00760b1b2cc343cbba27b50fcabedb80559c"
 
 
 def _pinned() -> ExperimentConditions:
@@ -69,6 +74,32 @@ def _current() -> ExperimentConditions:
     payload = json.loads(json.dumps(_PINNED_PAYLOAD))
     payload["arena"]["tool_call_protocol_version"] = TOOL_CALL_CODEC_VERSION
     payload["conditions_schema_version"] = EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+    return ExperimentConditions.model_validate(payload)
+
+
+def _feedback() -> ExperimentConditions:
+    payload = json.loads(json.dumps(_PINNED_PAYLOAD))
+    payload["arena"]["tool_call_protocol_version"] = "native-function-calling-v1"
+    payload["conditions_schema_version"] = FEEDBACK_EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+    payload["feedback"] = {
+        "driver_name": "llm-feedback",
+        "strategy_views_sha256": feedback_strategy_digest([PHASE_0_STRATEGIES[0]]),
+        "observation_visibility": "tool-status",
+        "prompt_version": "feedback-attacker-prompt-v2",
+        "schema_version": "feedback-attacker-choice-v2",
+        "observation_policy_version": "attacker-observation-v2",
+        "max_decision_steps": 8,
+        "max_turns_per_attempt": 3,
+        "stop_policy_version": "feedback-stop-v1",
+    }
+    payload["strategy_catalogue"] = (
+        StrategyCatalogue(version="feedback-test", strategies=[PHASE_0_STRATEGIES[0]])
+        .condition_summary()
+        .model_dump(mode="json")
+    )
+    for role in ("target", "attacker"):
+        payload[role]["usage_accounting_mode"] = "prompt-completion-v1"
+        payload[role]["usage_covers_billed_tokens"] = True
     return ExperimentConditions.model_validate(payload)
 
 
@@ -186,3 +217,130 @@ def test_an_older_schema_cannot_claim_a_tool_call_protocol() -> None:
 
 def test_the_tool_call_protocol_enters_the_current_digest() -> None:
     assert _current().fingerprint() != PINNED_FINGERPRINT
+
+
+def test_v4_fingerprint_and_serialization_stay_unchanged_without_feedback() -> None:
+    conditions = _current()
+
+    assert conditions.fingerprint() == PINNED_V4_FINGERPRINT
+    assert "feedback" not in conditions.model_dump(mode="json")
+    assert "feedback" not in json.loads(conditions.model_dump_json())
+    run = Run(
+        target_name="support-agent",
+        policy_version="v1",
+        adapter_type="arena",
+        algorithm="static",
+        limits={"max_attempts": 1},
+        experiment_conditions=conditions,
+    )
+    assert "feedback_stop_reason" not in run.model_dump(mode="json")
+
+
+def test_feedback_conditions_bind_driver_and_visibility_into_v5_fingerprint() -> None:
+    conditions = _feedback()
+    conditions.require_feedback()
+    payload = conditions.model_dump(mode="json")
+
+    assert payload["conditions_schema_version"] == FEEDBACK_EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+    assert payload["feedback"]["driver_name"] == "llm-feedback"
+    assert conditions.fingerprint() != _current().fingerprint()
+    payload["feedback"]["observation_visibility"] = "response-only"
+    changed = ExperimentConditions.model_validate(payload)
+    assert changed.fingerprint() != conditions.fingerprint()
+
+
+def test_v5_accepts_scripted_feedback_and_explicit_text_protocol() -> None:
+    payload = _feedback().model_dump(mode="json")
+    payload["online"] = False
+    payload["feedback"]["driver_name"] = "scripted-feedback"
+    payload["arena"]["tool_call_protocol_version"] = TOOL_CALL_CODEC_VERSION
+
+    ExperimentConditions.model_validate(payload).require_feedback()
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [HOST_BOUND_EXPERIMENT_CONDITIONS_SCHEMA_VERSION, EXPERIMENT_CONDITIONS_SCHEMA_VERSION],
+)
+def test_legacy_conditions_reject_feedback_configuration(schema: str) -> None:
+    payload = _feedback().model_dump(mode="json")
+    payload["conditions_schema_version"] = schema
+    if schema == HOST_BOUND_EXPERIMENT_CONDITIONS_SCHEMA_VERSION:
+        payload["arena"].pop("tool_call_protocol_version")
+
+    with pytest.raises(ValueError, match="feedback 配置"):
+        ExperimentConditions.model_validate(payload)
+
+
+def test_v5_requires_feedback_configuration_and_known_tool_protocol() -> None:
+    payload = _feedback().model_dump(mode="json")
+    payload.pop("feedback")
+    with pytest.raises(ValueError, match="feedback 配置"):
+        ExperimentConditions.model_validate(payload)
+
+    payload = _feedback().model_dump(mode="json")
+    payload["arena"]["tool_call_protocol_version"] = "unknown-protocol"
+    with pytest.raises(ValueError, match="工具调用协议"):
+        ExperimentConditions.model_validate(payload)
+
+    payload["arena"].pop("tool_call_protocol_version")
+    with pytest.raises(ValueError, match="工具调用协议"):
+        ExperimentConditions.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("search", {"selector": "static"}),
+        ("generation_memory", {"mode": "off"}),
+        (
+            "controller",
+            {
+                "provider": _PINNED_PAYLOAD["attacker"],
+                "connection_id": "controller:test",
+                "connection_fingerprint": "test",
+                "prompt_version": "controller-prompt-v1",
+                "evidence_policy_version": "controller-evidence-v1",
+                "thinking_disabled": False,
+            },
+        ),
+    ],
+)
+def test_v5_rejects_legacy_treatment_factors(field: str, value: dict) -> None:
+    payload = _feedback().model_dump(mode="json")
+    payload[field] = value
+
+    with pytest.raises(ValueError, match="旧 search / generation_memory / controller"):
+        ExperimentConditions.model_validate(payload)
+
+
+def test_feedback_run_requires_attempt_and_token_limits_and_stays_out_of_old_gate() -> None:
+    conditions = _feedback()
+    run = Run(
+        target_name="support-agent",
+        policy_version="v1",
+        adapter_type="arena",
+        algorithm="llm-feedback",
+        limits={"max_attempts": 2, "max_total_tokens": 1000},
+        experiment_conditions=conditions,
+    )
+
+    run.require_feedback()
+    loaded = Run.model_validate_json(run.model_dump_json())
+    assert loaded.conditions_fingerprint_verified
+    assert not loaded.has_verified_phase_0_5_conditions
+    for limits in ({"max_attempts": 2}, {"max_total_tokens": 1000}):
+        with pytest.raises(ValueError, match="max_attempts 与 max_total_tokens"):
+            run.model_copy(update={"limits": run.limits.model_validate(limits)}).require_feedback()
+
+
+def test_feedback_requires_usage_identity_for_both_participating_providers() -> None:
+    payload = _feedback().model_dump(mode="json")
+    payload["attacker"].pop("usage_accounting_mode")
+    with pytest.raises(ValueError, match="usage_accounting_mode"):
+        ExperimentConditions.model_validate(payload).require_feedback()
+
+    payload = _feedback().model_dump(mode="json")
+    payload["target"]["usage_covers_billed_tokens"] = False
+    with pytest.raises(ValueError, match="usage 覆盖全部计费 Token"):
+        ExperimentConditions.model_validate(payload).require_feedback()

@@ -256,6 +256,32 @@ class RunStore:
             self._merge_decision(session, run.id, attempt.id, decision)
             self._merge_event(session, run_event)
 
+    def commit_feedback_attempt_outcome(
+        self,
+        *,
+        run: Run,
+        attempt: Attempt,
+        findings: Iterable[Finding],
+        run_event: RunEvent,
+    ) -> None:
+        """原子提交反馈驱动 Attempt，不创建 ControllerDecision。"""
+        finding_list = list(findings)
+        if attempt.run_id != run.id:
+            raise ValueError("Attempt.run_id 与 Run.id 不一致")
+        self._require_authoritative_attempt_index(attempt)
+        if run_event.run_id != run.id or run_event.attempt_id != attempt.id:
+            raise ValueError("Attempt commit 的 RunEvent 关联不一致")
+        for finding in finding_list:
+            if finding.run_id != run.id or finding.attempt_id != attempt.id:
+                raise ValueError("Finding 与 Attempt/Run 关联不一致")
+
+        with self._open() as session, session.begin():
+            self._merge_run(session, run)
+            self._merge_attempt(session, attempt)
+            for finding in finding_list:
+                self._merge_finding(session, finding)
+            self._merge_event(session, run_event)
+
     def commit_decision_selected(
         self,
         *,
@@ -303,6 +329,16 @@ class RunStore:
         with self._open() as session, session.begin():
             self._merge_run(session, run)
             self._merge_event(session, run_event)
+
+    def commit_run_state_events(self, *, run: Run, run_events: Iterable[RunEvent]) -> None:
+        """原子提交 Run 状态与一组有序事件。"""
+        events = list(run_events)
+        if not events or any(event.run_id != run.id for event in events):
+            raise ValueError("Run 状态提交需要同属该 Run 的非空事件列表")
+        with self._open() as session, session.begin():
+            self._merge_run(session, run)
+            for event in events:
+                self._merge_event(session, event)
 
     # ── 行级映射集中在此,事务方法不复制字段列表 ──────────────────────────
 

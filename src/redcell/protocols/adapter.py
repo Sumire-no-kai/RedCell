@@ -15,6 +15,8 @@ from typing import Any
 
 from pydantic import Field
 
+from redcell._base import CostRecord
+from redcell.budget import CallBudgetGuard
 from redcell.protocols.common import ObservabilityLevel, RedCellModel, Role
 
 
@@ -217,6 +219,13 @@ class TargetAdapter(ABC):
     @abstractmethod
     async def send(self, payload: AdapterInput) -> AdapterOutput:
         """发一轮对话,拿回目标的完整可观测行为。"""
+
+    async def send_with_budget(
+        self, payload: AdapterInput, guard: CallBudgetGuard
+    ) -> AdapterOutput:
+        """Guard one opaque call; adapters with internal calls must override this."""
+        guard(CostRecord())
+        return await self.send(payload)
 
     @abstractmethod
     async def reset(self) -> None:

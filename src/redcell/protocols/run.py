@@ -19,12 +19,14 @@ from pydantic import Field, SerializerFunctionWrapHandler, model_serializer, mod
 from redcell.budget import BudgetLimit, BudgetLimits, BudgetUsage
 from redcell.failures import FailureRecord
 from redcell.protocols.common import REDCELL_PROTOCOL_VERSION, RedCellModel, new_id
-from redcell.protocols.strategy import StrategyCatalogueSummary
+from redcell.protocols.strategy import MAX_TURNS_CEILING, StrategyCatalogueSummary
 from redcell.reliability import ReliabilityPolicy, SelectionReliabilityPolicy
 from redcell.versions import (
     ATTACK_PATH_SIGNATURE_VERSION,
     EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
+    FEEDBACK_EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
     FINDING_SIGNATURE_VERSION,
+    HOST_BOUND_EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
     LEVEL1_SCORER_VERSION,
     SUPPORTED_EXPERIMENT_CONDITIONS_SCHEMA_VERSIONS,
 )
@@ -46,6 +48,10 @@ class RunStatus(StrEnum):
 class RunEventType(StrEnum):
     RUN_STARTED = "run_started"
     DECISION_SELECTED = "decision_selected"
+    FEEDBACK_DECISION_REQUESTED = "feedback_decision_requested"
+    FEEDBACK_DECISION_SELECTED = "feedback_decision_selected"
+    FEEDBACK_DECISION_FAILED = "feedback_decision_failed"
+    FEEDBACK_TARGET_REQUESTED = "feedback_target_requested"
     TURN_COMPLETED = "turn_completed"
     RETRY_SCHEDULED = "retry_scheduled"
     SELECTION_ABANDONED = "selection_abandoned"
@@ -229,6 +235,25 @@ class GenerationMemoryConfiguration(RedCellModel):
         return self
 
 
+class FeedbackRunConfiguration(RedCellModel):
+    """反馈驱动 Run 的非凭据身份；旧 selector/Generator 条件不适用于此路径。"""
+
+    driver_name: str = Field(min_length=1)
+    strategy_views_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    observation_visibility: Literal[
+        "response-only",
+        "tool-calls",
+        "tool-status",
+        "support-agent-diagnostics-v1",
+    ]
+    prompt_version: str = Field(min_length=1)
+    schema_version: str = Field(min_length=1)
+    observation_policy_version: str = Field(min_length=1)
+    max_decision_steps: int = Field(ge=1)
+    max_turns_per_attempt: int = Field(ge=1, le=MAX_TURNS_CEILING)
+    stop_policy_version: str = Field(min_length=1)
+
+
 class ControllerRunConfiguration(RedCellModel):
     """LLM Controller 的非秘密、可复核运行快照。"""
 
@@ -280,6 +305,8 @@ class ExperimentConditions(RedCellModel):
     search: SearchConfiguration | None = None
     generation_memory: GenerationMemoryConfiguration | None = None
     controller: ControllerRunConfiguration | None = None
+    feedback: FeedbackRunConfiguration | None = None
+    """只有 v5 反馈驱动 Run 设置；未使用时从序列化中省略以保留历史身份。"""
     scorer_version: str = LEVEL1_SCORER_VERSION
     finding_signature_version: str = FINDING_SIGNATURE_VERSION
     attack_path_signature_version: str = ATTACK_PATH_SIGNATURE_VERSION
@@ -302,22 +329,41 @@ class ExperimentConditions(RedCellModel):
     Gate 只采信验得过的 Run。
     """
 
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict:
+        return _drop_unset(handler(self), ("feedback",), self)
+
     @model_validator(mode="after")
     def _protocol_identity_matches_schema(self) -> ExperimentConditions:
-        """v4 exists to bind the tool-call protocol into the fingerprint.
+        """v4/v5 bind the tool protocol; v5 alone binds a feedback driver.
 
         The fingerprint drops None fields so that v3 evidence still verifies; a v4
         record without the protocol would therefore hash the same whichever codec ran.
         """
         protocol = self.arena.tool_call_protocol_version
-        is_v4 = self.conditions_schema_version == EXPERIMENT_CONDITIONS_SCHEMA_VERSION
-        if is_v4 and not protocol:
-            raise ValueError(f"{EXPERIMENT_CONDITIONS_SCHEMA_VERSION} 必须记录工具调用协议")
-        if not is_v4 and protocol is not None:
-            raise ValueError(
-                f"只有 {EXPERIMENT_CONDITIONS_SCHEMA_VERSION} 可以记录工具调用协议;"
-                f"实际为 {self.conditions_schema_version}"
-            )
+        schema = self.conditions_schema_version
+        has_protocol_identity = schema in {
+            EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
+            FEEDBACK_EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
+        }
+        if has_protocol_identity and not protocol:
+            raise ValueError(f"{schema} 必须记录工具调用协议")
+        if not has_protocol_identity and protocol is not None:
+            raise ValueError(f"只有 v4/v5 实验条件可以记录工具调用协议;实际为 {schema}")
+        if schema == FEEDBACK_EXPERIMENT_CONDITIONS_SCHEMA_VERSION:
+            if protocol not in {"text-tool-call-codec-v2", "native-function-calling-v1"}:
+                raise ValueError("反馈驱动 Run 必须显式选择 text-v2 或 native-v1 工具调用协议")
+            if self.feedback is None:
+                raise ValueError("v5 反馈驱动 Run 必须记录 feedback 配置")
+            if any(
+                value is not None
+                for value in (self.search, self.generation_memory, self.controller)
+            ):
+                raise ValueError(
+                    "反馈驱动 Run 不得携带旧 search / generation_memory / controller 条件"
+                )
+        elif self.feedback is not None:
+            raise ValueError("只有 v5 反馈驱动 Run 可以记录 feedback 配置")
         return self
 
     def fingerprint(self) -> str:
@@ -391,6 +437,24 @@ class ExperimentConditions(RedCellModel):
             if any(provider.usage_covers_billed_tokens is not True for provider in providers):
                 raise ValueError("在线 Phase 0.5 的所有参与角色必须声明 usage 覆盖全部计费 Token")
 
+    def require_feedback(self) -> None:
+        """拒绝用缺少攻击驱动器、策略目录或计费身份的条件启动反馈 Run。"""
+        if self.conditions_schema_version != FEEDBACK_EXPERIMENT_CONDITIONS_SCHEMA_VERSION:
+            raise ValueError("反馈驱动 Run 必须使用 v5 实验条件")
+        if self.feedback is None:
+            raise ValueError("反馈驱动 Run 必须提供 feedback 配置")
+        if self.strategy_catalogue is None:
+            raise ValueError("反馈驱动 Run 必须提供 strategy_catalogue")
+        if self.target.usage_accounting_mode is None or self.attacker.usage_accounting_mode is None:
+            raise ValueError("反馈驱动 Run 的 Target/Attacker 必须冻结 usage_accounting_mode")
+        if self.online and any(
+            provider.usage_covers_billed_tokens is not True
+            for provider in (self.target, self.attacker)
+        ):
+            raise ValueError(
+                "在线反馈驱动 Run 的 Target/Attacker 必须声明 usage 覆盖全部计费 Token"
+            )
+
 
 class Run(RedCellModel):
     id: str = Field(default_factory=new_id)
@@ -415,6 +479,8 @@ class Run(RedCellModel):
     status: RunStatus = RunStatus.PENDING
     stopped_by: BudgetLimit | None = None
     """因为哪一项预算耗尽而停止。让"为什么停了"永远是明确的。"""
+    feedback_stop_reason: str | None = None
+    """v5 反馈路径的终态出口；旧 Run 未使用时从序列化中省略。"""
 
     seed: int | None = None
     """实验随机种子。多 seed 重复是报置信区间的前提,单次结果说明不了任何事。"""
@@ -434,6 +500,10 @@ class Run(RedCellModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     started_at: datetime | None = None
     completed_at: datetime | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict:
+        return _drop_unset(handler(self), ("feedback_stop_reason",), self)
 
     @model_validator(mode="after")
     def _bind_experiment_fingerprint(self) -> Run:
@@ -484,11 +554,30 @@ class Run(RedCellModel):
         conditions = self.experiment_conditions
         return (
             conditions is not None
+            and conditions.conditions_schema_version
+            in {
+                HOST_BOUND_EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
+                EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
+            }
             and conditions.search is not None
             and conditions.generation_memory is not None
             and conditions.strategy_catalogue is not None
             and self.conditions_fingerprint_verified
         )
+
+    def require_feedback(self) -> None:
+        """Small feedback Runs need bounded Attempts and billed Tokens before execution."""
+        if self.experiment_conditions is None:
+            raise ValueError("反馈驱动 Run 必须提供实验条件")
+        self.experiment_conditions.require_feedback()
+        if self.limits.max_attempts is None or self.limits.max_total_tokens is None:
+            raise ValueError("反馈驱动 Run 必须设置 max_attempts 与 max_total_tokens")
+        if (
+            self.limits.max_completed_per_strategy is not None
+            or self.limits.max_share_per_strategy is not None
+            or not self.limits.count_abandoned_against_attempts
+        ):
+            raise ValueError("反馈驱动开发路径不支持旧搜索器的每策略配额或补跑模式")
 
     def gate_context_fingerprint(self) -> str:
         """Bind every non-treatment contract that can change Gate eligibility."""
@@ -518,3 +607,10 @@ class Run(RedCellModel):
         混进统计里会把结论往"没找到东西"的方向拉,而且不会有任何提示。
         """
         return self.status is RunStatus.COMPLETED
+
+    @property
+    def is_feedback_development(self) -> bool:
+        return (
+            self.experiment_conditions is not None
+            and self.experiment_conditions.feedback is not None
+        )

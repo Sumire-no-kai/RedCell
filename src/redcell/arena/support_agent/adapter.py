@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import time
 
+from redcell._base import CostRecord
 from redcell.arena.support_agent.codec import (
     NativeToolCallCodec,
     TextToolCallCodec,
@@ -19,6 +20,15 @@ from redcell.arena.support_agent.codec import (
 )
 from redcell.arena.support_agent.prompts import DefenseLevel, build_system_prompt
 from redcell.arena.support_agent.tools import SupportAgentTools, ToolExecution
+from redcell.budget import CallBudgetExhaustedError, CallBudgetGuard
+from redcell.failures import (
+    FailureKind,
+    FailureRecord,
+    FailureStage,
+    RetrySafety,
+    StructuredExecutionError,
+    safe_error_message,
+)
 from redcell.llm.base import LLMMessage, LLMProvider
 from redcell.protocols.adapter import (
     AdapterCapabilities,
@@ -129,6 +139,16 @@ class ArenaAdapter(TargetAdapter):
         self._tools.reset()
 
     async def send(self, payload: AdapterInput) -> AdapterOutput:
+        return await self._send(payload)
+
+    async def send_with_budget(
+        self, payload: AdapterInput, guard: CallBudgetGuard
+    ) -> AdapterOutput:
+        return await self._send(payload, guard)
+
+    async def _send(
+        self, payload: AdapterInput, guard: CallBudgetGuard | None = None
+    ) -> AdapterOutput:
         started = time.perf_counter()
         # ⚠️ 一次 send = 一个对话回合。确认状态机以此为界:上一回合挂起的确认
         # 从现在起可以兑现,因为用户确实又说了一句话 —— 叫停的机会存在过。
@@ -156,14 +176,63 @@ class ArenaAdapter(TargetAdapter):
             else {}
         )
 
-        for _ in range(self._max_tool_iterations):
-            response = await self._provider.complete(
-                messages,
-                model=self._model,
-                temperature=self._temperature,
-                max_tokens=self._max_tokens,
-                **provider_options,
-            )
+        for iteration in range(self._max_tool_iterations):
+            if guard is not None:
+                # Return already observed tool behavior and usage when a follow-up
+                # would cross the budget; never discard it as a failed empty turn.
+                if not usage_known:
+                    break
+                try:
+                    guard(
+                        CostRecord(
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            cached_input_tokens=cached_input_tokens,
+                            usage_known=usage_known,
+                            usd=cost_usd,
+                        )
+                    )
+                except CallBudgetExhaustedError:
+                    if iteration == 0:
+                        raise
+                    break
+            try:
+                response = await self._provider.complete(
+                    messages,
+                    model=self._model,
+                    temperature=self._temperature,
+                    max_tokens=self._max_tokens,
+                    **provider_options,
+                )
+            except Exception as exc:
+                if guard is None:
+                    raise
+                # A later failure must not erase usage from earlier calls in this
+                # turn. The failed call can still have unknown additional usage.
+                failed_cost = (
+                    exc.failure.usage
+                    if isinstance(exc, StructuredExecutionError)
+                    else CostRecord(usage_known=False)
+                )
+                raise StructuredExecutionError(
+                    FailureRecord(
+                        kind=FailureKind.AMBIGUOUS_SIDE_EFFECT,
+                        stage=FailureStage.TARGET_SEND,
+                        code="feedback_target_provider_failed",
+                        message=safe_error_message(exc),
+                        cause_type=type(exc).__name__,
+                        retry_safety=RetrySafety.UNSAFE,
+                        usage=CostRecord(
+                            prompt_tokens=prompt_tokens + failed_cost.prompt_tokens,
+                            completion_tokens=completion_tokens + failed_cost.completion_tokens,
+                            cached_input_tokens=cached_input_tokens
+                            + failed_cost.cached_input_tokens,
+                            usage_known=usage_known and failed_cost.usage_known,
+                            usd=cost_usd + failed_cost.usd,
+                            wall_ms=(time.perf_counter() - started) * 1000,
+                        ),
+                    )
+                ) from exc
             prompt_tokens += response.prompt_tokens
             completion_tokens += response.completion_tokens
             cached_input_tokens += response.cached_input_tokens

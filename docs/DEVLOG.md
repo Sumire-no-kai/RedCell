@@ -5,6 +5,92 @@
 
 ---
 
+## 2026-09-24 · M1-B 小规模反馈执行路径
+
+### 2026-09-24 19:52 AEST · Step 01 · 开始接入反馈驱动器
+
+- **范围与分支:** 作者在解释 M1-B 后授权实现；从干净的 `master@a1383cf` 创建 `feat/m1b-feedback-run`。仅做本地实现与离线验证，不调用 Provider、不改旧实验产物。
+- **已确认的方向:** 采用 9 月 24 日 Step 01 的 Q3=A：`run` 显式选择反馈驱动器并写入实验条件，复用预算、逐步记录与指纹。M1-B 只建立小规模可审计执行路径，不把离线机制探针当作真实模型效果证据。
+- **工程取舍:** 保留现有 Controller/Generator 路径作为历史模式；反馈路径逐次决定并发送实际消息，单独处理被拦截的 Attempted Action。先记录请求、决策与状态，再调用 Target；崩溃后的完整自动续跑与正式矩阵调度留待机制可行性验证。
+- **剩余状态:** IN PROGRESS（协议身份、持久化、执行循环、CLI、回归验证）。
+
+### 2026-09-24 20:13 AEST · Step 02 · 冻结反馈身份与原子记录
+
+- **进度:** 增加独立 v5 实验条件、反馈驱动器/观察权限/停止策略身份、反馈决策与 Target 请求事件；旧 v3/v4 条件的序列化和指纹保持不变，旧 Gate 不接纳 v5。存储新增无 ControllerDecision 的反馈 Attempt 原子提交。
+- **工程取舍:** 反馈路径单独提交 Attempt，避免把统一攻击者的动作伪装成旧 Controller 选择；逐步事件先写入 SQLite，再调用 Target。`resume` 的完整重建留待后续机制验证。
+- **验证证据:** 协议聚焦与兼容测试 45 条通过，存储聚焦测试 35 条通过；Ruff、Black 与 diff 检查通过。均为离线检查。
+- **剩余状态:** DONE（协议与存储）；IN PROGRESS（执行器、CLI、集成测试）。
+
+### 2026-09-24 20:15 AEST · Step 03 · 接通逐步执行与离线集成探针
+
+- **进度:** 新执行器按反馈请求 → 决策落盘 → Target 请求落盘 → Target 回答 → 确定性评分的顺序推进；Attempt 被拦下但未产生实际影响时允许下一轮，实际影响、主动结束、轮数/步骤/Token/Attempt 上限和故障分开处理。新增零成本脚本驱动器供离线 CLI 冒烟。
+- **工程取舍:** 使用独立反馈执行器而不更改旧 Executor 的“首次 Attempted Action 停止”语义；要求 Target 可完全复位、在线 usage 覆盖计费 Token；未知调用用量或协议错误将 Run 标为 FAILED。
+- **验证证据:** 新增 9 条离线集成测试，覆盖反馈跟进消息确实到达 Target、Realized Impact、调用边界、故障关闭、持久化与非法选择；9 passed，Ruff/Black 通过。未调用真实 Provider。
+- **剩余状态:** DONE（执行闭环与聚焦测试）；IN PROGRESS（CLI、完整回归、文档核对）。
+
+### 2026-09-24 20:22 AEST · Step 04 · CLI 冒烟与审计复查
+
+- **进度:** `run --attack-driver feedback` 已接入离线脚本与在线反馈 Adapter；离线 CLI 冒烟产出 1 个 Attempt、0 Findings、v5 Run/事件与 JSON/HTML 报告。完整初轮回归为 945 passed，Ruff、Ruff format、Black、diff 检查通过。
+- **复查发现及修正:** 执行器新增实际 Strategy 目录与冻结摘要核对；观察投影错误转为 FAILED；失败中的已预留 Attempt 计入 abandoned 且与 RUN_FAILED 事件原子落盘；主动结束/预算截断的额外决策成本计入 Attempt；负 Token/成本在反馈边界拒绝。Run 新增只用于 v5 的反馈停止出口，旧 Run 序列化省略该字段；报告与 CLI 明示开发记录不构成正式安全结论。
+- **验证证据:** 以上修正后的反馈、CLI、指纹、存储聚焦测试通过；全部离线，未调用付费 Provider。完整回归需在最终改动后再跑一次。
+- **剩余状态:** IN PROGRESS（新增复查回归、最终质量门和提交/PR 状态）。
+
+### 2026-09-24 20:25 AEST · Step 05 · 最终离线质量门与交付检查
+
+- **进度:** 补齐目录身份、异常放弃数、结束决策成本、观察投影错误、负用量与报告停止原因的回归用例；CLI/HTML 明示 M1-B 开发记录的证据边界。旧 v4 指纹字面量与未使用时的 Run 序列化继续受测试保护。
+- **验证证据:** 全量 `pytest -p no:cacheprovider` 为 **953 passed**；`ruff check .`、`ruff format --check .`、`black --check src tests`、`git diff --check` 均通过。离线反馈 CLI 冒烟成功并生成报告；没有调用付费 Provider。
+- **远端状态:** 本机 `gh auth status` 显示 GitHub token 无效；当前沙箱内 `git ls-remote origin HEAD` 无法解析 `github.com`。尚未推送或创建 PR；先完成本地提交，再检查可用的远端访问方式。
+- **剩余状态:** DONE（本地实现和验证）；OPEN（推送/PR 受本机 GitHub 认证与 DNS 状态影响）。
+
+### 2026-09-24 20:26 AEST · Step 06 · 本地提交与远端状态更正
+
+- **进度:** 已在 `feat/m1b-feedback-run` 创建本地提交 `003d2b1`；提交前再次检查完整 staged diff，无无关文件或内部文档。远端 Issue/PR 搜索未发现现有 M1-B 条目。
+- **更正:** Step 05 的 DNS 与认证失败只发生在网络沙箱内；在获准的沙箱外只读检查中，`git ls-remote origin HEAD` 成功且 `gh auth status` 确认当前账号可用。之前把沙箱结果表述为本机状态过宽，特此更正。
+- **剩余状态:** DONE（本地提交）；IN PROGRESS（远端分支与 PR）。
+
+### 2026-09-24 20:27 AEST · Step 07 · 远端发布被自动审批拒绝
+
+- **进度:** 拟推送 `feat/m1b-feedback-run` 到 `origin`，但自动审批在命令执行前拒绝，远端未发生写入，PR 未创建。只读核对确认 origin 是公开仓库 `https://github.com/Sumire-no-kai/RedCell`；本地两条提交为实现 `003d2b1` 与开发日志 `fe2fb6a`，差异仅 15 个源码、测试与公开文档文件。
+- **拒绝理由:** 作者本轮明确授权“实现 M1-B”，但尚未明确授权向该具体公开远端发布代码。此处不通过其他方式绕过审批。
+- **剩余状态:** DONE（本地实现、测试、提交）；BLOCKED（推送/PR 等待作者对具体公开远端和本分支代码发布给出明确授权）。
+
+### 2026-09-24 20:35 AEST · Step 08 · 作者授权远端同步与 PR
+
+- **决策（作者）:** 明确允许将当前 M1-B 本地分支同步到远端并创建 PR；目标是已核对的公开仓库 `Sumire-no-kai/RedCell`，分支 `feat/m1b-feedback-run`。
+- **进度:** 本地工作树干净；先将授权记录随分支提交，再进行推送和 PR 创建。
+- **剩余状态:** IN PROGRESS（远端同步与 PR）。
+
+### 2026-09-24 20:35 AEST · Step 09 · 分支已推送
+
+- **进度:** `git push -u origin feat/m1b-feedback-run` 成功；远端新增同名分支并设置 tracking，包含已通过离线质量门的 M1-B 实现和授权记录。没有重写远端历史。
+- **剩余状态:** DONE（远端分支）；IN PROGRESS（PR）。
+
+### 2026-09-24 20:36 AEST · Step 10 · 创建 M1-B 审阅 PR
+
+- **进度:** 已创建 [PR #69](https://github.com/Sumire-no-kai/RedCell/pull/69)，`feat/m1b-feedback-run` → `master`。正文包含问题、实现、替代方案与取舍、RedCell 对象映射、面试追问、953 项测试证据及 M1-C 前的研究边界。
+- **剩余状态:** DONE（推送与 PR 创建）；OPEN（代码审阅与合并由后续流程处理）。
+
+### 2026-09-24 20:54 AEST · Step 11 · 审查与修复授权
+
+- **决策（作者）:** 对 M1-B 完整 diff 做 code review；发现问题直接修复，验证通过后合并 PR #69。
+- **审查发现:** 反馈攻击者读取 Strategy 名称/描述，但旧策略目录摘要不包含这两项；新增回归测试复现两种修改均保持同一指纹。v5 专用配置补充有序可见策略文本摘要，并在执行前校验，旧 v3/v4 摘要不变。
+- **预算检查:** 发现 repair 只检查 Token，Target 一次 send 内最多多次 Provider 调用；成本/墙钟及内部调用边界需要统一检查。修复沿用已确认的逐调用停止原则，不改变 reward、策略选择或旧路径停止语义。
+- **剩余状态:** IN PROGRESS（调用边界回归、修复、四道质量门及合并）。
+
+### 2026-09-24 21:00 AEST · Step 12 · 完成审查修复与聚焦回归
+
+- **复现证据:** 策略名称/描述变更的 2 条测试先失败；repair 成本上限、Target 内部 Token/成本边界的 3 条测试先失败；后续 Target 调用失败的测试复现 Run 只记录攻击者 3 Token，漏记 Target 已用的 5 Token。
+- **修复:** v5 绑定策略可见文本；同一 Run 预算检查进入攻击者初次/repair、Target 内部各次 Provider 调用。复位/落盘耗尽墙钟时不再发送，空 Attempt 预留记为 abandoned；后续 Target 调用失败保留已知用量并标明未知部分。旧路径通过原有接口执行。
+- **验证证据:** 聚焦执行、攻击者、CLI、靶场、指纹测试 **129 passed**，包含确定性时钟回归，无 sleep、无付费调用。旧 v3/v4 指纹通过；v5 为此未合并 PR 的新开发格式，早期离线 v5 冒烟产物需重新生成。
+- **剩余状态:** DONE（3 类问题修复及聚焦验证）；IN PROGRESS（完整 diff 复核、四道质量门、更新并合并 PR）。
+
+### 2026-09-24 21:00 AEST · Step 13 · 合并前质量门通过
+
+- **验证证据:** 最终全量 `pytest -p no:cacheprovider` **961 passed**；随后依次完成 `ruff check .`、`ruff format --check .`、`black --check src tests`，全部通过，`git diff --check` 通过。新增 8 条回归均为离线测试。
+- **审查结论:** 完整 M1-B diff 与本轮修复已复核，3 类发现已修复，当前没有已知合并阻塞项。未调用付费 API；真实模型机制效果、M1-C 资格与完整恢复仍未验证。公开文档已说明逐调用检查、单请求可能超额和第三方多调用适配器的接入责任。
+- **远端检查:** PR #69 尚为 OPEN、MERGEABLE、无远端 CI/审查记录；base 仍为 `a1383cf`。作者已授权修复与合并；接下来提交并推送修复、更新 PR 验证记录，再按确切 head 合并。
+- **剩余状态:** DONE（代码审查及四道质量门）；IN PROGRESS（发布修复与合并）。
+
 ## 2026-09-24 · 设计讨论结论与多靶场配置入口
 
 ### 2026-09-24 18:40 AEST · Step 01 · 设计讨论:方向确认

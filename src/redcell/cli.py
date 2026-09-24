@@ -31,6 +31,7 @@ from redcell.attacker_control import (
     AttackerControlReport,
     run_attacker_control,
 )
+from redcell.attacker_observation import ATTACKER_OBSERVATION_POLICY_V2, AttackerVisibility
 from redcell.budget import BudgetLimits
 from redcell.config import (
     ControllerSettings,
@@ -65,6 +66,17 @@ from redcell.controls import (
 )
 from redcell.executor import ConversationExecutor
 from redcell.failures import FailureStage
+from redcell.feedback_attacker import (
+    FEEDBACK_ATTACKER_PROMPT_V2,
+    FEEDBACK_ATTACKER_SCHEMA_V2,
+    LLMFeedbackAttackAdapter,
+    feedback_strategy_digest,
+)
+from redcell.feedback_run import (
+    FEEDBACK_STOP_POLICY_V1,
+    FeedbackRunOrchestrator,
+    ScriptedFeedbackDriver,
+)
 from redcell.gate_analysis import SeedPlan
 from redcell.gate_billing_evidence import (
     BillingEvidenceBundle,
@@ -96,6 +108,7 @@ from redcell.protocols.run import (
     ExecutionHostConfiguration,
     ExecutionHostProfile,
     ExperimentConditions,
+    FeedbackRunConfiguration,
     GenerationMemoryConfiguration,
     GenerationMemoryLimits,
     GenerationMemoryMode,
@@ -107,7 +120,7 @@ from redcell.protocols.run import (
     SearchSelector,
     UsageAccountingMode,
 )
-from redcell.protocols.strategy import StrategyCatalogue, select_applicable
+from redcell.protocols.strategy import MAX_TURNS_CEILING, StrategyCatalogue, select_applicable
 from redcell.randomness import controller_seed_for
 from redcell.replay_checkpoint import ReplayPersistenceError, save_replay_json
 from redcell.report import ReportData, write_report
@@ -130,6 +143,7 @@ from redcell.utility_confirmation import load_utility_confirmation_evidence
 from redcell.validator import ReplayStoppedError, ValidationReport, validate_attack_paths
 from redcell.versions import (
     EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
+    FEEDBACK_EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
     HOST_BOUND_EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
 )
 
@@ -147,6 +161,10 @@ OFFLINE_NOTICE = (
 没有这行,一份 0 Finding 的报告会被读成"扫过了,是安全的" ——
 而它其实只说明管道通了。安全工具最不该制造的就是这种误解。
 """
+FEEDBACK_DEVELOPMENT_NOTICE = (
+    "M1-B 反馈路径是小规模开发执行记录；尚未经过 M1-C 正常任务资格与真实模型机制验证，"
+    "不得作为正式安全结论。"
+)
 
 
 class ExitCode(IntEnum):
@@ -331,6 +349,10 @@ def _experiment_conditions(
 
 @app.command()
 def run(
+    attack_driver: Annotated[
+        str | None,
+        typer.Option(help="显式选择反馈驱动攻击者：feedback；不设置时沿用 Phase 0.5 路径"),
+    ] = None,
     algorithm: Annotated[
         str | None, typer.Option(help="旧参数：static / random / thompson；与 --search 不能并用")
     ] = None,
@@ -338,8 +360,8 @@ def run(
         str | None, typer.Option(help="Phase 0.5 搜索方式：static / random / thompson / llm")
     ] = None,
     cross_attempt_memory: Annotated[
-        str, typer.Option(help="跨 Attempt Generator memory：off / bounded-relevant-v1")
-    ] = "off",
+        str | None, typer.Option(help="跨 Attempt Generator memory：off / bounded-relevant-v1")
+    ] = None,
     budget: Annotated[int, typer.Option(help="最大 attempt 数")] = 20,
     seed: Annotated[int, typer.Option(help="实验种子;同一 seed 结果可复现")] = 0,
     run_id: Annotated[
@@ -364,9 +386,9 @@ def run(
         ),
     ] = NEW_EXPERIMENT_TOOL_CALL_PROTOCOL,
     controller_prompt_version: Annotated[
-        str,
+        str | None,
         typer.Option(help="LLM Controller prompt 身份：controller-prompt-v1 / v2"),
-    ] = CONTROLLER_PROMPT_V1,
+    ] = None,
     per_strategy: Annotated[
         int | None,
         typer.Option(
@@ -401,6 +423,19 @@ def run(
         ),
     ] = None,
     max_seconds: Annotated[float | None, typer.Option(help="墙钟上限(秒)")] = None,
+    feedback_visibility: Annotated[
+        str | None,
+        typer.Option(
+            help="反馈攻击者可见范围：response-only / tool-calls / tool-status / "
+            "support-agent-diagnostics-v1"
+        ),
+    ] = None,
+    max_decision_steps: Annotated[
+        int | None, typer.Option(help="反馈攻击者的最大决策步数；默认 10")
+    ] = None,
+    max_turns_per_attempt: Annotated[
+        int | None, typer.Option(help="单次反馈 attempt 最多发送多少轮；默认 3")
+    ] = None,
     db: Annotated[str, typer.Option(help="SQLite 连接串")] = DEFAULT_URL,
     out: Annotated[Path, typer.Option(help="报告输出目录")] = Path("runs"),
     live_conversations: Annotated[
@@ -413,6 +448,47 @@ def run(
     默认离线(脚本化 provider),验证的是**流水线**而非靶场的真实安全性。
     加 `--online` 才接入真实模型 —— 那时才会产出可用于校准的结论。
     """
+    if attack_driver is not None:
+        if attack_driver != "feedback":
+            raise typer.BadParameter("--attack-driver 目前只支持 feedback")
+        _run_feedback(
+            algorithm=algorithm,
+            search=search,
+            cross_attempt_memory=cross_attempt_memory,
+            budget=budget,
+            seed=seed,
+            run_id=run_id,
+            actor=actor,
+            defense=defense,
+            enforce_permissions=enforce_permissions,
+            enforce_confirmation=enforce_confirmation,
+            tool_call_protocol=tool_call_protocol,
+            controller_prompt_version=controller_prompt_version,
+            per_strategy=per_strategy,
+            top_up_abandoned=top_up_abandoned,
+            online=online,
+            env_file=env_file,
+            execution_host_profile=execution_host_profile,
+            max_tokens=max_tokens,
+            max_cost=max_cost,
+            max_seconds=max_seconds,
+            feedback_visibility=feedback_visibility,
+            max_decision_steps=max_decision_steps,
+            max_turns_per_attempt=max_turns_per_attempt,
+            db=db,
+            out=out,
+            live_conversations=live_conversations,
+        )
+        return
+    if any(
+        value is not None
+        for value in (feedback_visibility, max_decision_steps, max_turns_per_attempt)
+    ):
+        raise typer.BadParameter("反馈专用参数需要 --attack-driver feedback")
+    cross_attempt_memory = "off" if cross_attempt_memory is None else cross_attempt_memory
+    controller_prompt_version = (
+        CONTROLLER_PROMPT_V1 if controller_prompt_version is None else controller_prompt_version
+    )
     if algorithm is not None and search is not None:
         raise typer.BadParameter("--algorithm 与 --search 不能同时提供")
     selected_search = search or algorithm or "static"
@@ -629,6 +705,217 @@ def run(
     raise typer.Exit(ExitCode.FINDINGS if result.findings else ExitCode.CLEAN)
 
 
+def _run_feedback(
+    *,
+    algorithm: str | None,
+    search: str | None,
+    cross_attempt_memory: str | None,
+    budget: int,
+    seed: int,
+    run_id: str | None,
+    actor: str,
+    defense: DefenseLevel,
+    enforce_permissions: bool,
+    enforce_confirmation: bool,
+    tool_call_protocol: ToolCallProtocol,
+    controller_prompt_version: str | None,
+    per_strategy: int | None,
+    top_up_abandoned: bool,
+    online: bool,
+    env_file: Path | None,
+    execution_host_profile: str | None,
+    max_tokens: int | None,
+    max_cost: float | None,
+    max_seconds: float | None,
+    feedback_visibility: str | None,
+    max_decision_steps: int | None,
+    max_turns_per_attempt: int | None,
+    db: str,
+    out: Path,
+    live_conversations: bool,
+) -> None:
+    """Compose the v5 feedback path without changing the frozen Phase 0.5 CLI path."""
+    if algorithm is not None or search is not None:
+        raise typer.BadParameter("反馈驱动 Run 不使用 --algorithm 或 --search")
+    if cross_attempt_memory is not None or controller_prompt_version is not None:
+        raise typer.BadParameter("反馈驱动 Run 不使用旧 Generator memory 或 Controller prompt")
+    if per_strategy is not None or top_up_abandoned:
+        raise typer.BadParameter("反馈驱动 Run 不使用每策略完成数或放弃补跑")
+    if execution_host_profile is not None:
+        raise typer.BadParameter("反馈驱动 Run 不属于正式矩阵宿主档案")
+    if env_file is not None and not online:
+        raise typer.BadParameter("--env-file 只在 --online 时有意义")
+    if budget < 1 or max_tokens is None or max_tokens < 1:
+        raise typer.BadParameter("反馈驱动 Run 必须设置正数 --budget 与 --max-tokens")
+    steps = max_decision_steps if max_decision_steps is not None else 10
+    turns = max_turns_per_attempt if max_turns_per_attempt is not None else 3
+    if steps < 1 or not 1 <= turns <= MAX_TURNS_CEILING:
+        raise typer.BadParameter(
+            "--max-decision-steps 必须为正数，"
+            f"--max-turns-per-attempt 必须在 1 到 {MAX_TURNS_CEILING} 之间"
+        )
+    try:
+        visibility = AttackerVisibility(
+            feedback_visibility
+            if feedback_visibility is not None
+            else AttackerVisibility.RESPONSE_ONLY.value
+        )
+    except ValueError as exc:
+        raise typer.BadParameter("不支持的 --feedback-visibility") from exc
+
+    try:
+        limits = BudgetLimits(
+            max_attempts=budget,
+            max_total_tokens=max_tokens,
+            max_wall_seconds=max_seconds,
+            max_cost_usd=max_cost,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    policy = SUPPORT_AGENT_POLICY
+    strategies = select_applicable(list(PHASE_0_STRATEGIES), policy)
+    if not strategies:
+        typer.secho("没有适用于该目标的策略。", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG)
+    catalogue = StrategyCatalogue(version="phase0.5-v1", strategies=strategies).condition_summary()
+
+    async def _execute_and_close():
+        providers = None
+        try:
+            if online:
+                providers = load_providers(env_file)
+                target_provider = providers.target
+                driver = LLMFeedbackAttackAdapter(
+                    provider=providers.attacker,
+                    model=providers.attacker_configuration.model,
+                    temperature=providers.attacker_configuration.temperature,
+                    max_tokens=providers.attacker_max_tokens,
+                )
+            else:
+                target_provider = ScriptedProvider(
+                    default="I can help with orders and store policies. What do you need?",
+                    model="scripted-offline",
+                )
+                driver = ScriptedFeedbackDriver()
+            if max_cost is not None and (
+                not target_provider.reports_cost
+                or (providers is not None and not providers.attacker.reports_cost)
+            ):
+                raise ValueError("Target 与 Attacker 必须都报告成本，--max-cost 才有效")
+
+            base = _experiment_conditions(
+                online=online,
+                providers=providers,
+                actor=actor,
+                defense=defense,
+                enforce_permissions=enforce_permissions,
+                enforce_confirmation=enforce_confirmation,
+                tool_call_protocol_version=tool_call_protocol.value,
+            )
+            attacker = base.attacker
+            if not online:
+                attacker = attacker.model_copy(
+                    update={"provider": "scripted-feedback", "model": "scripted-feedback"}
+                )
+            conditions = ExperimentConditions(
+                **{
+                    **base.model_dump(mode="python"),
+                    "attacker": attacker,
+                    "strategy_catalogue": catalogue,
+                    "conditions_schema_version": FEEDBACK_EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
+                    "feedback": FeedbackRunConfiguration(
+                        driver_name=driver.name,
+                        strategy_views_sha256=feedback_strategy_digest(strategies),
+                        observation_visibility=visibility.value,
+                        prompt_version=FEEDBACK_ATTACKER_PROMPT_V2,
+                        schema_version=FEEDBACK_ATTACKER_SCHEMA_V2,
+                        observation_policy_version=ATTACKER_OBSERVATION_POLICY_V2,
+                        max_decision_steps=steps,
+                        max_turns_per_attempt=turns,
+                        stop_policy_version=FEEDBACK_STOP_POLICY_V1,
+                    ),
+                }
+            )
+            conditions.require_feedback()
+            adapter = _arena_adapter(
+                target_provider,
+                conditions.target,
+                defense=defense,
+                enforce_permissions=enforce_permissions,
+                enforce_confirmation=enforce_confirmation,
+                tool_call_protocol_version=conditions.arena.tool_call_protocol_version,
+            )
+            run_record = Run(
+                target_name=policy.target_name,
+                policy_version=policy.version,
+                adapter_type=adapter.adapter_type,
+                algorithm=driver.name,
+                limits=limits,
+                seed=seed,
+                target_model=conditions.target.model,
+                target_temperature=conditions.target.temperature,
+                attacker_model=conditions.attacker.model,
+                attacker_temperature=conditions.attacker.temperature,
+                experiment_conditions=conditions,
+                experiment_fingerprint=conditions.fingerprint(),
+                strategy_ids=[strategy.id for strategy in strategies],
+                notes=(
+                    FEEDBACK_DEVELOPMENT_NOTICE
+                    if online
+                    else f"{OFFLINE_NOTICE} {FEEDBACK_DEVELOPMENT_NOTICE}"
+                ),
+                **({"id": run_id} if run_id is not None else {}),
+            )
+            run_record.require_feedback()
+            with RunStore(db) as store:
+                orchestrator = FeedbackRunOrchestrator(
+                    adapter=adapter,
+                    policy=policy,
+                    scorer=Level1Scorer(policy),
+                    driver=driver,
+                    store=store,
+                )
+                live_follower = LiveConversationFollower(db) if live_conversations else None
+                if live_follower is not None:
+                    live_follower.start()
+                try:
+                    return await orchestrator.execute(
+                        RunExecutionRequest(run=run_record, strategies=strategies, actor=actor)
+                    )
+                finally:
+                    if live_follower is not None:
+                        live_follower.stop()
+        finally:
+            if providers is not None:
+                await providers.aclose()
+
+    if not online:
+        typer.secho(f"⚠️  {OFFLINE_NOTICE}", fg=typer.colors.YELLOW, err=True)
+    try:
+        result = asyncio.run(_execute_and_close())
+    except ProviderConfigError as exc:
+        typer.secho(f"配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG) from exc
+    except RunFailedError as exc:
+        if exc.failure.stage is FailureStage.PREFLIGHT:
+            typer.secho(f"配置被拒绝:{exc.failure.message}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(ExitCode.BAD_CONFIG) from exc
+        typer.secho(
+            f"Run {exc.run.id} 失败:{exc.failure.code} — {exc.failure.message}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        typer.secho("中断的 run 会系统性低估发现数,结论不可用。", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.RUN_FAILED) from exc
+    except ValueError as exc:
+        typer.secho(f"配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG) from exc
+
+    paths = _emit(result.run, result.attempts, result.findings, out)
+    _summarise(result.run, result.findings, paths)
+    raise typer.Exit(ExitCode.FINDINGS if result.findings else ExitCode.CLEAN)
+
+
 @app.command()
 def resume(
     run_id: Annotated[str, typer.Argument(help="要从 attempt 边界恢复的 RUNNING run id")],
@@ -648,6 +935,18 @@ def resume(
         store.close()
         typer.secho(f"找不到 run '{run_id}'。", fg=typer.colors.RED, err=True)
         raise typer.Exit(ExitCode.BAD_CONFIG)
+    if (
+        stored.experiment_conditions is not None
+        and stored.experiment_conditions.conditions_schema_version
+        == FEEDBACK_EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+    ):
+        store.close()
+        typer.secho(
+            "反馈驱动 Run 当前不支持 resume；不会重试可能已发送的 Target 调用。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(ExitCode.BAD_CONFIG)
     if stored.status is not RunStatus.RUNNING:
         store.close()
         typer.secho("只有状态为 RUNNING 的 run 可以恢复。", fg=typer.colors.RED, err=True)
@@ -660,7 +959,6 @@ def resume(
             err=True,
         )
         raise typer.Exit(ExitCode.BAD_CONFIG)
-
     policy = SUPPORT_AGENT_POLICY
     strategies = select_applicable(list(PHASE_0_STRATEGIES), policy)
     conditions = stored.experiment_conditions
@@ -1767,7 +2065,11 @@ def _summarise(run_record: Run, findings: list, paths: dict[str, Path]) -> None:
     typer.echo(f"run_id  {run_record.id}")
     typer.echo(f"status  {run_record.status.value}")
     typer.echo(f"停止于  {run_record.stopped_by.value if run_record.stopped_by else '—'}")
+    if run_record.feedback_stop_reason is not None:
+        typer.echo(f"反馈结束原因  {run_record.feedback_stop_reason}")
     typer.echo(f"attempts {run_record.usage.attempts}   findings {len(findings)}")
+    if run_record.is_feedback_development:
+        typer.secho(FEEDBACK_DEVELOPMENT_NOTICE, fg=typer.colors.YELLOW)
     if run_record.status is not RunStatus.COMPLETED:
         typer.secho("该 run 未正常完成,数字不可与完整 run 比较。", fg=typer.colors.YELLOW)
     for kind, path in paths.items():

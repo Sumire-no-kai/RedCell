@@ -140,6 +140,26 @@ replayed later. Completed attempts carry an explicit logical sequence number;
 time-to-first metrics use that sequence rather than timestamps or database return
 order, so equal timestamps and clock adjustments cannot silently reorder evidence.
 
+### Feedback-driven development run
+
+The feedback attacker has a small development path selected explicitly with
+`--attack-driver feedback`. Set limits for total reported tokens, attempts,
+decisions, and turns per attempt:
+
+```bash
+redcell run --attack-driver feedback --budget 2 --max-tokens 5000 \
+  --max-decision-steps 6 --max-turns-per-attempt 2 --seed 0
+```
+
+This offline command checks the execution and recording pipeline with scripted
+models. It does not establish that a real model uses feedback well or finds more
+vulnerabilities. The feedback path records decisions and target calls, but does
+not support `resume` after interruption. An online run spends real
+quota and still needs separate utility checks, mechanism probes, and a registered
+comparison before it can support a research claim. See the
+[feedback mechanism contract](docs/FEEDBACK_MECHANISM.md) for its evidence and
+budget limits.
+
 ### Calibration knobs and sample integrity
 
 `--defense` sets how firmly the target's system prompt states its rules, from
