@@ -36,8 +36,10 @@ rather than a fixed list of jailbreak strings.
 
 ## Current Status: Phase 0
 
-The Phase 0 engineering spine is complete: RedCell can run the bundled support-agent
-arena end to end with real or scripted models, deterministic Level-1 scoring,
+The Phase 0 engineering spine is complete: RedCell can run the bundled arenas (the
+`support-agent` customer-service arena and, since 2026-09-24, the `ops-console`
+role-hierarchy arena, selected with `--arena`) end to end with real or scripted models,
+deterministic Level-1 scoring,
 Static/Random/Thompson controllers, budget and reliability guards, auditable experiment
 fingerprints, crash-safe resume, and JSON/HTML reports.
 
