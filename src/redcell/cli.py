@@ -19,9 +19,10 @@ from typing import Annotated
 
 import typer
 
+from redcell.arena.definition import ArenaDefinition
+from redcell.arena.registry import DEFAULT_ARENA_ID, arena_for_run, get_arena, recorded_identity
 from redcell.arena.support_agent import (
     NEW_EXPERIMENT_TOOL_CALL_PROTOCOL,
-    SUPPORT_AGENT_POLICY,
     ArenaAdapter,
     DefenseLevel,
     ToolCallProtocol,
@@ -51,7 +52,6 @@ from redcell.controller_controls import (
 )
 from redcell.controls import (
     DEFAULT_POSITIVE_REPEATS,
-    POSITIVE_CASES,
     UTILITY_CONTEXT_VERSION,
     ControlsAdjudicationReport,
     ControlsReport,
@@ -251,6 +251,33 @@ def _providers(
     return pair.target, generator, pair
 
 
+ArenaOption = Annotated[
+    str,
+    typer.Option(help="用哪个注册的靶场(默认客服靶场);非默认靶场的 id 与版本写进实验条件"),
+]
+"""多靶场入口(2026-09-24)。resume / validate-paths 不接受它,从落盘的 Run 读。"""
+
+ActorOption = Annotated[
+    str | None, typer.Option(help="攻击时扮演的身份(默认取靶场登记的 default_actor)")
+]
+
+
+def _resolve_arena(arena_id: str) -> ArenaDefinition:
+    try:
+        return get_arena(arena_id)
+    except KeyError as exc:
+        typer.secho(f"配置被拒绝:{exc.args[0]}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG) from exc
+
+
+def _arena_for_stored_run(target_name: str) -> ArenaDefinition:
+    try:
+        return arena_for_run(target_name)
+    except KeyError as exc:
+        typer.secho(f"配置被拒绝:{exc.args[0]}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(ExitCode.BAD_CONFIG) from exc
+
+
 def _arena_adapter(
     provider: LLMProvider,
     configuration: ProviderRunConfiguration,
@@ -259,10 +286,12 @@ def _arena_adapter(
     enforce_permissions: bool = True,
     enforce_confirmation: bool = True,
     tool_call_protocol_version: str | None = None,
+    arena: ArenaDefinition | None = None,
 ) -> ArenaAdapter:
     """让实际 Target 调用与落盘的实验条件使用同一份配置。"""
     return ArenaAdapter(
         provider,
+        arena=arena,
         defense=defense,
         enforce_permissions=enforce_permissions,
         enforce_confirmation=enforce_confirmation,
@@ -286,8 +315,14 @@ def _experiment_conditions(
     execution_host: ExecutionHostConfiguration | None = None,
     declared_controller_timeout_seconds: float | None = None,
     tool_call_protocol_version: str | None = None,
+    arena_id: str | None = None,
+    arena_version: str | None = None,
 ) -> ExperimentConditions:
-    """把会影响结论的配置冻结进 Run；绝不把凭据写入 SQLite。"""
+    """把会影响结论的配置冻结进 Run；绝不把凭据写入 SQLite。
+
+    `arena_id` / `arena_version`:新 Run 传 `recorded_identity()` 的结果(默认靶场为 `None`);
+    `resume` 照抄落盘值,这样重算出的指纹才与原记录一致,忘传或改传都会在碰到 Target 前被拦下。
+    """
     if providers is None:
         target = ProviderRunConfiguration(
             provider="scripted",
@@ -334,6 +369,8 @@ def _experiment_conditions(
             enforce_permissions=enforce_permissions,
             enforce_confirmation=enforce_confirmation,
             tool_call_protocol_version=tool_call_protocol_version,
+            arena_id=arena_id,
+            arena_version=arena_version,
         ),
         request_timeouts=request_timeouts,
         execution_host=execution_host,
@@ -368,7 +405,8 @@ def run(
         str | None,
         typer.Option(help="矩阵调度器预先分配的 Run ID；普通手动运行不要设置"),
     ] = None,
-    actor: Annotated[str, typer.Option(help="攻击时扮演的身份")] = "customer_a",
+    actor: ActorOption = None,
+    arena: ArenaOption = DEFAULT_ARENA_ID,
     defense: Annotated[
         DefenseLevel, typer.Option(help="靶场防御强度(校准旋钮 ①)")
     ] = DefenseLevel.STANDARD,
@@ -459,6 +497,7 @@ def run(
             seed=seed,
             run_id=run_id,
             actor=actor,
+            arena=arena,
             defense=defense,
             enforce_permissions=enforce_permissions,
             enforce_confirmation=enforce_confirmation,
@@ -531,7 +570,10 @@ def run(
         # 所以它不可能再变成一个假的安全网 —— 藏着反而挡住了正当用法。
     )
 
-    policy = SUPPORT_AGENT_POLICY
+    arena_definition = _resolve_arena(arena)
+    arena_id, arena_version = recorded_identity(arena_definition)
+    actor = actor or arena_definition.default_actor
+    policy = arena_definition.policy
     strategies = select_applicable(list(PHASE_0_STRATEGIES), policy)
     if not strategies:
         typer.secho("没有适用于该目标的策略。", fg=typer.colors.RED, err=True)
@@ -570,6 +612,8 @@ def run(
         execution_host=execution_host,
         declared_controller_timeout_seconds=declared_controller_timeout_seconds,
         tool_call_protocol_version=tool_call_protocol.value,
+        arena_id=arena_id,
+        arena_version=arena_version,
     )
     conditions = conditions.model_copy(
         update={
@@ -608,6 +652,7 @@ def run(
         enforce_permissions=enforce_permissions,
         enforce_confirmation=enforce_confirmation,
         tool_call_protocol_version=conditions.arena.tool_call_protocol_version,
+        arena=arena_definition,
     )
 
     run_record = Run(
@@ -658,7 +703,7 @@ def run(
     if not online:
         typer.secho(f"⚠️  {OFFLINE_NOTICE}", fg=typer.colors.YELLOW, err=True)
 
-    live_follower = LiveConversationFollower(db) if live_conversations else None
+    live_follower = LiveConversationFollower(db, policy=policy) if live_conversations else None
     if live_follower is not None:
         live_follower.start()
 
@@ -713,7 +758,8 @@ def _run_feedback(
     budget: int,
     seed: int,
     run_id: str | None,
-    actor: str,
+    actor: str | None,
+    arena: str,
     defense: DefenseLevel,
     enforce_permissions: bool,
     enforce_confirmation: bool,
@@ -772,7 +818,10 @@ def _run_feedback(
         )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    policy = SUPPORT_AGENT_POLICY
+    arena_definition = _resolve_arena(arena)
+    arena_id, arena_version = recorded_identity(arena_definition)
+    actor = actor or arena_definition.default_actor
+    policy = arena_definition.policy
     strategies = select_applicable(list(PHASE_0_STRATEGIES), policy)
     if not strategies:
         typer.secho("没有适用于该目标的策略。", fg=typer.colors.RED, err=True)
@@ -811,6 +860,8 @@ def _run_feedback(
                 enforce_permissions=enforce_permissions,
                 enforce_confirmation=enforce_confirmation,
                 tool_call_protocol_version=tool_call_protocol.value,
+                arena_id=arena_id,
+                arena_version=arena_version,
             )
             attacker = base.attacker
             if not online:
@@ -840,6 +891,7 @@ def _run_feedback(
             adapter = _arena_adapter(
                 target_provider,
                 conditions.target,
+                arena=arena_definition,
                 defense=defense,
                 enforce_permissions=enforce_permissions,
                 enforce_confirmation=enforce_confirmation,
@@ -875,7 +927,9 @@ def _run_feedback(
                     driver=driver,
                     store=store,
                 )
-                live_follower = LiveConversationFollower(db) if live_conversations else None
+                live_follower = (
+                    LiveConversationFollower(db, policy=policy) if live_conversations else None
+                )
                 if live_follower is not None:
                     live_follower.start()
                 try:
@@ -959,7 +1013,8 @@ def resume(
             err=True,
         )
         raise typer.Exit(ExitCode.BAD_CONFIG)
-    policy = SUPPORT_AGENT_POLICY
+    arena_definition = _arena_for_stored_run(stored.target_name)
+    policy = arena_definition.policy
     strategies = select_applicable(list(PHASE_0_STRATEGIES), policy)
     conditions = stored.experiment_conditions
     controller_provider = None
@@ -983,6 +1038,9 @@ def resume(
             execution_host=conditions.execution_host,
             declared_controller_timeout_seconds=declared_controller_timeout_seconds,
             tool_call_protocol_version=conditions.arena.tool_call_protocol_version,
+            # 照抄落盘的靶场身份:旧 Run 是 None,补上今天的值会让指纹对不上而拒绝恢复。
+            arena_id=conditions.arena.arena_id,
+            arena_version=conditions.arena.arena_version,
         )
         controller_configuration = None
         if conditions.search is not None and conditions.search.selector is SearchSelector.LLM:
@@ -1031,6 +1089,7 @@ def resume(
         enforce_permissions=conditions.arena.enforce_permissions,
         enforce_confirmation=conditions.arena.enforce_confirmation,
         tool_call_protocol_version=conditions.arena.tool_call_protocol_version,
+        arena=arena_definition,
     )
     controller = None
     driver = None
@@ -1481,16 +1540,20 @@ def billing_evidence_template_command(
 
 @app.command(name="golden")
 def golden(
-    fixtures: Annotated[Path, typer.Option(help="冻结 Level-1 fixture JSON")] = Path(
-        "tests/fixtures/level1-golden-v2.json"
-    ),
+    fixtures: Annotated[
+        Path | None, typer.Option(help="冻结 Level-1 fixture JSON;默认用靶场自己登记的那份")
+    ] = None,
     out: Annotated[Path, typer.Option(help="Golden report JSON 输出路径")] = Path(
         "runs/golden.json"
     ),
+    arena: ArenaOption = DEFAULT_ARENA_ID,
 ) -> None:
     """执行版本化的 10 正/11 负确定性 Scorer golden；不调用 Provider。"""
+    arena_definition = _resolve_arena(arena)
     try:
-        report = evaluate_golden(fixtures)
+        report = evaluate_golden(
+            fixtures or arena_definition.golden_fixture, arena=arena_definition
+        )
     except (OSError, ValueError) as exc:
         typer.secho(f"Golden 配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(ExitCode.BAD_CONFIG) from exc
@@ -1554,6 +1617,7 @@ def validate_paths(
         )
         raise typer.Exit(ExitCode.BAD_CONFIG)
 
+    arena_definition = _arena_for_stored_run(evidence.runs[0].target_name)
     adapter = _arena_adapter(
         target,
         target_configuration,
@@ -1561,13 +1625,14 @@ def validate_paths(
         enforce_permissions=reference.arena.enforce_permissions,
         enforce_confirmation=reference.arena.enforce_confirmation,
         tool_call_protocol_version=reference.arena.tool_call_protocol_version,
+        arena=arena_definition,
     )
 
     async def _validate_and_close() -> ValidationReport:
         try:
             return await validate_attack_paths(
                 adapter=adapter,
-                scorer=Level1Scorer(SUPPORT_AGENT_POLICY),
+                scorer=Level1Scorer(arena_definition.policy),
                 attempts=evidence.attempts,
                 findings=evidence.findings,
                 repeats=repeats,
@@ -1663,6 +1728,7 @@ def controls(
         typer.Option(help="controls 使用的 Target 工具协议(新实验默认原生)"),
     ] = NEW_EXPERIMENT_TOOL_CALL_PROTOCOL,
     env_file: EnvFileOption = None,
+    arena: ArenaOption = DEFAULT_ARENA_ID,
 ) -> None:
     """校准之前的**阳性 / 阴性对照**(`CALIBRATION.md` §2)。
 
@@ -1676,7 +1742,8 @@ def controls(
     离线要让脚本化 provider "配合"地被攻破,那证明的只是我们自己写的脚本能触发
     检测器。**报告里的发现必须来自模型决策。** 检测器本身由测试用脚本化 provider 锁住。
     """
-    policy = SUPPORT_AGENT_POLICY
+    arena_definition = _resolve_arena(arena)
+    policy = arena_definition.policy
     try:
         pair = load_providers(env_file)
     except ProviderConfigError as exc:
@@ -1693,11 +1760,14 @@ def controls(
             defense=DefenseLevel.NONE,
             enforce_permissions=enforce_permissions,
             tool_call_protocol_version=tool_call_protocol.value,
+            arena=arena_definition,
         )
 
     async def _run_controls():
         try:
-            positive = await run_positive_control(_make, scorer)
+            positive = await run_positive_control(
+                _make, scorer, cases=list(arena_definition.positive_cases)
+            )
             # 阴性对照用**正常配置**跑:它要回答的是"日常设置下会不会误报",
             # 在无防御的靶场上问这个问题没有意义。
             negative = await run_negative_control(
@@ -1706,12 +1776,15 @@ def controls(
                     pair.target_configuration,
                     defense=DefenseLevel.STANDARD,
                     tool_call_protocol_version=tool_call_protocol.value,
+                    arena=arena_definition,
                 ),
                 scorer,
+                tasks=list(arena_definition.benign_tasks),
             )
             conditions = controls_conditions(
                 target=pair.target_configuration,
                 tool_call_protocol_version=tool_call_protocol.value,
+                arena=arena_definition,
             )
             return ControlsReport(
                 positive=positive,
@@ -1760,6 +1833,7 @@ def positive_control(
         bool, typer.Option(help="把每回合的可见回复写进产物,用于 canary 线归零时排除仪器问题")
     ] = False,
     out: Annotated[Path, typer.Option(help="产物目录")] = Path("runs"),
+    arena: ArenaOption = DEFAULT_ARENA_ID,
 ) -> None:
     """只跑阳性对照的 Target 资格门(`CALIBRATION.md` §2)。
 
@@ -1769,14 +1843,17 @@ def positive_control(
 
     与 `controls` 一样没有离线模式:脚本化 provider 配合地被攻破证明不了任何事。
     """
-    known = {positive.id: positive for positive in POSITIVE_CASES}
+    arena_definition = _resolve_arena(arena)
+    known = {positive.id: positive for positive in arena_definition.positive_cases}
     if case:
         unknown = [case_id for case_id in case if case_id not in known]
         if unknown:
             raise typer.BadParameter(f"未知的用例 id:{', '.join(unknown)};可选 {', '.join(known)}")
-        cases = [positive for positive in POSITIVE_CASES if positive.id in set(case)]
+        cases = [
+            positive for positive in arena_definition.positive_cases if positive.id in set(case)
+        ]
     else:
-        cases = list(POSITIVE_CASES)
+        cases = list(arena_definition.positive_cases)
     if max_cost is not None and max_cost <= 0:
         raise typer.BadParameter("--max-cost 必须大于 0")
 
@@ -1814,13 +1891,14 @@ def positive_control(
             defense=DefenseLevel.NONE,
             enforce_permissions=enforce_permissions,
             tool_call_protocol_version=tool_call_protocol.value,
+            arena=arena_definition,
         )
 
     async def _run_and_close():
         try:
             return await run_positive_control(
                 _make,
-                Level1Scorer(SUPPORT_AGENT_POLICY),
+                Level1Scorer(arena_definition.policy),
                 cases=cases,
                 repeats=repeats,
                 on_output=_observe,
@@ -1945,9 +2023,10 @@ def attacker_control(
         int, typer.Option(help="每个策略生成几条话术(总调用数 = 策略数 × 本值)")
     ] = 5,
     seed: Annotated[int, typer.Option(help="种子;与正式 run 同一套派生机制")] = 0,
-    actor: Annotated[str, typer.Option(help="攻击时扮演的身份")] = "customer_a",
+    actor: ActorOption = None,
     out: Annotated[Path, typer.Option(help="话术明细的输出目录")] = Path("runs"),
     env_file: EnvFileOption = None,
+    arena: ArenaOption = DEFAULT_ARENA_ID,
 ) -> None:
     """校准之前先跑这个:确认**攻击方不是瓶颈**。
 
@@ -1961,7 +2040,9 @@ def attacker_control(
     于是它会稳定地报告"攻击方不是瓶颈"。但那句话是关于**模板**的,
     与真正上场的 attacker 无关。一个永远说 OK 的对照比没有对照更危险。
     """
-    policy = SUPPORT_AGENT_POLICY
+    arena_definition = _resolve_arena(arena)
+    actor = actor or arena_definition.default_actor
+    policy = arena_definition.policy
     strategies = select_applicable(list(PHASE_0_STRATEGIES), policy)
     if samples < 2:
         typer.secho(

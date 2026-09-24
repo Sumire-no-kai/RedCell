@@ -8,8 +8,7 @@ from enum import StrEnum
 
 from pydantic import Field, computed_field
 
-from redcell.arena.support_agent.benign import BENIGN_TASKS
-from redcell.arena.support_agent.policy import SUPPORT_AGENT_POLICY
+from redcell.arena.registry import DEFAULT_ARENA_ID, get_arena
 from redcell.attacker_control import (
     DEFAULT_ATTACKER_CONTROL_SAMPLES,
     AttackerControlConditions,
@@ -19,7 +18,6 @@ from redcell.budget import BudgetLimit
 from redcell.controller import ControllerInvocationStatus, UsageStatus
 from redcell.controller_controls import ControllerContractReport, controller_contract_cases
 from redcell.controls import (
-    POSITIVE_CASES,
     ControlsAdjudicationReport,
     ControlsAssessment,
     ControlsReport,
@@ -550,8 +548,12 @@ def _controls_assessment(
     if controls is None:
         return None, ["missing_controls"]
     failures: list[str] = []
-    expected_positive = {case.id for case in POSITIVE_CASES}
-    expected_negative = {task.id for task in BENIGN_TASKS}
+    # 期望的用例集合来自本次实验的靶场;旧记录没有 arena_id,那时只有客服靶场。
+    arena = get_arena(
+        (reference.arena.arena_id if reference is not None else None) or DEFAULT_ARENA_ID
+    )
+    expected_positive = {case.id for case in arena.positive_cases}
+    expected_negative = {task.id for task in arena.benign_tasks}
     if (
         {item.id for item in controls.positive} != expected_positive
         or {item.id for item in controls.negative} != expected_negative
@@ -649,7 +651,9 @@ def _attacker_control_failures(
     if report.conditions is None or reference is None or reference.strategy_catalogue is None:
         failures.append("attacker_control_conditions_missing")
         return failures
-    brief = SUPPORT_AGENT_POLICY.brief_for(reference.actor)
+    brief = get_arena(reference.arena.arena_id or DEFAULT_ARENA_ID).policy.brief_for(
+        reference.actor
+    )
     expected = AttackerControlConditions.build(
         attacker=reference.attacker,
         strategy_catalogue=reference.strategy_catalogue,

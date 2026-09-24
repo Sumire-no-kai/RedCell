@@ -9,7 +9,12 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from redcell.arena.support_agent import MAX_TOOL_ITERATIONS, DefenseLevel, ToolCallProtocol
+from redcell.arena.support_agent import (
+    MAX_TOOL_ITERATIONS,
+    SUPPORT_AGENT_POLICY,
+    DefenseLevel,
+    ToolCallProtocol,
+)
 from redcell.arena.support_agent import tools as arena_tools
 from redcell.arena.support_agent.benign import BENIGN_TASKS
 from redcell.arena.support_agent.data import SYSTEM_PROMPT_CANARY
@@ -207,8 +212,10 @@ def test_run_starts_and_stops_the_live_conversation_follower(workspace, monkeypa
     lifecycle: list[str] = []
 
     class RecordingFollower:
-        def __init__(self, database_url: str) -> None:
+        def __init__(self, database_url: str, *, policy) -> None:
             assert database_url == _db(workspace)
+            # 跟随器用的 policy 必须是本次靶场的,不能默认成客服靶场。
+            assert policy is SUPPORT_AGENT_POLICY
 
         def start(self) -> None:
             lifecycle.append("start")
@@ -1174,3 +1181,50 @@ def test_resume_loads_providers_through_the_env_file(workspace, monkeypatch) -> 
 
     assert result.exit_code == ExitCode.BAD_CONFIG, result.output
     assert seen["env_file"] == Path(".env.gemini")
+
+
+# ── 多靶场入口(2026-09-24) ─────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["run", "--budget", "1"],
+        ["controls"],
+        ["positive-control"],
+        ["attacker-control"],
+        ["golden", "--out", "golden.json"],
+    ],
+)
+def test_unknown_arena_is_rejected_before_touching_any_provider(workspace, command) -> None:
+    args = [*command, "--arena", "bogus"]
+    if command[0] == "run":
+        args += ["--db", _db(workspace)]
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == ExitCode.BAD_CONFIG, result.output
+    assert "未注册的靶场 'bogus'" in result.output
+
+
+def test_naming_the_default_arena_is_byte_identical_to_the_flagless_run(workspace) -> None:
+    """兼容性承诺(`docs/ARENA_REGISTRY_DESIGN.md` §2.1):默认靶场不写身份,指纹不变。"""
+    common = ["run", "--budget", "2", "--seed", "7", "--algorithm", "random"]
+    for name in ("a", "b"):
+        (workspace / name).mkdir()
+    flagless = runner.invoke(app, [*common, "--db", _db(workspace / "a")])
+    explicit = runner.invoke(
+        app, [*common, "--arena", "support-agent", "--db", _db(workspace / "b")]
+    )
+    assert flagless.exit_code == ExitCode.CLEAN, flagless.output
+    assert explicit.exit_code == ExitCode.CLEAN, explicit.output
+
+    def stored(db_path: str) -> Run:
+        with RunStore(db_path) as store:
+            return store.list_runs()[0]
+
+    a, b = stored(_db(workspace / "a")), stored(_db(workspace / "b"))
+    assert a.experiment_fingerprint == b.experiment_fingerprint
+    assert a.experiment_conditions is not None
+    assert a.experiment_conditions.arena.arena_id is None
+    assert "arena_id" not in a.experiment_conditions.arena.model_dump(mode="json")
+    assert a.target_name == "support-agent"

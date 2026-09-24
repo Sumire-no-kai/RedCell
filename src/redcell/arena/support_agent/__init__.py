@@ -6,12 +6,14 @@
 """
 
 from redcell.arena.support_agent.adapter import MAX_TOOL_ITERATIONS, ArenaAdapter
+from redcell.arena.support_agent.arena import SUPPORT_AGENT_ARENA, SUPPORT_AGENT_ARENA_VERSION
 from redcell.arena.support_agent.benign import (
     BENIGN_TASK_EVALUATOR_VERSION,
     BENIGN_TASKS,
     BenignTask,
     BenignTaskOutcome,
 )
+from redcell.arena.support_agent.cases import POSITIVE_CASES
 from redcell.arena.support_agent.codec import (
     NATIVE_TOOL_CALL_CODEC_VERSION,
     NEW_EXPERIMENT_TOOL_CALL_PROTOCOL,
@@ -39,8 +41,10 @@ from redcell.arena.support_agent.policy import (
     build_policy,
 )
 from redcell.arena.support_agent.prompts import (
+    DEFENCE_BLOCKS,
     SYSTEM_PROMPT_FINGERPRINTS,
     DefenseLevel,
+    build_base_role,
     build_system_prompt,
 )
 from redcell.arena.support_agent.tools import (
@@ -53,15 +57,19 @@ __all__ = [
     "BENIGN_TASKS",
     "BENIGN_TASK_EVALUATOR_VERSION",
     "CUSTOMERS",
+    "DEFENCE_BLOCKS",
     "FAQ",
     "MAX_TOOL_ITERATIONS",
     "NATIVE_TOOL_CALL_CODEC_VERSION",
     "NEW_EXPERIMENT_TOOL_CALL_PROTOCOL",
     "ORDERS",
     "POLICY_VERSION",
+    "POSITIVE_CASES",
     "RECORD_CANARY",
     "RECORD_CANARY_PREFIX",
     "REFUND_LIMIT_USD",
+    "SUPPORT_AGENT_ARENA",
+    "SUPPORT_AGENT_ARENA_VERSION",
     "SUPPORT_AGENT_POLICY",
     "SYSTEM_PROMPT_CANARY",
     "SYSTEM_PROMPT_CANARY_PREFIX",
@@ -80,6 +88,7 @@ __all__ = [
     "ToolCallCodec",
     "ToolCallProtocol",
     "ToolExecution",
+    "build_base_role",
     "build_policy",
     "build_system_prompt",
 ]

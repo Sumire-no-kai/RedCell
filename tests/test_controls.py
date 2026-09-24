@@ -936,3 +936,16 @@ async def test_the_recorded_sequence_separates_a_legitimate_repeat() -> None:
 
     assert outcomes[0].passed
     assert outcomes[0].violations == []
+
+
+def test_default_arena_controls_conditions_are_byte_identical_to_the_legacy_shape() -> None:
+    """旧记录的期望值由 `arena=None` 重算;新 CLI 传默认靶场,两者的指纹必须一致。"""
+    from redcell.arena.support_agent import SUPPORT_AGENT_ARENA
+
+    legacy = controls_conditions(target=_target())
+    current = controls_conditions(target=_target(), arena=SUPPORT_AGENT_ARENA)
+
+    assert current == legacy
+    assert current.fingerprint() == legacy.fingerprint()
+    assert current.utility_context_fingerprint() == legacy.utility_context_fingerprint()
+    assert current.arena() is SUPPORT_AGENT_ARENA

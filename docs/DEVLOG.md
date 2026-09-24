@@ -190,6 +190,43 @@
   PR #70 之上，避免 DEVLOG 冲突），合并顺序 #70 → PR-1。
 - **剩余状态:** DONE（决策记录）；IN PROGRESS（PR-1）。
 
+### 2026-09-24 22:20 AEST · Step 06 · PR-1：靶场注册表重构落地
+
+- **范围与分支:** `refactor/arena-registry`（叠在 #70 之上）。纯重构 + 契约字段,不新增靶场,不调用 Provider。
+- **进度:**
+  - 新增 `arena/definition.py`（`ArenaDefinition` 冻结数据类 + `ArenaTools` 协议 + `PositiveCase` 从 `controls.py`
+    搬入）、`arena/registry.py`（`ARENAS` / `get_arena` / `arena_for_run` / `recorded_identity`）、`arena/defense.py`、
+    `arena/benign.py`（`DefenseLevel`、`BenignTask` 等从客服包上提为通用契约）；客服靶场整体登记为
+    `SUPPORT_AGENT_ARENA`（`support-agent/2026-09-24.1`）。
+  - `ArenaAdapter` 改为按 `ArenaDefinition` 建提示与工具；`cli.py`、`controls.py`、`gate_report.py`、
+    `golden.py`、`utility_confirmation.py`、`live_conversation` 的硬引用全部改为查注册表。`run` / `controls` /
+    `positive-control` / `attacker-control` / `golden` 新增 `--arena`；`resume` / `validate-paths` 从落盘的
+    `Run.target_name` 反查靶场,不接受该选项。`--actor` 默认值改为取靶场登记的 `default_actor`。
+  - Policy 契约（决策 3）：`ActorPolicy.role`、`ToolPolicy.allowed_roles`（`permits_role`）、
+    `Policy.untrusted_content_tools`（校验必须引用已声明工具）；`is_tool_forbidden(name, actor=None)` 不给 actor
+    时语义不变。Scorer 在"全局禁止"之后、参数约束之前加角色门槛,指纹 `role_forbidden_tool:<tool>`,与
+    `forbidden_tool` 分开。`needs_document_source` 策略只在 policy 声明了不受信任内容工具时进入候选池。
+  - `ArenaRunConfiguration` 新增 `arena_id` / `arena_version`,未设置时不序列化（`versions.py` 记入"不升版"例外）。
+- **一处收紧（决策 2 的落地细节）:** 方案原文只说"未设置时不序列化"。落地时定为**默认靶场也不写身份**
+  （`recorded_identity` 对客服靶场返回 `(None, None)`）。理由：方案 §2.1 承诺"不传 `--arena` 时离线 Run 的
+  条件指纹逐字节不变",若默认路径写入身份,这条承诺就破了；而 `--arena support-agent` 与不传本来就是同一
+  环境,指纹也应相同。身份仍可由 `Run.target_name`（= 靶场 id）反查,新靶场则一律写入,`regression_context_fingerprint`
+  照样区分环境。已写回方案 §2.1。
+- **可行性证据（决策 3 的附带要求）:** `tests/test_arena_registry.py` 用一个最小角色分级 policy（L1 / L2 / 未声明角色）
+  直接走 `Level1Scorer`：L1 调 L2 工具被拦 → `VIOLATION_BLOCKED`,执行成功 → `VIOLATION_REALIZED`,L2 → `ANY_CALL`
+  无 finding,未声明角色与未知 actor 一律 fail-closed。不需要任何新靶场代码,PR-2 只需提供 policy 与工具。
+- **兼容性锁:** 同 seed 下 `run` 与 `run --arena support-agent` 的实验指纹相同且条件里没有 `arena_id` 键；
+  `controls_conditions(arena=客服)` 与不传 `arena` 的 `fingerprint()` / `utility_context_fingerprint()` 相同；
+  `ArenaRunConfiguration` 未设置身份时的键序与改前一致；旧 v3/v4/v5 指纹字面量测试原样通过；golden 显式传靶场
+  时 fixture 摘要不变。未注册的 `--arena` 在碰到任何 Provider 之前以 `BAD_CONFIG` 退出（五个命令各测一次）。
+- **顺手修的一处基础设施问题:** ruff 0.16 开始格式化 Markdown 里的 Python 代码块,#70 的方案文档因此过不了
+  `ruff format --check .`。已在 `docs/arena-registry-proposal` 上单独提交格式化（`4700457`）并合进本分支。
+- **验证证据:** 985 passed；`ruff check`、`ruff format --check`、`black --check`、`git diff --check` 通过；
+  `redcell golden`（默认从靶场取 fixture）10/10、11/11。全部离线。
+- **未做 / 留待:** 决策 5、7、8 仍暂缓（`attacker_observation._support_agent_public_error` 与策略模板仍是客服
+  专用,PR-2/3 处理）；决策 4 等作者答复。
+- **剩余状态:** DONE（代码与测试）；IN PROGRESS（PR 待开、合并顺序 #70 → PR-1）。
+
 ## 2026-09-23 · Phase 0.5d 复盘与研究方向调整
 
 ### 2026-09-23 13:02 AEST · Step 01 · 复盘 Phase 0.5d 为什么测不出控制器差异

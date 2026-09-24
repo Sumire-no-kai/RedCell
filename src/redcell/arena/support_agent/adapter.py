@@ -12,14 +12,15 @@ from __future__ import annotations
 import time
 
 from redcell._base import CostRecord
+from redcell.arena.definition import ArenaDefinition, ArenaTools
 from redcell.arena.support_agent.codec import (
     NativeToolCallCodec,
     TextToolCallCodec,
     ToolCallCodec,
     ToolCallProtocol,
 )
-from redcell.arena.support_agent.prompts import DefenseLevel, build_system_prompt
-from redcell.arena.support_agent.tools import SupportAgentTools, ToolExecution
+from redcell.arena.support_agent.prompts import DefenseLevel
+from redcell.arena.support_agent.tools import ToolExecution
 from redcell.budget import CallBudgetExhaustedError, CallBudgetGuard
 from redcell.failures import (
     FailureKind,
@@ -54,7 +55,7 @@ MAX_TOOL_ITERATIONS = 5
 
 
 class ArenaAdapter(TargetAdapter):
-    """进程内客服靶场,完整插桩。
+    """进程内靶场,完整插桩。默认是客服靶场;传 `arena` 即可换成注册表里的另一个。
 
     两个校准旋钮由构造参数暴露(见 docs/CALIBRATION.md §10):
       * `defense` —— 旋钮 ①,system prompt 的防御强度;
@@ -66,6 +67,7 @@ class ArenaAdapter(TargetAdapter):
         self,
         provider: LLMProvider,
         *,
+        arena: ArenaDefinition | None = None,
         defense: DefenseLevel = DefenseLevel.STANDARD,
         enforce_permissions: bool = True,
         enforce_confirmation: bool = True,
@@ -76,13 +78,19 @@ class ArenaAdapter(TargetAdapter):
         max_tokens: int | None = None,
         max_tool_iterations: int = MAX_TOOL_ITERATIONS,
     ) -> None:
+        if arena is None:
+            # 延迟导入:靶场包的 __init__ 会导入本模块,顶层互相 import 会成环。
+            from redcell.arena.support_agent.arena import SUPPORT_AGENT_ARENA
+
+            arena = SUPPORT_AGENT_ARENA
+        self._arena = arena
         self._provider = provider
         self._defense = defense
         self._model = model
         self._temperature = temperature
         self._max_tokens = max_tokens
         self._max_tool_iterations = max_tool_iterations
-        self._tools = SupportAgentTools(
+        self._tools = arena.make_tools(
             enforce_permissions=enforce_permissions,
             enforce_confirmation=enforce_confirmation,
         )
@@ -99,7 +107,11 @@ class ArenaAdapter(TargetAdapter):
 
     @property
     def adapter_type(self) -> str:
-        return "arena/support-agent"
+        return self._arena.adapter_type
+
+    @property
+    def arena(self) -> ArenaDefinition:
+        return self._arena
 
     @property
     def observability(self) -> ObservabilityLevel:
@@ -124,7 +136,7 @@ class ArenaAdapter(TargetAdapter):
         )
 
     @property
-    def tools(self) -> SupportAgentTools:
+    def tools(self) -> ArenaTools:
         return self._tools
 
     @property
@@ -294,7 +306,7 @@ class ArenaAdapter(TargetAdapter):
     # ── 内部 ─────────────────────────────────────────────────────────────
 
     def _build_messages(self, payload: AdapterInput) -> list[LLMMessage]:
-        system = build_system_prompt(
+        system = self._arena.build_system_prompt(
             actor=payload.actor, defense=self._defense
         ) + self._codec.system_suffix(self._tools.specs())
         history = [LLMMessage(role=m.role, content=m.content) for m in payload.messages]

@@ -285,6 +285,18 @@ class ArenaRunConfiguration(RedCellModel):
     enforce_confirmation: bool
     tool_call_protocol_version: str | None = None
     """None preserves v3 evidence; every v4 Run records text-v2 or native-v1 explicitly."""
+    arena_id: str | None = None
+    arena_version: str | None = None
+    """跑的是哪个靶场、哪一版(2026-09-24 起,多靶场)。
+
+    未设置时不进入序列化结果,所以此前所有记录的指纹不变。默认靶场(客服)也不写
+    (见 `redcell.arena.registry.recorded_identity`),其他靶场由 CLI 一律写入;
+    `regression_context_fingerprint` 通过本模型带上它,两个靶场上的 Run 不再被判为同一环境。
+    """
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict:
+        return _drop_unset(handler(self), ("arena_id", "arena_version"), self)
 
 
 class ExperimentConditions(RedCellModel):

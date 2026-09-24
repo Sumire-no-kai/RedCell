@@ -103,7 +103,7 @@ class ArenaDefinition(RedCellModel):  # frozen, 一个靶场一个实例
 | 位置 | 现状 | 方案 |
 |---|---|---|
 | `Run.target_name` / `policy_version` | 已有,进入 `gate_context_fingerprint` | 不变;值来自 `arena.policy` |
-| `ArenaRunConfiguration` | `defense`、两个开关、协议 | **新增 `arena_id: str \| None`、`arena_version: str \| None`**,未设置时不进入序列化(与 #60 的 `max_tokens_parameter` 同一做法) |
+| `ArenaRunConfiguration` | `defense`、两个开关、协议 | **新增 `arena_id: str \| None`、`arena_version: str \| None`**,未设置时不进入序列化(与 #60 的 `max_tokens_parameter` 同一做法)。PR-1 落地时定为:默认(客服)靶场**不写**身份(`registry.recorded_identity`),其他靶场一律写 —— 这样 `--arena support-agent` 与不传的指纹相同,身份仍由 `Run.target_name` 反查 |
 | `ControlsConditions.utility_context_payload` | 写死 `POLICY_VERSION` | 改为本次靶场的 `policy.version`;客服靶场取值不变,指纹不变 |
 | `regression_context_fingerprint` | 不含靶场身份 | 通过 `arena` 字段自动带上 `arena_id/version` |
 

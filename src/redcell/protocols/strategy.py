@@ -208,8 +208,9 @@ class Strategy(RedCellModel):
             tool.requires_confirmation for tool in policy.tools.values()
         ):
             return False
-        # Phase 0 的靶场没有文档/RAG 来源,间接注入类策略一律不适用。
-        return not req.needs_document_source
+        # 需要文档来源的策略,只在 policy 声明了"结果是数据不是指令"的工具时才有靶子。
+        # 客服靶场没有这类工具,所以那里的行为与 2026-09-24 之前相同:一律不适用。
+        return not req.needs_document_source or bool(policy.untrusted_content_tools)
 
     def validate_against(self, policy: Policy) -> None:
         """加载策略库时调用。不通过就抛,不静默降级。
