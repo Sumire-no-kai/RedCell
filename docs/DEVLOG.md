@@ -151,6 +151,45 @@
   层的核心设计，按 AGENTS §3 需要先出方案（含替代方案与取舍）讨论，作者确认后才写代码，不在本步骤展开。
 - **剩余状态:** DONE（Q2 权限语义方向）；OPEN（两个新靶场的 schema 设计，待单独讨论；Q3 M1-B 范围）。
 
+### 2026-09-24 21:25 AEST · Step 04 · 靶场注册表与两个新靶场的设计方案（讨论稿）
+
+- **进度:** 按 AGENTS §3 先出方案再写代码：新增 `docs/ARENA_REGISTRY_DESIGN.md`（状态 OPEN）。内容：
+  ① 现状盘点——客服靶场由 policy / 数据 / 工具模拟 / 提示 / 正常任务 / 阳性用例 / 适配器七部分组成，其中阳性
+  用例放在通用模块 `controls.py` 里却引用本靶场的工具名；靶场包之外约 20 处硬引用（`cli.py` 8 处、
+  `controls.py` 4 处、`gate_report.py` 3 处、`utility_confirmation.py` 2 处、`golden.py`、`live_conversation.py`、
+  `attacker_observation.py` 的错误分类、`strategy.is_applicable` 里写死的"没有文档源"）。② 目标契约
+  `ArenaDefinition` + 注册表 + `--arena` 选项；靶场身份新增到 `ArenaRunConfiguration`（未设置不序列化，
+  与 #60/#67 同一兼容手法），`utility_context_payload` 的 policy 版本改为取自当前靶场。③ 四步 PR 顺序：
+  注册表重构（默认路径逐字节不变）→ 靶场 A → 靶场 C → 间接文档注入策略（需预注册）。④ 靶场 A `ops-console`
+  草案：L1/L2/ADMIN 三级角色，Policy 新增 `ActorPolicy.role` 与 `ToolPolicy.allowed_roles`，
+  `is_tool_forbidden` 增加 actor 参数；8 个工具、三条信号线、四档防御同话题。⑤ 靶场 C `knowledge-desk`
+  草案：按部门归属，固定文档集 + 关键词查表检索，Policy 新增 `untrusted_content_tools`，让策略适用性
+  从硬编码改为查 policy；不新增信号线，间接注入仍由现有三条线判定。
+- **否掉的方案:** 每角色复制工具（泄露角色结构且 `ToolPolicy.allowed` 是全局的）；把角色当受约束参数；
+  参数化单靶场（Step 03 已否）。
+- **起草时发现:** 七条策略的种子模板结构上通用（占位符），但用词是客服场景的（订单、退款、账户、客服
+  主管）。换靶场后话术与语境不自洽是靶场之外的混杂变量。方案 §6.5 给出两条路：每个靶场注册一套模板
+  （客服靶场字节不变，策略目录版本按靶场不同；推荐）或把模板改成领域中性（客服靶场模板也变）。
+- **不在本方案内:** `attacker_observation.py` 的公开错误分类由维护该模块的一方按接口改；PR-4 的新策略
+  预注册另行讨论。
+- **剩余状态:** OPEN（文档 §7 列出 8 项待作者确认；确认 1、2、3、6 即可开始 PR-1）。
+
+### 2026-09-24 21:38 AEST · Step 05 · 作者对靶场方案的决定
+
+- **决策（作者）:**
+  1. `ArenaDefinition` 契约与注册表：方案 (a)，注册表在 Python 里写死（与 policy 不用 YAML 同一理由）。
+  2. 靶场身份进入 `ArenaRunConfiguration`：方案 (a)，新增 `arena_id` / `arena_version`，未设置时不序列化。
+  3. Policy 新增 `ActorPolicy.role`、`ToolPolicy.allowed_roles`、`Policy.untrusted_content_tools`，
+     `is_tool_forbidden` 增加 actor 参数。**附带要求：** 字段落地后整体复核一遍方案确实可行。PR-1 以一个
+     角色分级的最小 policy 走通 scorer 的越权判定作为可行性证据。
+  6. 四步 PR 顺序照方案执行：注册表重构 → 靶场 A → 靶场 C → 间接文档注入策略。
+  - 4（靶场 A 是否给低等级角色多加身份）作者询问意见，待答复；建议写在方案 §4.7：不加测试身份，
+    改加纯数据记录；若要单独测同级越界，最多加一个 L1 身份并配一条阳性用例。
+  - 5、7、8 暂缓，不阻塞 PR-1。
+- **进度:** 方案文档 §7 改为状态表，加 §4.7。PR-1 分支 `refactor/arena-registry` 从本分支开出（叠在
+  PR #70 之上，避免 DEVLOG 冲突），合并顺序 #70 → PR-1。
+- **剩余状态:** DONE（决策记录）；IN PROGRESS（PR-1）。
+
 ## 2026-09-23 · Phase 0.5d 复盘与研究方向调整
 
 ### 2026-09-23 13:02 AEST · Step 01 · 复盘 Phase 0.5d 为什么测不出控制器差异
