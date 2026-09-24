@@ -62,28 +62,32 @@
 ```python
 class ArenaTools(Protocol):
     """工具模拟器必须提供的接口 —— ArenaAdapter 今天实际用到的就是这五样。"""
+
     enforce_permissions: bool
     enforce_confirmation: bool
+
     def reset(self) -> None: ...
     def begin_turn(self) -> None: ...
     def execute(self, name: str, arguments: dict, *, actor: str) -> ToolExecution: ...
     def specs(self) -> list[dict]: ...
 
 
-class ArenaDefinition(RedCellModel):   # frozen, 一个靶场一个实例
-    id: str                              # "support-agent" / "ops-console" / "knowledge-desk"
-    version: str                         # 靶场内容版本 = policy + 提示 + 工具 + 数据 一起变
+class ArenaDefinition(RedCellModel):  # frozen, 一个靶场一个实例
+    id: str  # "support-agent" / "ops-console" / "knowledge-desk"
+    version: str  # 靶场内容版本 = policy + 提示 + 工具 + 数据 一起变
     policy: Policy
     default_actor: str
-    defense_blocks: dict[DefenseLevel, str]      # NONE 必须为空串;四档覆盖同一组话题
-    positive_cases: list[PositiveCase]           # 从 controls.py 搬进靶场
+    defense_blocks: dict[DefenseLevel, str]  # NONE 必须为空串;四档覆盖同一组话题
+    positive_cases: list[PositiveCase]  # 从 controls.py 搬进靶场
     benign_tasks: list[BenignTask]
     benign_task_evaluator_version: str
-    golden_fixture: Path                         # 本靶场自己的 Level-1 golden 集
-    public_error_categories: Callable[[str], PublicToolError]   # 见 §6.6
+    golden_fixture: Path  # 本靶场自己的 Level-1 golden 集
+    public_error_categories: Callable[[str], PublicToolError]  # 见 §6.6
 
     def build_system_prompt(self, actor: str, defense: DefenseLevel) -> str: ...
-    def make_tools(self, *, enforce_permissions: bool, enforce_confirmation: bool) -> ArenaTools: ...
+    def make_tools(
+        self, *, enforce_permissions: bool, enforce_confirmation: bool
+    ) -> ArenaTools: ...
 ```
 
 - **注册表**:`redcell.arena.registry.ARENAS: dict[str, ArenaDefinition]`,`get_arena(id)`
@@ -141,8 +145,12 @@ PR-1 是纯重构,可以立刻开始。PR-2/3 要等 §4/§5 的草案定稿。P
 现有 `ActorPolicy` 只有 `allowed_resource_ids`(资源归属)。角色分级需要 **Policy schema 扩展**:
 
 ```python
-class ActorPolicy:  role: str | None = None          # 新增
-class ToolPolicy:   allowed_roles: list[str] | None   # 新增;None = 所有角色
+class ActorPolicy:
+    role: str | None = None  # 新增
+
+
+class ToolPolicy:
+    allowed_roles: list[str] | None  # 新增;None = 所有角色
 ```
 
 `Policy.is_tool_forbidden(name)` 改为 `is_tool_forbidden(name, actor)`:工具 `allowed=False` 或
@@ -227,7 +235,8 @@ Paper B 要报告的内容之一。
 ### 5.4 Policy 需要新增的概念
 
 ```python
-class Policy:  untrusted_content_tools: list[str] = []   # 新增:这些工具的结果是数据,不是指令
+class Policy:
+    untrusted_content_tools: list[str] = []  # 新增:这些工具的结果是数据,不是指令
 ```
 
 作用有两个:① `Strategy.requirements.needs_document_source` 改为查 policy 的这个字段,不再是
