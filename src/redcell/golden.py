@@ -9,12 +9,7 @@ from typing import Any
 
 from pydantic import Field, model_validator
 
-from redcell.arena.support_agent import (
-    SUPPORT_AGENT_POLICY,
-    SYSTEM_PROMPT_CANARY,
-    SYSTEM_PROMPT_CANARY_PREFIX,
-    SYSTEM_PROMPT_FINGERPRINTS,
-)
+from redcell.arena.definition import ArenaDefinition
 from redcell.gate_evidence import (
     LEVEL1_GOLDEN_FIXTURE_VERSION,
     GoldenFixtureKind,
@@ -27,6 +22,7 @@ from redcell.protocols.common import (
     SignalChannel,
     VulnerabilityCategory,
 )
+from redcell.protocols.policy import ProtectedDataLocation
 from redcell.protocols.trace import Turn
 from redcell.scoring.level1 import Level1Scorer
 from redcell.versions import LEVEL1_SCORER_VERSION
@@ -77,12 +73,20 @@ class GoldenFixtureSet(RedCellModel):
         return self
 
 
-def evaluate_golden(path: Path) -> GoldenReport:
-    """Evaluate the frozen fixture file without calling any Provider."""
+def evaluate_golden(path: Path, *, arena: ArenaDefinition | None = None) -> GoldenReport:
+    """Evaluate the frozen fixture file without calling any Provider.
+
+    The fixture tokens ({{SYSTEM_PROMPT_CANARY}} etc.) expand to the arena's own policy
+    values, so each arena carries its own fixture file and answer key.
+    """
+    if arena is None:
+        from redcell.arena.support_agent.arena import SUPPORT_AGENT_ARENA
+
+        arena = SUPPORT_AGENT_ARENA
     raw = json.loads(path.read_text(encoding="utf-8"))
     digest = _canonical_digest(raw)
-    fixtures = GoldenFixtureSet.model_validate(_expand_tokens(raw))
-    scorer = Level1Scorer(SUPPORT_AGENT_POLICY)
+    fixtures = GoldenFixtureSet.model_validate(_expand_tokens(raw, arena))
+    scorer = Level1Scorer(arena.policy)
     outcomes: list[GoldenOutcome] = []
     for fixture in fixtures.fixtures:
         result = scorer.score(
@@ -135,17 +139,24 @@ def _canonical_digest(raw: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _expand_tokens(value: Any) -> Any:
+def _expand_tokens(value: Any, arena: ArenaDefinition) -> Any:
     if isinstance(value, str):
+        canaries = arena.policy.canaries_at(ProtectedDataLocation.SYSTEM_PROMPT)
+        fingerprint = arena.policy.system_prompt_fingerprint
+        if not canaries or fingerprint is None:
+            raise ValueError(
+                f"靶场 '{arena.id}' 的 policy 没有系统提示 canary 或指纹,golden 无法展开"
+            )
+        canary = canaries[0]
         return (
-            value.replace("{{SYSTEM_PROMPT_CANARY}}", SYSTEM_PROMPT_CANARY)
-            .replace("{{SYSTEM_PROMPT_CANARY_PREFIX}}", SYSTEM_PROMPT_CANARY_PREFIX)
-            .replace("{{SYSTEM_PROMPT_FINGERPRINT}}", SYSTEM_PROMPT_FINGERPRINTS[0])
+            value.replace("{{SYSTEM_PROMPT_CANARY}}", canary.value or "")
+            .replace("{{SYSTEM_PROMPT_CANARY_PREFIX}}", canary.prefix or "")
+            .replace("{{SYSTEM_PROMPT_FINGERPRINT}}", fingerprint.ngrams[0])
         )
     if isinstance(value, list):
-        return [_expand_tokens(item) for item in value]
+        return [_expand_tokens(item, arena) for item in value]
     if isinstance(value, dict):
-        return {key: _expand_tokens(item) for key, item in value.items()}
+        return {key: _expand_tokens(item, arena) for key, item in value.items()}
     return value
 
 

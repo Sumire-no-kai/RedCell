@@ -16,10 +16,9 @@ from pathlib import Path
 
 from pydantic import Field, computed_field, model_validator
 
-from redcell.arena.support_agent.benign import BENIGN_TASKS
+from redcell.arena.registry import DEFAULT_ARENA_ID, get_arena
 from redcell.controls import (
     DEFAULT_POSITIVE_REPEATS,
-    POSITIVE_CASES,
     ControlsAdjudicationReport,
     ControlsAssessment,
     ControlsReport,
@@ -203,8 +202,14 @@ def _batch_failures(
 ) -> tuple[ControlsAssessment, list[str]]:
     prefix = f"utility_confirmation_{label}"
     failures: list[str] = []
-    expected_positive = {case.id for case in POSITIVE_CASES}
-    expected_negative = {task.id for task in BENIGN_TASKS}
+    # Phase 0.5b 的 controls 只有客服靶场;按记录里的靶场身份取期望集合,缺失即默认。
+    arena = (
+        controls.conditions.arena()
+        if controls.conditions is not None
+        else get_arena(DEFAULT_ARENA_ID)
+    )
+    expected_positive = {case.id for case in arena.positive_cases}
+    expected_negative = {task.id for task in arena.benign_tasks}
     if (
         {item.id for item in controls.positive} != expected_positive
         or {item.id for item in controls.negative} != expected_negative
