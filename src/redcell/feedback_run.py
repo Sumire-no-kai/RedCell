@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -19,7 +20,7 @@ from redcell.attacker_observation import (
     AttackerVisibility,
     project_attacker_observations,
 )
-from redcell.budget import BudgetLimit, BudgetManager
+from redcell.budget import BudgetLimit, BudgetManager, CallBudgetExhaustedError
 from redcell.failures import (
     DeliveryStatus,
     FailureKind,
@@ -45,6 +46,7 @@ from redcell.feedback_attacker import (
     FeedbackAttackSelection,
     FeedbackBudgetExhaustedError,
     FeedbackBudgetView,
+    feedback_strategy_digest,
 )
 from redcell.orchestrator import RunExecutionRequest, RunExecutionResult, RunFailedError
 from redcell.protocols.adapter import AdapterInput, Message, ResetScope, TargetAdapter
@@ -131,6 +133,8 @@ class FeedbackRunOrchestrator:
             raise ValueError("Feedback Run 需要非空且唯一的 Strategy IDs")
         if run.strategy_ids != list(strategies):
             raise ValueError("Run 的 Strategy IDs 与执行请求不一致")
+        if config.strategy_views_sha256 != feedback_strategy_digest(request.strategies):
+            raise ValueError("Run 的 Strategy 名称/描述与反馈攻击者输入不一致")
         assert conditions.strategy_catalogue is not None
         current_catalogue = StrategyCatalogue(
             version=conditions.strategy_catalogue.version,
@@ -236,8 +240,10 @@ class FeedbackRunOrchestrator:
             )
             steps += 1
             try:
-                selection = await self._driver.decide(decision_request)
-            except FeedbackAttackDecisionError as exc:
+                selection = await self._driver.decide_with_budget(
+                    decision_request, lambda spent: self._check_call_budget(budget, spent)
+                )
+            except (FeedbackAttackDecisionError, CallBudgetExhaustedError) as exc:
                 cost = exc.cost if self._valid_cost(exc.cost) else CostRecord(usage_known=False)
                 self._record_cost(budget, cost, role="generator")
                 run = run.model_copy(update={"usage": budget.usage()})
@@ -255,7 +261,7 @@ class FeedbackRunOrchestrator:
                     ),
                 )
                 if (
-                    isinstance(exc, FeedbackBudgetExhaustedError)
+                    isinstance(exc, (FeedbackBudgetExhaustedError, CallBudgetExhaustedError))
                     and cost.usage_known
                     and not exc.usage_indeterminate
                 ):
@@ -269,13 +275,18 @@ class FeedbackRunOrchestrator:
                             findings,
                             closing_decision_cost=cost,
                         )
+                    limit = (
+                        exc.limit
+                        if isinstance(exc, CallBudgetExhaustedError)
+                        else BudgetLimit.TOKENS
+                    )
                     return self._complete(
                         run,
                         budget,
                         attempts,
                         findings,
-                        BudgetLimit.TOKENS.value,
-                        BudgetLimit.TOKENS,
+                        limit.value,
+                        limit,
                     )
                 self._fail(
                     run,
@@ -470,7 +481,7 @@ class FeedbackRunOrchestrator:
                 ),
             )
             try:
-                output = await self._adapter.send(
+                output = await self._adapter.send_with_budget(
                     AdapterInput(
                         messages=conversation,
                         actor=request.actor,
@@ -485,8 +496,38 @@ class FeedbackRunOrchestrator:
                             "attempt_seed": seeds.attempt_seed,
                             "target_seed": derive_seed(seeds.target_seed, "turn", turn_index),
                         },
-                    )
+                    ),
+                    lambda spent: self._check_call_budget(budget, spent),
                 )
+            except CallBudgetExhaustedError as exc:
+                # A reset or durable write can consume the last wall-clock budget.
+                # The guard ran before sending, so an empty reservation is abandoned.
+                if active.turns:
+                    run = self._finish_attempt(
+                        run,
+                        budget,
+                        active,
+                        AttemptStopReason.BUDGET_EXHAUSTED,
+                        attempts,
+                        findings,
+                        closing_decision_cost=selection.cost,
+                    )
+                else:
+                    budget.abandon_attempt()
+                    run = run.model_copy(update={"usage": budget.usage()})
+                    self._store.commit_run_state(
+                        run=run,
+                        run_event=self._event(
+                            run,
+                            RunEventType.ATTEMPT_ABANDONED,
+                            attempt_id=active.id,
+                            payload={
+                                "reason": exc.limit.value,
+                                "usage": run.usage.model_dump(mode="json"),
+                            },
+                        ),
+                    )
+                return self._complete(run, budget, attempts, findings, exc.limit.value, exc.limit)
             except Exception as exc:
                 reported = (
                     exc.failure.usage
@@ -818,15 +859,29 @@ class FeedbackRunOrchestrator:
         raise RunFailedError(failed, failure) from exc
 
     @staticmethod
-    def _resource_limit(budget: BudgetManager) -> BudgetLimit | None:
+    def _resource_limit(
+        budget: BudgetManager, spent: CostRecord | None = None
+    ) -> BudgetLimit | None:
         limits, usage = budget.limits, budget.usage()
-        if limits.max_total_tokens is not None and usage.total_tokens >= limits.max_total_tokens:
+        spent = spent or CostRecord()
+        if (
+            limits.max_total_tokens is not None
+            and usage.total_tokens + spent.total_tokens >= limits.max_total_tokens
+        ):
             return BudgetLimit.TOKENS
-        if limits.max_cost_usd is not None and usage.cost_usd >= limits.max_cost_usd:
+        if limits.max_cost_usd is not None and usage.cost_usd + spent.usd >= limits.max_cost_usd:
             return BudgetLimit.COST
         if limits.max_wall_seconds is not None and usage.wall_seconds >= limits.max_wall_seconds:
             return BudgetLimit.WALL_CLOCK
         return None
+
+    @classmethod
+    def _check_call_budget(cls, budget: BudgetManager, spent: CostRecord) -> None:
+        if not cls._valid_cost(spent) or not spent.usage_known:
+            raise ValueError("Provider usage must be known and valid before another call")
+        limit = cls._resource_limit(budget, spent)
+        if limit is not None:
+            raise CallBudgetExhaustedError(limit, spent)
 
     @classmethod
     def _stop_before_decision(
@@ -865,6 +920,8 @@ class FeedbackRunOrchestrator:
             and 0 <= cost.cached_input_tokens <= cost.prompt_tokens
             and cost.usd >= 0
             and cost.wall_ms >= 0
+            and math.isfinite(cost.usd)
+            and math.isfinite(cost.wall_ms)
         )
 
     @staticmethod

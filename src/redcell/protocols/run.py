@@ -239,6 +239,7 @@ class FeedbackRunConfiguration(RedCellModel):
     """反馈驱动 Run 的非凭据身份；旧 selector/Generator 条件不适用于此路径。"""
 
     driver_name: str = Field(min_length=1)
+    strategy_views_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     observation_visibility: Literal[
         "response-only",
         "tool-calls",

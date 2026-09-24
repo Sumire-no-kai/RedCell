@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from redcell.arena.support_agent.codec import TOOL_CALL_CODEC_VERSION
+from redcell.feedback_attacker import feedback_strategy_digest
 from redcell.protocols.run import ExperimentConditions, Run
 from redcell.protocols.strategy import StrategyCatalogue
 from redcell.storage import RunStore
@@ -82,6 +83,7 @@ def _feedback() -> ExperimentConditions:
     payload["conditions_schema_version"] = FEEDBACK_EXPERIMENT_CONDITIONS_SCHEMA_VERSION
     payload["feedback"] = {
         "driver_name": "llm-feedback",
+        "strategy_views_sha256": feedback_strategy_digest([PHASE_0_STRATEGIES[0]]),
         "observation_visibility": "tool-status",
         "prompt_version": "feedback-attacker-prompt-v2",
         "schema_version": "feedback-attacker-choice-v2",

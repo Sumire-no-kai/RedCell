@@ -70,6 +70,7 @@ from redcell.feedback_attacker import (
     FEEDBACK_ATTACKER_PROMPT_V2,
     FEEDBACK_ATTACKER_SCHEMA_V2,
     LLMFeedbackAttackAdapter,
+    feedback_strategy_digest,
 )
 from redcell.feedback_run import (
     FEEDBACK_STOP_POLICY_V1,
@@ -824,6 +825,7 @@ def _run_feedback(
                     "conditions_schema_version": FEEDBACK_EXPERIMENT_CONDITIONS_SCHEMA_VERSION,
                     "feedback": FeedbackRunConfiguration(
                         driver_name=driver.name,
+                        strategy_views_sha256=feedback_strategy_digest(strategies),
                         observation_visibility=visibility.value,
                         prompt_version=FEEDBACK_ATTACKER_PROMPT_V2,
                         schema_version=FEEDBACK_ATTACKER_SCHEMA_V2,

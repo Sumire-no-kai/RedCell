@@ -8,7 +8,8 @@ import pytest
 
 from redcell._base import CostRecord
 from redcell.arena.support_agent import SUPPORT_AGENT_POLICY
-from redcell.budget import BudgetLimit, BudgetLimits
+from redcell.arena.support_agent.adapter import ArenaAdapter
+from redcell.budget import BudgetLimit, BudgetLimits, BudgetManager
 from redcell.feedback_attacker import (
     FEEDBACK_ATTACKER_PROMPT_V2,
     FEEDBACK_ATTACKER_SCHEMA_V2,
@@ -19,8 +20,11 @@ from redcell.feedback_attacker import (
     FeedbackAttackDriver,
     FeedbackAttackRequest,
     FeedbackAttackSelection,
+    LLMFeedbackAttackAdapter,
+    feedback_strategy_digest,
 )
 from redcell.feedback_run import FeedbackRunOrchestrator
+from redcell.llm import ScriptedProvider
 from redcell.orchestrator import RunExecutionRequest, RunFailedError
 from redcell.protocols.adapter import (
     AdapterCapabilities,
@@ -101,6 +105,7 @@ def _run(
         ).condition_summary(),
         feedback=FeedbackRunConfiguration(
             driver_name="fake-feedback",
+            strategy_views_sha256=feedback_strategy_digest([strategy]),
             observation_visibility="tool-status",
             prompt_version=FEEDBACK_ATTACKER_PROMPT_V2,
             schema_version=FEEDBACK_ATTACKER_SCHEMA_V2,
@@ -506,6 +511,16 @@ async def test_strategy_catalogue_must_match_actual_strategy_content(store: RunS
     assert not target.requests
 
 
+@pytest.mark.parametrize("field", ["name", "description"])
+async def test_feedback_strategy_text_is_bound_to_run_identity(store: RunStore, field: str) -> None:
+    changed = _STRATEGY.model_copy(update={field: "Changed attacker-visible instructions."})
+    run = _run(strategy=changed)
+    assert run.experiment_fingerprint != _run().experiment_fingerprint
+    with pytest.raises(ValueError, match="Strategy"):
+        await _execute(run, FakeFeedbackDriver([]), FakeTarget([]), store)
+    assert store.get_run(run.id) is None
+
+
 async def test_active_attempt_failure_is_recorded_as_abandoned(store: RunStore) -> None:
     run = _run()
     failure = FeedbackAttackDecisionError(
@@ -611,3 +626,147 @@ async def test_negative_driver_tokens_fail_closed_without_budget_credit(store: R
     assert saved.usage.total_tokens >= 0
     assert not target.requests
     assert not store.attempts_for(run.id)
+
+
+class MeteredProvider(ScriptedProvider):
+    @property
+    def reports_cost(self) -> bool:
+        return True
+
+    async def complete(self, *args, **kwargs):
+        response = await super().complete(*args, **kwargs)
+        return response.model_copy(update={"cost_usd": 0.01})
+
+
+def _bind_components(run: Run, driver: FeedbackAttackDriver, target: TargetAdapter) -> Run:
+    payload = run.model_dump(mode="json")
+    payload["algorithm"] = driver.name
+    payload["adapter_type"] = target.adapter_type
+    payload["experiment_conditions"]["feedback"]["driver_name"] = driver.name
+    payload["experiment_fingerprint"] = None
+    return Run.model_validate(payload)
+
+
+async def test_cost_exhaustion_prevents_attacker_repair(store: RunStore) -> None:
+    provider = MeteredProvider(["invalid JSON", "invalid JSON"], tokens_per_call=(2, 1))
+    driver = LLMFeedbackAttackAdapter(provider=provider, model="attacker-fake")
+    target = FakeTarget([])
+    run = _bind_components(_run(), driver, target)
+    run.limits.max_cost_usd = 0.005
+
+    result = await _execute(run, driver, target, store)
+
+    assert provider.call_count == 1
+    assert result.run.stopped_by is BudgetLimit.COST
+    assert result.run.usage.total_tokens == 3
+    assert result.run.usage.cost_usd == pytest.approx(0.01)
+    assert not target.requests
+
+
+@pytest.mark.parametrize("limit", ["tokens", "cost"])
+async def test_budget_stops_target_internal_provider_loop(store: RunStore, limit: str) -> None:
+    provider = MeteredProvider(
+        [
+            '<tool_call>{"name":"search_faq","arguments":{"topic":"returns"}}</tool_call>',
+            "Final response.",
+        ],
+        tokens_per_call=(3, 2),
+    )
+    target = ArenaAdapter(provider)
+    driver = FakeFeedbackDriver(
+        [_action("start_attempt", message="Help with returns.", strategy_id=_STRATEGY.id)]
+    )
+    run = _bind_components(_run(max_tokens=8 if limit == "tokens" else 100), driver, target)
+    if limit == "cost":
+        run.limits.max_cost_usd = 0.005
+
+    result = await _execute(run, driver, target, store)
+
+    assert provider.call_count == 1
+    assert result.run.stopped_by.value == limit
+    assert result.run.usage.total_tokens == 8
+    assert result.run.usage.cost_usd == pytest.approx(0.012)
+    assert len(result.attempts[0].turns[0].output.tool_results) == 1
+    assert result.attempts[0].stop_reason is AttemptStopReason.BUDGET_EXHAUSTED
+
+
+async def test_target_followup_failure_preserves_prior_provider_usage(store: RunStore) -> None:
+    provider = MeteredProvider(
+        ['<tool_call>{"name":"search_faq","arguments":{"topic":"returns"}}</tool_call>'],
+        tokens_per_call=(3, 2),
+    )
+    target = ArenaAdapter(provider)
+    driver = FakeFeedbackDriver(
+        [_action("start_attempt", message="Help with returns.", strategy_id=_STRATEGY.id)]
+    )
+    run = _bind_components(_run(), driver, target)
+
+    with pytest.raises(RunFailedError):
+        await _execute(run, driver, target, store)
+
+    saved = store.get_run(run.id)
+    assert saved.usage.total_tokens == 8
+    assert saved.usage.cost_usd == pytest.approx(0.012)
+    assert saved.failure.usage.total_tokens == 5
+    assert not saved.failure.usage.usage_known
+    assert saved.usage.abandoned_attempts == 1
+    assert provider.call_count == 2
+
+
+async def test_reset_exhausting_wall_clock_prevents_target_send(
+    store: RunStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = [0.0]
+    monkeypatch.setattr(
+        "redcell.feedback_run.BudgetManager",
+        lambda limits: BudgetManager(limits, clock=lambda: now[0]),
+    )
+
+    class SlowResetTarget(FakeTarget):
+        async def reset(self) -> None:
+            await super().reset()
+            now[0] = 2.0
+
+    run = _run()
+    run.limits.max_wall_seconds = 1.0
+    target = SlowResetTarget([])
+    driver = FakeFeedbackDriver(
+        [_action("start_attempt", message="Must not send.", strategy_id=_STRATEGY.id)]
+    )
+    result = await _execute(run, driver, target, store)
+
+    assert not target.requests
+    assert not result.attempts
+    assert result.run.stopped_by is BudgetLimit.WALL_CLOCK
+    assert result.run.usage.total_tokens == 3
+    assert result.run.usage.abandoned_attempts == 1
+    assert store.events_for(run.id)[-2].event_type is RunEventType.ATTEMPT_ABANDONED
+
+
+async def test_wall_clock_exhaustion_prevents_attacker_repair(
+    store: RunStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = [0.0]
+    monkeypatch.setattr(
+        "redcell.feedback_run.BudgetManager",
+        lambda limits: BudgetManager(limits, clock=lambda: now[0]),
+    )
+
+    class SlowProvider(MeteredProvider):
+        async def complete(self, *args, **kwargs):
+            response = await super().complete(*args, **kwargs)
+            now[0] = 2.0
+            return response
+
+    provider = SlowProvider(["invalid JSON", "invalid JSON"], tokens_per_call=(2, 1))
+    driver = LLMFeedbackAttackAdapter(provider=provider, model="attacker-fake")
+    target = FakeTarget([])
+    run = _bind_components(_run(), driver, target)
+    run.limits.max_wall_seconds = 1.0
+
+    result = await _execute(run, driver, target, store)
+
+    assert provider.call_count == 1
+    assert result.run.stopped_by is BudgetLimit.WALL_CLOCK
+    assert result.run.usage.total_tokens == 3
+    assert not target.requests

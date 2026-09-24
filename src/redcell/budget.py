@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import time
 from collections import Counter
+from collections.abc import Callable
 from enum import StrEnum
 
 from pydantic import Field, model_validator
@@ -36,6 +37,20 @@ class BudgetLimit(StrEnum):
     """反馈驱动开发路径的逐步决策上限；旧预算管理器不使用此项。"""
     STRATEGY_SHARE = "strategy_share"
     """单个策略占用的预算比例超限 —— 见 BudgetLimits.max_share_per_strategy。"""
+
+
+class CallBudgetExhaustedError(RuntimeError):
+    """No next Provider call is allowed; cost is the current operation's usage."""
+
+    def __init__(self, limit: BudgetLimit, cost: CostRecord) -> None:
+        super().__init__(f"Provider call budget exhausted: {limit.value}")
+        self.limit = limit
+        self.cost = cost
+        self.usage_indeterminate = False
+
+
+# The operation supplies cumulative local usage; only its caller commits that usage.
+CallBudgetGuard = Callable[[CostRecord], None]
 
 
 class BudgetLimits(RedCellModel):
