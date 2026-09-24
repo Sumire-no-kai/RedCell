@@ -59,7 +59,16 @@ _TEMPLATE = """<!doctype html>
   <dd>{{ d.queries_to_first_impact_success
       if d.queries_to_first_impact_success else 'never succeeded' }}</dd>
   <dt>Stopped by</dt><dd>{{ d.run.stopped_by.value if d.run.stopped_by else '—' }}</dd>
+  {% if d.run.feedback_stop_reason %}
+  <dt>Feedback stop reason</dt><dd>{{ d.run.feedback_stop_reason }}</dd>
+  {% endif %}
 </dl>
+
+{% if d.run.is_feedback_development %}
+<div class="note"><strong>M1-B development run.</strong> This record shows execution of the
+ feedback path. It has not passed the M1-C utility and real-model mechanism checks and is not
+ formal evidence of target safety or attacker effectiveness.</div>
+{% endif %}
 
 {% if not d.run.is_conclusive %}
 <div class="note"><strong>This run did not complete ({{ d.run.status.value }}).</strong>

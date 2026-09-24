@@ -5,6 +5,43 @@
 
 ---
 
+## 2026-09-24 · M1-B 小规模反馈执行路径
+
+### 2026-09-24 19:52 AEST · Step 01 · 开始接入反馈驱动器
+
+- **范围与分支:** 作者在解释 M1-B 后授权实现；从干净的 `master@a1383cf` 创建 `feat/m1b-feedback-run`。仅做本地实现与离线验证，不调用 Provider、不改旧实验产物。
+- **已确认的方向:** 采用 9 月 24 日 Step 01 的 Q3=A：`run` 显式选择反馈驱动器并写入实验条件，复用预算、逐步记录与指纹。M1-B 只建立小规模可审计执行路径，不把离线机制探针当作真实模型效果证据。
+- **工程取舍:** 保留现有 Controller/Generator 路径作为历史模式；反馈路径逐次决定并发送实际消息，单独处理被拦截的 Attempted Action。先记录请求、决策与状态，再调用 Target；崩溃后的完整自动续跑与正式矩阵调度留待机制可行性验证。
+- **剩余状态:** IN PROGRESS（协议身份、持久化、执行循环、CLI、回归验证）。
+
+### 2026-09-24 20:13 AEST · Step 02 · 冻结反馈身份与原子记录
+
+- **进度:** 增加独立 v5 实验条件、反馈驱动器/观察权限/停止策略身份、反馈决策与 Target 请求事件；旧 v3/v4 条件的序列化和指纹保持不变，旧 Gate 不接纳 v5。存储新增无 ControllerDecision 的反馈 Attempt 原子提交。
+- **工程取舍:** 反馈路径单独提交 Attempt，避免把统一攻击者的动作伪装成旧 Controller 选择；逐步事件先写入 SQLite，再调用 Target。`resume` 的完整重建留待后续机制验证。
+- **验证证据:** 协议聚焦与兼容测试 45 条通过，存储聚焦测试 35 条通过；Ruff、Black 与 diff 检查通过。均为离线检查。
+- **剩余状态:** DONE（协议与存储）；IN PROGRESS（执行器、CLI、集成测试）。
+
+### 2026-09-24 20:15 AEST · Step 03 · 接通逐步执行与离线集成探针
+
+- **进度:** 新执行器按反馈请求 → 决策落盘 → Target 请求落盘 → Target 回答 → 确定性评分的顺序推进；Attempt 被拦下但未产生实际影响时允许下一轮，实际影响、主动结束、轮数/步骤/Token/Attempt 上限和故障分开处理。新增零成本脚本驱动器供离线 CLI 冒烟。
+- **工程取舍:** 使用独立反馈执行器而不更改旧 Executor 的“首次 Attempted Action 停止”语义；要求 Target 可完全复位、在线 usage 覆盖计费 Token；未知调用用量或协议错误将 Run 标为 FAILED。
+- **验证证据:** 新增 9 条离线集成测试，覆盖反馈跟进消息确实到达 Target、Realized Impact、调用边界、故障关闭、持久化与非法选择；9 passed，Ruff/Black 通过。未调用真实 Provider。
+- **剩余状态:** DONE（执行闭环与聚焦测试）；IN PROGRESS（CLI、完整回归、文档核对）。
+
+### 2026-09-24 20:22 AEST · Step 04 · CLI 冒烟与审计复查
+
+- **进度:** `run --attack-driver feedback` 已接入离线脚本与在线反馈 Adapter；离线 CLI 冒烟产出 1 个 Attempt、0 Findings、v5 Run/事件与 JSON/HTML 报告。完整初轮回归为 945 passed，Ruff、Ruff format、Black、diff 检查通过。
+- **复查发现及修正:** 执行器新增实际 Strategy 目录与冻结摘要核对；观察投影错误转为 FAILED；失败中的已预留 Attempt 计入 abandoned 且与 RUN_FAILED 事件原子落盘；主动结束/预算截断的额外决策成本计入 Attempt；负 Token/成本在反馈边界拒绝。Run 新增只用于 v5 的反馈停止出口，旧 Run 序列化省略该字段；报告与 CLI 明示开发记录不构成正式安全结论。
+- **验证证据:** 以上修正后的反馈、CLI、指纹、存储聚焦测试通过；全部离线，未调用付费 Provider。完整回归需在最终改动后再跑一次。
+- **剩余状态:** IN PROGRESS（新增复查回归、最终质量门和提交/PR 状态）。
+
+### 2026-09-24 20:25 AEST · Step 05 · 最终离线质量门与交付检查
+
+- **进度:** 补齐目录身份、异常放弃数、结束决策成本、观察投影错误、负用量与报告停止原因的回归用例；CLI/HTML 明示 M1-B 开发记录的证据边界。旧 v4 指纹字面量与未使用时的 Run 序列化继续受测试保护。
+- **验证证据:** 全量 `pytest -p no:cacheprovider` 为 **953 passed**；`ruff check .`、`ruff format --check .`、`black --check src tests`、`git diff --check` 均通过。离线反馈 CLI 冒烟成功并生成报告；没有调用付费 Provider。
+- **远端状态:** 本机 `gh auth status` 显示 GitHub token 无效；当前沙箱内 `git ls-remote origin HEAD` 无法解析 `github.com`。尚未推送或创建 PR；先完成本地提交，再检查可用的远端访问方式。
+- **剩余状态:** DONE（本地实现和验证）；OPEN（推送/PR 受本机 GitHub 认证与 DNS 状态影响）。
+
 ## 2026-09-24 · 设计讨论结论与多靶场配置入口
 
 ### 2026-09-24 18:40 AEST · Step 01 · 设计讨论:方向确认

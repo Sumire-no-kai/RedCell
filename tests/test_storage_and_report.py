@@ -331,6 +331,112 @@ def test_atomic_attempt_commit_rolls_back_every_row(
     assert store.events_for(run.id) == []
 
 
+def test_feedback_attempt_commit_persists_without_controller_decision(
+    store: RunStore, run: Run
+) -> None:
+    attempt = _attempt(run.id, "s1", 1.0, attempt_index=2)
+    finding = _finding(attempt, ImpactStatus.REALIZED)
+    event = RunEvent(
+        run_id=run.id,
+        attempt_id=attempt.id,
+        event_type=RunEventType.ATTEMPT_COMMITTED,
+        sequence=0,
+    )
+
+    for _ in range(2):
+        store.commit_feedback_attempt_outcome(
+            run=run,
+            attempt=attempt,
+            findings=(item for item in [finding]),
+            run_event=event,
+        )
+
+    assert store.get_run(run.id) == run
+    assert store.attempts_for(run.id) == [attempt]
+    assert store.findings_for(run.id) == [finding]
+    assert store.events_for(run.id) == [event]
+    assert store.decisions_for(run.id) == []
+
+
+@pytest.mark.parametrize(
+    ("part", "field", "value", "message"),
+    [
+        ("attempt", "run_id", "other-run", "Attempt.run_id"),
+        ("attempt", "attempt_index", None, "权威 attempt_index"),
+        ("finding", "run_id", "other-run", "Finding 与 Attempt/Run"),
+        ("finding", "attempt_id", "other-attempt", "Finding 与 Attempt/Run"),
+        ("event", "run_id", "other-run", "RunEvent 关联"),
+        ("event", "attempt_id", "other-attempt", "RunEvent 关联"),
+    ],
+)
+def test_feedback_attempt_commit_rejects_mismatched_links(
+    store: RunStore,
+    run: Run,
+    part: str,
+    field: str,
+    value: str | None,
+    message: str,
+) -> None:
+    attempt = _attempt(run.id, "s1", 1.0)
+    values = {
+        "attempt": attempt,
+        "finding": _finding(attempt, ImpactStatus.REALIZED),
+        "event": RunEvent(
+            run_id=run.id,
+            attempt_id=attempt.id,
+            event_type=RunEventType.ATTEMPT_COMMITTED,
+            sequence=0,
+        ),
+    }
+    values[part] = values[part].model_copy(update={field: value})
+
+    with pytest.raises(ValueError, match=message):
+        store.commit_feedback_attempt_outcome(
+            run=run,
+            attempt=values["attempt"],
+            findings=[values["finding"]],
+            run_event=values["event"],
+        )
+
+    assert store.get_run(run.id) is None
+    assert store.attempts_for(run.id) == []
+    assert store.findings_for(run.id) == []
+    assert store.events_for(run.id) == []
+    assert store.decisions_for(run.id) == []
+
+
+def test_feedback_attempt_commit_rolls_back_every_row(
+    store: RunStore, run: Run, monkeypatch
+) -> None:
+    attempt = _attempt(run.id, "s1", 1.0)
+    finding = _finding(attempt, ImpactStatus.REALIZED)
+    event = RunEvent(
+        run_id=run.id,
+        attempt_id=attempt.id,
+        event_type=RunEventType.ATTEMPT_COMMITTED,
+        sequence=0,
+    )
+
+    def fail_after_finding_merge(_session, _event) -> None:
+        raise RuntimeError("simulated event persistence failure")
+
+    monkeypatch.setattr(store, "_merge_event", fail_after_finding_merge)
+
+    with pytest.raises(RuntimeError, match="simulated event persistence failure"):
+        store.commit_feedback_attempt_outcome(
+            run=run,
+            attempt=attempt,
+            findings=[finding],
+            run_event=event,
+        )
+
+    assert store.get_run(run.id) is None
+    assert store.attempts_for(run.id) == []
+    assert store.findings_for(run.id) == []
+    assert store.events_for(run.id) == []
+    assert store.decisions_for(run.id) == []
+
+
 def test_list_runs_filters_by_algorithm(store: RunStore, run: Run) -> None:
     store.save_run(run)
     store.save_run(run.model_copy(update={"id": "other", "algorithm": "random"}))

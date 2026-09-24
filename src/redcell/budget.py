@@ -32,6 +32,8 @@ class BudgetLimit(StrEnum):
     TOKENS = "tokens"
     COST = "cost"
     WALL_CLOCK = "wall_clock"
+    DECISION_STEPS = "decision_steps"
+    """反馈驱动开发路径的逐步决策上限；旧预算管理器不使用此项。"""
     STRATEGY_SHARE = "strategy_share"
     """单个策略占用的预算比例超限 —— 见 BudgetLimits.max_share_per_strategy。"""
 

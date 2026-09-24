@@ -32,8 +32,10 @@ class AttemptStopReason(StrEnum):
     不能只记 `stopped_early: bool`:同样是只跑了一轮,可能是已经确认漏洞,
     也可能是跑满了计划轮数。原因不同,实验含义完全不同。
 
-    ⚠️ **只列举得到的两种。** 这里刻意没有 `execution_error` / `aborted` ——
-    因为 Attempt 对象只为**完整执行完的会话**而存在:执行失败或被取消时,
+    旧执行器只产生 `ATTEMPT_SUCCESS` / `MAX_TURNS`;反馈驱动执行器有独立的
+    主动结束、实际影响、停止 Run 与预算耗尽出口,不得把它们伪装成旧语义。
+    这里刻意没有 `execution_error` / `aborted` ——
+    因为 Attempt 对象只为**完整结束的会话**而存在:执行失败或被取消时,
     Executor 抛 AttemptExecutionError,Orchestrator 走 abandon 路径,
     事实记在 FailureRecord 与 RunEvent 里,**不会构造出一个 Attempt**。
     列一个永远取不到的值,会让读代码的人以为存在一条根本不存在的分支。
@@ -43,6 +45,10 @@ class AttemptStopReason(StrEnum):
 
     ATTEMPT_SUCCESS = "attempt_success"
     MAX_TURNS = "max_turns"
+    DRIVER_END = "driver_end"
+    REALIZED_IMPACT = "realized_impact"
+    RUN_STOPPED = "run_stopped"
+    BUDGET_EXHAUSTED = "budget_exhausted"
 
 
 class Turn(RedCellModel):
