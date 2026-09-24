@@ -97,7 +97,9 @@ def test_controller_controls_writes_the_fixed_preflight_report(workspace, monkey
         input_usd_per_mtok=0.0,
         output_usd_per_mtok=0.0,
     )
-    monkeypatch.setattr("redcell.cli.load_controller", lambda: (provider, configuration))
+    monkeypatch.setattr(
+        "redcell.cli.load_controller", lambda env_file=None: (provider, configuration)
+    )
 
     result = runner.invoke(app, ["controller-controls", "--out", "runs/controller-controls.json"])
 
@@ -127,7 +129,9 @@ def test_controller_controls_can_certify_the_v2_prompt(workspace, monkeypatch) -
         input_usd_per_mtok=0.0,
         output_usd_per_mtok=0.0,
     )
-    monkeypatch.setattr("redcell.cli.load_controller", lambda: (provider, configuration))
+    monkeypatch.setattr(
+        "redcell.cli.load_controller", lambda env_file=None: (provider, configuration)
+    )
 
     result = runner.invoke(
         app,
@@ -386,7 +390,7 @@ def test_validation_rejects_an_incomplete_matrix_before_loading_target(
     seed_path = Path(__file__).parents[1] / "docs" / "PHASE0_5_SEED_PLAN.json"
     target_loaded = False
 
-    def _unexpected_load():
+    def _unexpected_load(env_file=None):
         nonlocal target_loaded
         target_loaded = True
         raise AssertionError("target must not be loaded for an incomplete matrix")
@@ -649,7 +653,7 @@ class _FakeAttacker(ScriptedProvider):
 
 
 def _install_attacker(monkeypatch, provider: _FakeAttacker) -> _FakeAttacker:
-    monkeypatch.setattr("redcell.cli.load_attacker", lambda: provider)
+    monkeypatch.setattr("redcell.cli.load_attacker", lambda env_file=None: provider)
     return provider
 
 
@@ -755,7 +759,7 @@ def test_attacker_control_has_no_offline_mode(workspace) -> None:
 def test_attacker_control_reports_missing_attacker_config_as_bad_config(
     workspace, monkeypatch
 ) -> None:
-    def _reject() -> None:
+    def _reject(env_file=None) -> None:
         raise ProviderConfigError("attacker provider 配置不完整")
 
     monkeypatch.setattr("redcell.cli.load_attacker", _reject)
@@ -794,7 +798,7 @@ def test_controls_has_no_offline_mode(workspace) -> None:
 
 
 def test_controls_reports_missing_config_as_bad_config(workspace, monkeypatch) -> None:
-    def _reject() -> None:
+    def _reject(env_file=None) -> None:
         raise ProviderConfigError("target provider 配置不完整")
 
     monkeypatch.setattr("redcell.cli.load_providers", _reject)
@@ -836,7 +840,7 @@ def test_failing_controls_exit_with_the_control_code(workspace, monkeypatch) -> 
         async def aclose(self) -> None:
             pass
 
-    monkeypatch.setattr("redcell.cli.load_providers", lambda: _Pair())
+    monkeypatch.setattr("redcell.cli.load_providers", lambda env_file=None: _Pair())
 
     result = runner.invoke(app, ["controls", "--out", "control"])
 
@@ -1049,3 +1053,124 @@ def test_positive_control_refuses_a_cost_cap_the_target_cannot_honour(
 
 def test_positive_control_has_no_offline_mode(workspace) -> None:
     assert runner.invoke(app, ["positive-control", "--offline"]).exit_code == 2
+
+
+# ── --env-file ───────────────────────────────────────────────────────────
+
+
+def test_run_rejects_env_file_without_online(workspace) -> None:
+    """离线路径不读任何配置;接受这个参数会让人以为跑的是文件里的模型。"""
+    (workspace / ".env.gemini").write_text("", encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["run", "--budget", "1", "--env-file", ".env.gemini", "--db", _db(workspace)]
+    )
+
+    assert result.exit_code == 2
+    assert "--online" in result.output
+
+
+def test_online_run_loads_providers_through_the_env_file(workspace, monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    def _load(env_file=None):
+        seen["env_file"] = env_file
+        raise ProviderConfigError("stop before any provider is built")
+
+    monkeypatch.setattr("redcell.cli.load_providers", _load)
+
+    result = runner.invoke(
+        app,
+        ["run", "--online", "--budget", "1", "--env-file", ".env.gemini", "--db", _db(workspace)],
+    )
+
+    assert result.exit_code == ExitCode.BAD_CONFIG
+    assert seen["env_file"] == Path(".env.gemini")
+
+
+def test_gate_plan_cli_freezes_an_existing_env_file(workspace) -> None:
+    seed_path = Path(__file__).parents[1] / "docs" / "PHASE0_5_SEED_PLAN.json"
+    (workspace / ".env.gemini").write_text("", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "gate-plan",
+            "--max-attempts",
+            "500",
+            "--seed-plan-json",
+            str(seed_path),
+            "--db",
+            "sqlite:///runs/gate.db",
+            "--env-file",
+            ".env.gemini",
+            "--out",
+            "plan.json",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CLEAN, result.output
+    plan = json.loads((workspace / "plan.json").read_text(encoding="utf-8"))
+    assert plan["env_file"] == ".env.gemini"
+    assert all("--env-file" in cell["argv"] for cell in plan["cells"])
+
+
+def test_gate_plan_cli_rejects_a_missing_env_file(workspace) -> None:
+    seed_path = Path(__file__).parents[1] / "docs" / "PHASE0_5_SEED_PLAN.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "gate-plan",
+            "--max-attempts",
+            "500",
+            "--seed-plan-json",
+            str(seed_path),
+            "--db",
+            "sqlite:///runs/gate.db",
+            "--env-file",
+            ".env.tpyo",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.BAD_CONFIG
+    assert "不存在" in result.output
+    assert not (workspace / "runs" / "gate-plan.json").exists()
+
+
+def test_resume_loads_providers_through_the_env_file(workspace, monkeypatch) -> None:
+    """原 Run 用了 --env-file 时 resume 要读同一个文件;指纹比对由它之后的步骤负责。"""
+    conditions = _experiment_conditions(
+        online=False,
+        providers=None,
+        actor="customer_a",
+        defense=DefenseLevel.STANDARD,
+        enforce_permissions=True,
+        enforce_confirmation=True,
+    ).model_copy(update={"online": True})
+    stored = Run(
+        target_name="support-agent",
+        policy_version="v1",
+        adapter_type="arena/support-agent",
+        algorithm="static",
+        limits=BudgetLimits(max_attempts=1),
+        status=RunStatus.RUNNING,
+        experiment_conditions=conditions,
+        experiment_fingerprint=conditions.fingerprint(),
+    )
+    with RunStore(_db(workspace)) as store:
+        store.save_run(stored)
+    seen: dict[str, object] = {}
+
+    def _load(env_file=None):
+        seen["env_file"] = env_file
+        raise ProviderConfigError("stop before any provider is built")
+
+    monkeypatch.setattr("redcell.cli.load_providers", _load)
+
+    result = runner.invoke(
+        app, ["resume", stored.id, "--env-file", ".env.gemini", "--db", _db(workspace)]
+    )
+
+    assert result.exit_code == ExitCode.BAD_CONFIG, result.output
+    assert seen["env_file"] == Path(".env.gemini")

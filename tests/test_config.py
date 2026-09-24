@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from redcell.config import ProviderSettings, load_target
+from redcell.config import ProviderConfigError, ProviderSettings, load_providers, load_target
 from redcell.protocols.run import UsageAccountingMode
 
 
@@ -120,13 +120,10 @@ def test_unset_new_provider_fields_keep_historical_serialisation() -> None:
     }
 
 
-_TARGET_VARS = (
-    "REDCELL_TARGET_PROVIDER",
-    "REDCELL_TARGET_BASE_URL",
-    "REDCELL_TARGET_API_KEY",
-    "REDCELL_TARGET_MODEL",
-    "REDCELL_TARGET_EXTRA_BODY",
-    "REDCELL_TARGET_MAX_TOKENS",
+_TARGET_VARS = tuple(
+    f"REDCELL_{role}_{name}"
+    for role in ("TARGET", "ATTACKER")
+    for name in ("PROVIDER", "BASE_URL", "API_KEY", "MODEL", "EXTRA_BODY", "MAX_TOKENS")
 )
 
 
@@ -190,3 +187,73 @@ async def test_load_target_env_file_works_without_a_dotenv(tmp_path, monkeypatch
         assert configuration.model == "candidate-model"
     finally:
         await provider.aclose()
+
+
+def test_env_file_that_does_not_exist_is_rejected(tmp_path, monkeypatch) -> None:
+    """pydantic-settings 静默跳过不存在的 env 文件;路径拼错不能悄悄退回 `.env`。"""
+    _isolate_target_env(tmp_path, monkeypatch)
+
+    with pytest.raises(ProviderConfigError, match="不存在"):
+        load_target(Path(".env.tpyo"))
+
+
+_BASE_DOTENV = (
+    "REDCELL_TARGET_PROVIDER=glm\n"
+    "REDCELL_TARGET_BASE_URL=https://target.invalid/v1\n"
+    "REDCELL_TARGET_API_KEY=not-a-real-key\n"
+    "REDCELL_TARGET_MODEL=base-target\n"
+    "REDCELL_ATTACKER_PROVIDER=openai\n"
+    "REDCELL_ATTACKER_BASE_URL=https://attacker.invalid/v1\n"
+    "REDCELL_ATTACKER_API_KEY=not-a-real-key\n"
+    "REDCELL_ATTACKER_MODEL=base-attacker\n"
+)
+
+
+@pytest.mark.asyncio
+async def test_load_providers_layers_the_env_file_for_every_role(tmp_path, monkeypatch) -> None:
+    _isolate_target_env(tmp_path, monkeypatch)
+    (tmp_path / ".env").write_text(_BASE_DOTENV, encoding="utf-8")
+    (tmp_path / ".env.second").write_text("REDCELL_TARGET_MODEL=second-target\n", encoding="utf-8")
+
+    pair = load_providers(Path(".env.second"))
+    try:
+        assert pair.target_configuration.model == "second-target"
+        assert pair.attacker_configuration.model == "base-attacker"
+    finally:
+        await pair.aclose()
+
+
+@pytest.mark.asyncio
+async def test_experiment_identity_depends_on_resolved_config_not_on_the_file(
+    tmp_path, monkeypatch
+) -> None:
+    """--env-file 不引入新的实验身份:指纹只由最终生效的配置决定。
+
+    同一份配置,不论全写在 `.env` 里还是由 env 文件覆盖出来,实验条件指纹相同;
+    覆盖出不同的模型,指纹就不同 —— 这正是 resume 能拦下"忘传/传错文件"的原因。
+    """
+    from redcell.arena.support_agent import DefenseLevel
+    from redcell.cli import _experiment_conditions
+
+    _isolate_target_env(tmp_path, monkeypatch)
+    (tmp_path / ".env").write_text(_BASE_DOTENV, encoding="utf-8")
+    (tmp_path / ".env.same").write_text("REDCELL_TARGET_MODEL=base-target\n", encoding="utf-8")
+    (tmp_path / ".env.other").write_text("REDCELL_TARGET_MODEL=other-target\n", encoding="utf-8")
+
+    async def fingerprint(env_file: Path | None) -> str:
+        pair = load_providers(env_file)
+        try:
+            return _experiment_conditions(
+                online=True,
+                providers=pair,
+                actor="customer_a",
+                defense=DefenseLevel.STANDARD,
+                enforce_permissions=True,
+                enforce_confirmation=True,
+            ).fingerprint()
+        finally:
+            await pair.aclose()
+
+    plain = await fingerprint(None)
+    assert await fingerprint(Path(".env.same")) == plain
+    assert await fingerprint(Path(".env.other")) != plain

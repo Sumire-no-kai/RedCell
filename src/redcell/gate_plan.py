@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, SerializerFunctionWrapHandler, model_serializer, model_validator
 
 from redcell.arena.support_agent.codec import (
     NEW_EXPERIMENT_TOOL_CALL_PROTOCOL,
@@ -74,10 +74,24 @@ class GatePlan(RedCellModel):
     report_directory: str
     execution_host_profile: ExecutionHostProfile | None = None
     tool_call_protocol_version: str | None = None
+    env_file: str | None = None
+    """每个正式 Run 叠在 `.env` 之上的配置文件(`run --env-file`);`None` 表示只用 `.env`。
+
+    冻结的是路径,不是内容:内容会作为模型配置写进每个 Run 的实验条件与指纹,
+    矩阵分析与 preflight 按那里核对。未设置时不进入序列化结果,旧计划的 JSON 与
+    校验逐字节不变(2026-09-24)。
+    """
     max_attempts: int = Field(ge=1)
     primary_cells: int
     reserve_cells: int
     cells: list[GatePlanCell]
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict:
+        data = handler(self)
+        if self.env_file is None:
+            data.pop("env_file", None)
+        return data
 
     @model_validator(mode="after")
     def matches_registered_matrix(self) -> GatePlan:
@@ -125,6 +139,7 @@ class GatePlan(RedCellModel):
             report_directory=self.report_directory,
             execution_host_profile=self.execution_host_profile,
             tool_call_protocol_version=self.tool_call_protocol_version,
+            env_file=self.env_file,
         )
         if self.primary_cells != len(primary) * len(_TREATMENTS):
             raise ValueError("Gate plan primary_cells does not match its frozen allocation")
@@ -143,6 +158,7 @@ def _build_cells(
     report_directory: str,
     execution_host_profile: ExecutionHostProfile | None,
     tool_call_protocol_version: str | None,
+    env_file: str | None = None,
 ) -> list[GatePlanCell]:
     cells: list[GatePlanCell] = []
     for role, seeds in (
@@ -174,6 +190,8 @@ def _build_cells(
                     argv.extend(["--execution-host-profile", execution_host_profile.value])
                 if tool_call_protocol_version is not None:
                     argv.extend(["--tool-call-protocol", tool_call_protocol_version])
+                if env_file is not None:
+                    argv.extend(["--env-file", env_file])
                 cells.append(
                     GatePlanCell(
                         seed=seed,
@@ -197,6 +215,7 @@ def build_gate_plan(
     report_directory: str,
     execution_host_profile: ExecutionHostProfile = ExecutionHostProfile.WINDOWS_WAKELOCK_V1,
     tool_call_protocol: ToolCallProtocol = NEW_EXPERIMENT_TOOL_CALL_PROTOCOL,
+    env_file: str | None = None,
 ) -> GatePlan:
     """Build commands without executing a Provider or touching the run database."""
     if max_attempts != FORMAL_MAX_ATTEMPTS:
@@ -213,6 +232,7 @@ def build_gate_plan(
         report_directory=report_directory,
         execution_host_profile=execution_host_profile,
         tool_call_protocol_version=tool_call_protocol.value,
+        env_file=env_file,
     )
     return GatePlan(
         seed_plan_digest=seed_plan_digest(seed_plan),
@@ -220,6 +240,7 @@ def build_gate_plan(
         report_directory=report_directory,
         execution_host_profile=execution_host_profile,
         tool_call_protocol_version=tool_call_protocol.value,
+        env_file=env_file,
         max_attempts=max_attempts,
         primary_cells=len(seed_plan.primary) * len(_TREATMENTS),
         reserve_cells=len(seed_plan.reserve) * len(_TREATMENTS),

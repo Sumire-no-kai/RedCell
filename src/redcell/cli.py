@@ -40,6 +40,7 @@ from redcell.config import (
     load_controller,
     load_providers,
     load_target,
+    role_settings,
 )
 from redcell.console import ensure_utf8_output
 from redcell.controller import CONTROLLER_PROMPT_V1, CONTROLLER_PROMPT_V2, LLMControllerAdapter
@@ -196,8 +197,19 @@ def _controller(algorithm: str, seed: int) -> SearchController:
     raise typer.BadParameter(f"未知算法 '{algorithm}';可选:static / random / thompson")
 
 
+EnvFileOption = Annotated[
+    Path | None,
+    typer.Option(
+        help="叠在 .env 之上逐键覆盖的配置文件(如 .env.gemini,已被 gitignore 覆盖)。"
+        "实际使用的配置照常写进实验条件与指纹;resume 必须传同一个文件"
+    ),
+]
+"""多靶场/候选模型的配置入口(2026-09-24)。不传时行为与序列化结果和原来完全相同。"""
+
+
 def _providers(
     online: bool,
+    env_file: Path | None = None,
 ) -> tuple[LLMProvider, AttackGenerator, ProviderPair | None]:
     """按 online 开关组装 (target provider, 攻击生成器, 待关闭的 provider 对)。
 
@@ -211,7 +223,7 @@ def _providers(
         )
         return provider, TemplateAttackGenerator(), None
 
-    pair = load_providers()
+    pair = load_providers(env_file)
     generator = LLMMutationGenerator(
         pair.attacker,
         model=pair.attacker.model,
@@ -375,6 +387,7 @@ def run(
             help="接真实模型跑(target=GLM / attacker=Gemini,从 .env 读)。默认离线,只验证流水线。"
         ),
     ] = False,
+    env_file: EnvFileOption = None,
     execution_host_profile: Annotated[
         str | None,
         typer.Option(help="正式矩阵宿主档案；windows-wakelock-v1 仅可由持锁 matrix runner 派发"),
@@ -448,8 +461,11 @@ def run(
         typer.secho("没有适用于该目标的策略。", fg=typer.colors.RED, err=True)
         raise typer.Exit(ExitCode.BAD_CONFIG)
 
+    if env_file is not None and not online:
+        # 离线路径不读任何配置;接受这个参数会让人以为跑的是文件里的模型。
+        raise typer.BadParameter("--env-file 只在 --online 时有意义")
     try:
-        target_provider, generator, providers = _providers(online)
+        target_provider, generator, providers = _providers(online, env_file)
     except ProviderConfigError as exc:
         typer.secho(f"配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(ExitCode.BAD_CONFIG) from exc
@@ -457,13 +473,13 @@ def run(
     controller_provider = None
     controller_configuration = None
     declared_controller_timeout_seconds = (
-        ControllerSettings().request_timeout_seconds if online else None
+        role_settings(ControllerSettings, env_file).request_timeout_seconds if online else None
     )
     if selector is SearchSelector.LLM:
         if not online:
             raise typer.BadParameter("--search llm 需要 --online 与独立 REDCELL_CONTROLLER_* 配置")
         try:
-            controller_provider, controller_configuration = load_controller()
+            controller_provider, controller_configuration = load_controller(env_file)
         except ProviderConfigError as exc:
             raise typer.BadParameter(str(exc)) from exc
 
@@ -619,8 +635,13 @@ def resume(
     actor: Annotated[str, typer.Option(help="攻击时扮演的身份;必须与原 run 一致")] = "customer_a",
     db: Annotated[str, typer.Option(help="SQLite 连接串")] = DEFAULT_URL,
     out: Annotated[Path, typer.Option(help="报告输出目录")] = Path("runs"),
+    env_file: EnvFileOption = None,
 ) -> None:
-    """恢复意外中断的 Run，绝不重放尚未原子提交结果的 attempt。"""
+    """恢复意外中断的 Run，绝不重放尚未原子提交结果的 attempt。
+
+    原 Run 用了 `--env-file` 时这里必须传同一个文件:当前配置算出的指纹与落盘指纹
+    不一致就拒绝恢复,忘传或传错都会在碰到 Target 之前被拦下。
+    """
     store = RunStore(db)
     stored = store.get_run(run_id)
     if stored is None:
@@ -645,10 +666,10 @@ def resume(
     conditions = stored.experiment_conditions
     controller_provider = None
     try:
-        target_provider, generator, providers = _providers(conditions.online)
+        target_provider, generator, providers = _providers(conditions.online, env_file)
         defense = DefenseLevel(conditions.arena.defense)
         declared_controller_timeout_seconds = (
-            ControllerSettings().request_timeout_seconds
+            role_settings(ControllerSettings, env_file).request_timeout_seconds
             if conditions.online
             and conditions.request_timeouts is not None
             and conditions.request_timeouts.controller_seconds is not None
@@ -669,7 +690,7 @@ def resume(
         if conditions.search is not None and conditions.search.selector is SearchSelector.LLM:
             if not conditions.online or conditions.controller is None:
                 raise ValueError("已落盘的 LLM Controller 条件不完整")
-            controller_provider, controller_configuration = load_controller()
+            controller_provider, controller_configuration = load_controller(env_file)
         current_conditions = current_conditions.model_copy(
             update={
                 "strategy_catalogue": conditions.strategy_catalogue,
@@ -977,12 +998,15 @@ def gate_plan(
         ToolCallProtocol,
         typer.Option(help="冻结进计划并传给每个正式 Run 的 Target 工具协议(新实验默认原生)"),
     ] = NEW_EXPERIMENT_TOOL_CALL_PROTOCOL,
+    env_file: EnvFileOption = None,
     out: Annotated[Path, typer.Option(help="只读执行清单 JSON 输出路径")] = Path(
         "runs/gate-plan.json"
     ),
 ) -> None:
     """生成已登记实验的主单元与禁用备用单元清单，但绝不执行它们。"""
     try:
+        if env_file is not None and not env_file.is_file():
+            raise ValueError(f"--env-file 指定的文件不存在:{env_file}")
         seed_plan = SeedPlan.model_validate_json(seed_plan_json.read_text(encoding="utf-8"))
         report_directory = run_out or Path("runs") / seed_plan.experiment.replace(".", "-")
         plan: GatePlan = build_gate_plan(
@@ -991,6 +1015,7 @@ def gate_plan(
             database_url=db,
             report_directory=str(report_directory),
             tool_call_protocol=tool_call_protocol,
+            env_file=str(env_file) if env_file is not None else None,
         )
     except (OSError, ValueError) as exc:
         typer.secho(f"Gate plan 配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
@@ -1131,6 +1156,7 @@ def billing_evidence_template_command(
             help="不含凭据的 billing evidence 模板；填写并独立复核后再交给 gate-preflight"
         ),
     ] = Path("runs/billing-evidence.json"),
+    env_file: EnvFileOption = None,
 ) -> None:
     """从当前三角色配置生成**不完整** billing evidence 模板；不调用 Provider。"""
     if out.exists():
@@ -1141,12 +1167,12 @@ def billing_evidence_template_command(
         )
         raise typer.Exit(ExitCode.BAD_CONFIG)
     try:
-        roles = load_role_settings()
+        roles = load_role_settings(env_file)
         configurations = {
             BillingRole(name): settings.run_configuration() for name, settings in roles
         }
         template = billing_evidence_template(configurations)
-    except ValueError as exc:
+    except (ProviderConfigError, ValueError) as exc:
         typer.secho(f"Billing evidence 模板配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(ExitCode.BAD_CONFIG) from exc
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -1192,6 +1218,7 @@ def validate_paths(
     checkpoint: Annotated[
         Path | None, typer.Option(help="Replay checkpoint; automatically resume matching inputs")
     ] = None,
+    env_file: EnvFileOption = None,
 ) -> None:
     """只重放正式 320k 前缀中的攻击路径，不重跑 Generator 或 Controller。"""
     checkpoint_path = checkpoint or out.with_name(f"{out.stem}.checkpoint.json")
@@ -1216,7 +1243,7 @@ def validate_paths(
         typer.secho("Validation 配置被拒绝:未知的冻结 defense。", fg=typer.colors.RED, err=True)
         raise typer.Exit(ExitCode.BAD_CONFIG)
     try:
-        target, target_configuration = load_target()
+        target, target_configuration = load_target(env_file)
     except ProviderConfigError as exc:
         typer.secho(f"Target 配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(ExitCode.BAD_CONFIG) from exc
@@ -1286,13 +1313,14 @@ def controller_controls(
         str,
         typer.Option(help="与正式 Run 相同的 Controller prompt 身份：controller-prompt-v1 / v2"),
     ] = CONTROLLER_PROMPT_V1,
+    env_file: EnvFileOption = None,
 ) -> None:
     """Run the fixed 12-case Controller preflight without a target or Gate seed."""
     # Gate 要求 controls 与正式 Run 的 Controller 配置逐字段相同，prompt 版本也在其中。
     if controller_prompt_version not in {CONTROLLER_PROMPT_V1, CONTROLLER_PROMPT_V2}:
         raise typer.BadParameter("不支持的 --controller-prompt-version")
     try:
-        provider, configuration = load_controller()
+        provider, configuration = load_controller(env_file)
     except ProviderConfigError as exc:
         typer.secho(f"Controller 配置被拒绝: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(ExitCode.BAD_CONFIG) from exc
@@ -1336,6 +1364,7 @@ def controls(
         ToolCallProtocol,
         typer.Option(help="controls 使用的 Target 工具协议(新实验默认原生)"),
     ] = NEW_EXPERIMENT_TOOL_CALL_PROTOCOL,
+    env_file: EnvFileOption = None,
 ) -> None:
     """校准之前的**阳性 / 阴性对照**(`CALIBRATION.md` §2)。
 
@@ -1351,7 +1380,7 @@ def controls(
     """
     policy = SUPPORT_AGENT_POLICY
     try:
-        pair = load_providers()
+        pair = load_providers(env_file)
     except ProviderConfigError as exc:
         typer.secho(f"配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(ExitCode.BAD_CONFIG) from exc
@@ -1413,13 +1442,7 @@ def controls(
 
 @app.command(name="positive-control")
 def positive_control(
-    env_file: Annotated[
-        Path | None,
-        typer.Option(
-            help="候选 Target 的 dotenv 文件,逐键覆盖 .env 的 REDCELL_TARGET_*;"
-            "给候选跑资格门时不必改动 .env(命名为 .env.* 以被 gitignore 覆盖)"
-        ),
-    ] = None,
+    env_file: EnvFileOption = None,
     tool_call_protocol: Annotated[
         ToolCallProtocol,
         typer.Option(help="Target 工具协议(新实验默认原生)"),
@@ -1626,6 +1649,7 @@ def attacker_control(
     seed: Annotated[int, typer.Option(help="种子;与正式 run 同一套派生机制")] = 0,
     actor: Annotated[str, typer.Option(help="攻击时扮演的身份")] = "customer_a",
     out: Annotated[Path, typer.Option(help="话术明细的输出目录")] = Path("runs"),
+    env_file: EnvFileOption = None,
 ) -> None:
     """校准之前先跑这个:确认**攻击方不是瓶颈**。
 
@@ -1654,7 +1678,7 @@ def attacker_control(
 
     try:
         brief = policy.brief_for(actor)
-        attacker = load_attacker()
+        attacker = load_attacker(env_file)
     except (KeyError, ProviderConfigError) as exc:
         typer.secho(f"配置被拒绝:{exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(ExitCode.BAD_CONFIG) from exc
