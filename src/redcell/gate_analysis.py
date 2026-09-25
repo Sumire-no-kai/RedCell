@@ -12,6 +12,7 @@ from fractions import Fraction
 from pydantic import Field, model_validator
 
 from redcell.arena.registry import DEFAULT_ARENA_ID, get_arena
+from redcell.arena.support_agent.codec import ToolCallProtocol
 from redcell.finding_identity import attack_path_signature
 from redcell.protocols.common import RedCellModel
 from redcell.protocols.finding import Finding
@@ -23,6 +24,7 @@ PHASE_0_5_EXPERIMENT = "phase-0.5"
 PHASE_0_5B_EXPERIMENT = "phase-0.5b"
 PHASE_0_5C_EXPERIMENT = "phase-0.5c"
 PHASE_0_5D_EXPERIMENT = "phase-0.5d"
+PHASE_0_5E_EXPERIMENT = "phase-0.5e"
 
 PHASE_0_5_SEED_PLAN_DIGEST = "c421f3137d75f5ba956da12bcfdf824fc89222da23ccfd7bad9f1c42c792e3bc"
 """Phase 0.5 冻结的 seed plan canonical digest(实验已作废,归档保留)。
@@ -61,6 +63,18 @@ Phase 0.5c 的正式矩阵发生了 Gate context 不一致和持续 429，所有
 seed 都已经被观察，整批实验因此失效。Phase 0.5d 保持既有 24 primary + 8 reserve
 功效规划，但在修复统一 context 声明及 shared 429 cooldown 后，以系统 CSPRNG 重抽
 32 个 seed；与 0.5、0.5b、0.5c 及 Phase 0 pilot seeds 均无重叠。
+"""
+
+
+PHASE_0_5E_SEED_PLAN_DIGEST = "d5c43f6ffc4e66c90517e5bf87e53cfd5c8696aab7f668a013383cc12a590263"
+"""Phase 0.5e 的 seed plan digest(2026-09-25 新登记)。⭐
+
+PRD 2026-09-04 登记的 0.5e 是 0.5d 的**配对协议对照**(同模型、同 seed,只换工具协议)。
+这个前提已不成立:0.5d 的 Target 证实发生过服务端漂移,之后 Target 与攻击方都已更换,
+0.5d 终局为 `EXPERIMENT_INVALID`。作者于 2026-09-25 决定改为**只跑原生协议的新登记**:
+不再与 0.5d 配对,Paper A 不再主张跨协议稳健。保持 24 primary + 8 reserve 的功效规划,
+以系统 CSPRNG 重抽全部 32 个 seed,与 0.5、0.5b、0.5c、0.5d 及 Phase 0 pilot seeds 均无重叠;
+抽取时 0.5e 没有任何结果存在。工具协议随登记冻结为 native-function-calling-v2。
 """
 
 
@@ -103,7 +117,13 @@ class FrozenSeedPlan(RedCellModel):
 
     靶场是实验身份的一部分,所以它随预注册冻结,而不是由 `gate-plan` 另给一个参数 ——
     两个独立填写的值迟早会不一致(与工具协议以计划为准同一个理由)。Gate 计划、
-    preflight 与报告都从这里推出靶场。已登记的四个实验都在客服靶场上。
+    preflight 与报告都从这里推出靶场。已登记的实验都在客服靶场上。
+    """
+    tool_call_protocol: str | None = None
+    """本实验预注册的 Target 工具协议;`None` 表示登记时没有冻结(0.5 到 0.5d 的历史登记)。
+
+    设了就由 `gate-plan` 采用,传入别的协议或加载协议不符的计划都会被拒绝 —— 与靶场同一个理由,
+    实验身份里的东西不该再由命令行另填一遍(2026-09-25,0.5e 起)。
     """
 
 
@@ -133,6 +153,13 @@ FROZEN_SEED_PLANS = {
             primary_size=24,
             reserve_size=8,
             digest=PHASE_0_5D_SEED_PLAN_DIGEST,
+        ),
+        FrozenSeedPlan(
+            experiment=PHASE_0_5E_EXPERIMENT,
+            primary_size=24,
+            reserve_size=8,
+            digest=PHASE_0_5E_SEED_PLAN_DIGEST,
+            tool_call_protocol=ToolCallProtocol.NATIVE_V2.value,
         ),
     )
 }

@@ -95,6 +95,31 @@
   Paper A 是否仍要跨协议结论(若要,文本协议一侧也需要在同一组模型上重跑一套有效矩阵)。
 - **剩余状态:** DONE(v2 契约);BLOCKED(0.5e 登记,等作者决定)。
 
+### 2026-09-25 16:58 AEST · Step 05 · #74 合并;0.5e 改为只跑原生协议的新登记
+
+- **作者决定:** 合并 #74;0.5e 按建议只跑原生协议,新登记。即:不再与 0.5d 配对,Paper A 不再主张跨协议稳健。
+- **进度:**
+  - #74 已合并(`460734d`),master 上 1076 passed。
+  - 分支 `feat/phase-0-5e-registration`。新 seed plan `docs/PHASE0_5E_SEED_PLAN.json`:24 primary + 8 reserve,
+    2026-09-25 16:49:09 AEST 用系统 CSPRNG(`secrets.SystemRandom`,范围 1 到 2^31−1)抽取,排除 0.5、0.5b、0.5c、0.5d
+    的全部 116 个 seed 与 pilot 5000–5002,重叠为 0;抽取时 0.5e 没有任何结果存在。摘要
+    `d5c43f6ffc4e66c90517e5bf87e53cfd5c8696aab7f668a013383cc12a590263` 登记为 `PHASE_0_5E_SEED_PLAN_DIGEST`。
+  - `FrozenSeedPlan` 新增 `tool_call_protocol`:0.5e 登记为 `native-function-calling-v2`,0.5 到 0.5d 保持 `None`。
+    `gate-plan` 不传协议时取登记值(未登记协议的实验仍取新实验默认),传入别的协议或加载协议不符的计划都会被拒绝。
+    理由与靶场随登记冻结相同:作者定下"只跑原生",就不该再能被命令行参数绕过。
+  - PRD(私有)的 Phase 0.5e 一节开头与 §2.7 Paper A 各加一段 2026-09-25 更正:原配对登记作历史保留、不再执行;
+    写明已冻结项、沿用 0.5d 的全部判定合同、以及正式调用前仍 OPEN 的各项。私有仓库已提交并推送
+    (`311e221`、`c46bf41` 更新 manifest),公开仓库根目录的 PRD 副本(已忽略)同步。
+- **兼容性:** 0.5d 的 Gate 计划 JSON 与 master 逐字节相同(`5abf0593…`)。
+- **验证证据:** 1083 passed(新增 7 条:0.5e seed 新鲜且与此前全部 seed 不相交、历史登记没有协议、0.5e 计划取 v2、
+  拒绝 v1 / text-v2、拒绝协议被改过的已加载计划、0.5d 仍取新实验默认);`ruff check`、`ruff format --check`、
+  `black --check`、`git diff --check` 通过。`gate-plan` 实际生成 0.5e 计划:144 主单元 + 48 备用单元,全部为原生 v2;
+  传 `native-function-calling-v1` 时以配置错误拒绝。全部离线,没有 Provider 调用。
+- **下一步(每项付费调用先报告再等作者同意):** 更换 Controller → 按 `CALIBRATION.md` 在标准防御下校准(难度旋钮由
+  作者决定)→ RPM calibration → 原生 v2 下的 controls 与 utility 基线(冻结规则待作者定)→ billing evidence → preflight →
+  dry-run → 正式矩阵(长时间运行放 Windows)→ replay → `gate-report`。
+- **剩余状态:** DONE(登记与代码);PR 待开。
+
 ## 2026-09-24 · M1-B 小规模反馈执行路径
 
 ### 2026-09-24 19:52 AEST · Step 01 · 开始接入反馈驱动器

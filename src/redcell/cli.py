@@ -1362,9 +1362,11 @@ def gate_plan(
         typer.Option(help="每个正式 Run 的报告目录；默认按 seed plan 的实验身份隔离"),
     ] = None,
     tool_call_protocol: Annotated[
-        ToolCallProtocol,
-        typer.Option(help="冻结进计划并传给每个正式 Run 的 Target 工具协议(新实验默认原生)"),
-    ] = NEW_EXPERIMENT_TOOL_CALL_PROTOCOL,
+        ToolCallProtocol | None,
+        typer.Option(
+            help="冻结进计划的 Target 工具协议;默认取实验登记的协议,登记未冻结时取新实验默认"
+        ),
+    ] = None,
     env_file: EnvFileOption = None,
     out: Annotated[Path, typer.Option(help="只读执行清单 JSON 输出路径")] = Path(
         "runs/gate-plan.json"
