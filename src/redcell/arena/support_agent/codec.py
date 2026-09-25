@@ -102,10 +102,22 @@ v1 → v2(2026-08-12):接受 `<tool_call>tool_name</tool_call>` 这种零参数�
 
 NATIVE_TOOL_CALL_CODEC_VERSION = "native-function-calling-v1"
 
+NATIVE_V2_TOOL_CALL_CODEC_VERSION = "native-function-calling-v2"
+"""v1 → v2(2026-09-25):按 PRD Phase 0.5e 预注册第 3 条补齐接口校验。⭐
+
+v1 只要求参数是 JSON 对象,其余交给靶场。v2 另外把两类调用当作**坏格式**:调用了本轮没有
+声明的工具,以及参数不符合声明的 schema(缺必填字段、类型不对)。坏格式调用不执行、不进入
+Scorer,计入 `malformed`,并回一条说明原因的 `tool` 消息 —— 接口错误与"已知但被 policy 禁止"
+从此分开计数。v2 同时把完整工具声明的摘要写进实验条件。
+
+**v1 原样保留**,已有记录按原语义回放;两者是不同的实验身份,不得混合统计。
+"""
+
 
 class ToolCallProtocol(StrEnum):
     TEXT_V2 = TOOL_CALL_CODEC_VERSION
     NATIVE_V1 = NATIVE_TOOL_CALL_CODEC_VERSION
+    NATIVE_V2 = NATIVE_V2_TOOL_CALL_CODEC_VERSION
 
 
 NEW_EXPERIMENT_TOOL_CALL_PROTOCOL = ToolCallProtocol.NATIVE_V1
@@ -283,10 +295,19 @@ class TextToolCallCodec(ToolCallCodec):
 
 
 class NativeToolCallCodec(ToolCallCodec):
-    """Translate structured provider function calls into arena calls."""
+    """Translate structured provider function calls into arena calls.
+
+    `specs=None` 是 v1;给出本轮发给 Provider 的工具声明即为 v2,见
+    `NATIVE_V2_TOOL_CALL_CODEC_VERSION`。
+    """
+
+    def __init__(self, *, specs: list[dict[str, Any]] | None = None) -> None:
+        self._contract = _interface_contract(specs) if specs is not None else None
 
     @property
     def version(self) -> str:
+        if self._contract is not None:
+            return NATIVE_V2_TOOL_CALL_CODEC_VERSION
         return NATIVE_TOOL_CALL_CODEC_VERSION
 
     @property
@@ -307,12 +328,27 @@ class NativeToolCallCodec(ToolCallCodec):
         calls: list[ToolCall] = []
         malformed = 0
         for native in response.tool_calls:
-            arguments = _native_arguments(native)
-            if arguments is None:
+            if self._rejection(native) is not None:
                 malformed += 1
                 continue
+            arguments = _native_arguments(native)
+            assert arguments is not None  # _rejection 已排除
             calls.append(ToolCall(id=native.id, name=native.name, arguments=arguments))
         return DecodedReply(visible=response.content.strip(), calls=calls, malformed=malformed)
+
+    def _rejection(self, native: LLMToolCall) -> str | None:
+        """None 表示可以执行;否则是回给模型的那条 tool 消息(调用不执行)。"""
+        arguments = _native_arguments(native)
+        if arguments is None:
+            return _INVALID_ARGUMENTS_RESULT
+        if self._contract is None:
+            return None
+        parameters = self._contract.get(native.name)
+        if parameters is None:
+            return _UNDECLARED_TOOL_RESULT
+        if _violates_schema(arguments, parameters):
+            return _SCHEMA_VIOLATION_RESULT
+        return None
 
     def encode_results(self, executed: list[tuple[ToolCall, ToolExecution]]) -> str:
         return "\n".join(self._result_content(result) for _call, result in executed)
@@ -325,9 +361,7 @@ class NativeToolCallCodec(ToolCallCodec):
         # The API requires a role=tool reply for every call id echoed in the assistant
         # message. A call whose arguments did not parse was never executed; it gets an
         # explicit format error that stays distinct from a business rejection.
-        decodable = [
-            native for native in response.tool_calls if _native_arguments(native) is not None
-        ]
+        decodable = [native for native in response.tool_calls if self._rejection(native) is None]
         if [native.id for native in decodable] != [call.id for call, _ in executed]:
             raise ValueError("executed tool calls do not match the decodable native calls")
         results = iter(executed)
@@ -339,8 +373,9 @@ class NativeToolCallCodec(ToolCallCodec):
             )
         ]
         for native in response.tool_calls:
-            if _native_arguments(native) is None:
-                content = _INVALID_ARGUMENTS_RESULT
+            rejection = self._rejection(native)
+            if rejection is not None:
+                content = rejection
             else:
                 _call, result = next(results)
                 content = self._result_content(result)
@@ -371,6 +406,66 @@ _INVALID_ARGUMENTS_RESULT = json.dumps(
         "content": "Arguments were not a JSON object; the call was not executed.",
     }
 )
+
+
+_UNDECLARED_TOOL_RESULT = json.dumps(
+    {
+        "status": "invalid_call",
+        "content": "No tool with this name was offered; the call was not executed.",
+    }
+)
+_SCHEMA_VIOLATION_RESULT = json.dumps(
+    {
+        "status": "invalid_arguments",
+        "content": "Arguments did not match the tool's declared parameters; "
+        "the call was not executed.",
+    }
+)
+
+_JSON_TYPES: dict[str, tuple[type, ...]] = {
+    "string": (str,),
+    "number": (int, float),
+    "integer": (int,),
+    "boolean": (bool,),
+    "object": (dict,),
+    "array": (list,),
+}
+
+
+def _interface_contract(specs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """把工具声明整理成 `name -> parameters`,只接受本校验器真正理解的 schema 子集。
+
+    声明里出现校验器不懂的关键字就直接报错,而不是悄悄跳过 —— 否则那部分约束会在
+    "已校验"的名义下没人检查。
+    """
+    contract: dict[str, dict[str, Any]] = {}
+    for spec in specs:
+        parameters = spec["parameters"]
+        unsupported = set(parameters) - {"type", "properties", "required"}
+        if parameters.get("type") != "object" or unsupported:
+            raise ValueError(f"工具 {spec['name']} 的参数 schema 超出 v2 校验器支持的范围")
+        for name, prop in parameters.get("properties", {}).items():
+            if set(prop) - {"type", "description"} or prop.get("type") not in _JSON_TYPES:
+                raise ValueError(f"工具 {spec['name']} 的参数 {name} 的 schema 超出支持范围")
+        contract[spec["name"]] = parameters
+    return contract
+
+
+def _violates_schema(arguments: dict[str, Any], parameters: dict[str, Any]) -> bool:
+    """按声明的 JSON Schema 子集判定。声明没有 `additionalProperties: false`,所以多出来的
+    键按 JSON Schema 的默认语义放行;JSON 的 true/false 不算数字。"""
+    if any(key not in arguments for key in parameters.get("required", [])):
+        return True
+    properties = parameters.get("properties", {})
+    for key, value in arguments.items():
+        prop = properties.get(key)
+        if prop is None:
+            continue
+        if isinstance(value, bool) and prop["type"] != "boolean":
+            return True
+        if not isinstance(value, _JSON_TYPES[prop["type"]]):
+            return True
+    return False
 
 
 def _native_arguments(native: LLMToolCall) -> dict[str, Any] | None:

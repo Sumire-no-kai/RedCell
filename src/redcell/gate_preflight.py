@@ -321,6 +321,19 @@ def _utility_baseline_checks(
                 detail=f"controls={actual_protocol}; planned={expected_tool_protocol.value}",
             )
         )
+    if (
+        controls.conditions is not None
+        and controls.conditions.negative_arena.tool_schema_sha256 is not None
+        and controls.conditions.negative_arena.tool_schema_sha256
+        != expected_arena.tool_schema_sha256
+    ):
+        checks.append(
+            PreflightCheck(
+                name="controls_tool_schema_mismatch",
+                passed=False,
+                detail="controls 发给 Target 的工具声明与当前靶场代码不一致",
+            )
+        )
     if controls.utility_context_fingerprint is None:
         checks.append(
             PreflightCheck(

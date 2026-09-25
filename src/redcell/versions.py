@@ -28,6 +28,6 @@ v2 于 2026-08-14 随本机制首次落盘。v3 于 2026-08-20 增加实际 HTTP
 
 **例外(#60 起的做法):未设置时不进入序列化结果的可选字段不升版。** 旧记录里没有它,
 重算摘要时也不会被补上;新记录里出现它,本身就说明产自加入该字段之后的代码。
-`max_tokens_parameter`、`reasoning_effort`、`arena_id` / `arena_version` 都属于这一类,
-钉扎测试同时锁住"未设置时逐字节不变"与"设置后进入摘要"。
+`max_tokens_parameter`、`reasoning_effort`、`arena_id` / `arena_version`、
+`tool_schema_sha256` 都属于这一类,钉扎测试同时锁住"未设置时逐字节不变"与"设置后进入摘要"。
 """

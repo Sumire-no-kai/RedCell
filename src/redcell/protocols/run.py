@@ -293,10 +293,24 @@ class ArenaRunConfiguration(RedCellModel):
     (见 `redcell.arena.registry.recorded_identity`),其他靶场由 CLI 一律写入;
     `regression_context_fingerprint` 通过本模型带上它,两个靶场上的 Run 不再被判为同一环境。
     """
+    tool_schema_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    """native-function-calling-v2 发给 Provider 的完整工具声明的摘要(2026-09-25)。
+
+    PRD Phase 0.5e 预注册第 3 条要求工具 schema 进入 Gate context 指纹:原生协议下它是
+    Target 输入的一部分。**有且只有 v2 记录它**;其他协议未设置,不进入序列化。
+    """
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict:
-        return _drop_unset(handler(self), ("arena_id", "arena_version"), self)
+        return _drop_unset(handler(self), ("arena_id", "arena_version", "tool_schema_sha256"), self)
+
+    @model_validator(mode="after")
+    def _schema_digest_belongs_to_native_v2(self) -> ArenaRunConfiguration:
+        # 字面量而不是 import:protocols 层不依赖靶场包。值与 codec 的版本常量由测试锁住。
+        native_v2 = self.tool_call_protocol_version == "native-function-calling-v2"
+        if native_v2 != (self.tool_schema_sha256 is not None):
+            raise ValueError("native-function-calling-v2 必须且只有它记录 tool_schema_sha256")
+        return self
 
 
 class ExperimentConditions(RedCellModel):

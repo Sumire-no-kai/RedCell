@@ -133,6 +133,13 @@ class ArenaDefinition:
     def adapter_type(self) -> str:
         return f"arena/{self.id}"
 
+    @property
+    def tool_schema_sha256(self) -> str:
+        """本靶场发给 Provider 的完整工具声明的摘要;native v2 的 Run 与 controls 记录它。"""
+        from redcell.arena.execution import tool_schema_digest
+
+        return tool_schema_digest(self.make_tools().specs())
+
     def positive_case(self, case_id: str) -> PositiveCase | None:
         return next((case for case in self.positive_cases if case.id == case_id), None)
 
