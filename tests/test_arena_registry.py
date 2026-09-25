@@ -97,6 +97,8 @@ def _ops_arena() -> ArenaDefinition:
         benign_tasks=(),
         benign_task_evaluator_version="test",
         golden_fixture=Path("tests/fixtures/none.json"),
+        golden_fixture_digest="0" * 64,
+        golden_fixture_ids=frozenset({"x"}),
     )
 
 

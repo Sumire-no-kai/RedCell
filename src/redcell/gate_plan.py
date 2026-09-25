@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import Field, SerializerFunctionWrapHandler, model_serializer, model_validator
 
+from redcell.arena.registry import get_arena, recorded_identity
 from redcell.arena.support_agent.codec import (
     NEW_EXPERIMENT_TOOL_CALL_PROTOCOL,
     ToolCallProtocol,
@@ -17,6 +18,7 @@ from redcell.gate_analysis import (
     FROZEN_SEED_PLANS,
     GateCondition,
     SeedPlan,
+    experiment_arena_id,
     require_frozen_seed_plan,
     seed_plan_digest,
 )
@@ -81,6 +83,12 @@ class GatePlan(RedCellModel):
     矩阵分析与 preflight 按那里核对。未设置时不进入序列化结果,旧计划的 JSON 与
     校验逐字节不变(2026-09-24)。
     """
+    arena_id: str | None = None
+    """每个正式 Run 的 `--arena`;由 seed plan 登记的实验推出,不单独传参。
+
+    与 `recorded_identity` 同一约定:默认(客服)靶场为 `None`、不进入序列化,所以已有
+    计划的 JSON 与校验逐字节不变;其他靶场写入并追加到每格 argv(2026-09-25)。
+    """
     max_attempts: int = Field(ge=1)
     primary_cells: int
     reserve_cells: int
@@ -91,6 +99,8 @@ class GatePlan(RedCellModel):
         data = handler(self)
         if self.env_file is None:
             data.pop("env_file", None)
+        if self.arena_id is None:
+            data.pop("arena_id", None)
         return data
 
     @model_validator(mode="after")
@@ -116,6 +126,8 @@ class GatePlan(RedCellModel):
         )
         seed_plan = SeedPlan(experiment=frozen.experiment, primary=primary, reserve=reserve)
         require_frozen_seed_plan(seed_plan)
+        if self.arena_id != _plan_arena_id(seed_plan):
+            raise ValueError("Gate plan 的 arena_id 与该实验预注册的靶场不一致")
         if (
             self.plan_version in {HOST_BOUND_GATE_PLAN_VERSION, GATE_PLAN_VERSION}
             and self.execution_host_profile is None
@@ -140,6 +152,7 @@ class GatePlan(RedCellModel):
             execution_host_profile=self.execution_host_profile,
             tool_call_protocol_version=self.tool_call_protocol_version,
             env_file=self.env_file,
+            arena_id=self.arena_id,
         )
         if self.primary_cells != len(primary) * len(_TREATMENTS):
             raise ValueError("Gate plan primary_cells does not match its frozen allocation")
@@ -148,6 +161,10 @@ class GatePlan(RedCellModel):
         if self.cells != expected:
             raise ValueError("Gate plan cells/argv do not match the canonical frozen matrix")
         return self
+
+
+def _plan_arena_id(seed_plan: SeedPlan) -> str | None:
+    return recorded_identity(get_arena(experiment_arena_id(seed_plan.experiment)))[0]
 
 
 def _build_cells(
@@ -159,6 +176,7 @@ def _build_cells(
     execution_host_profile: ExecutionHostProfile | None,
     tool_call_protocol_version: str | None,
     env_file: str | None = None,
+    arena_id: str | None = None,
 ) -> list[GatePlanCell]:
     cells: list[GatePlanCell] = []
     for role, seeds in (
@@ -192,6 +210,8 @@ def _build_cells(
                     argv.extend(["--tool-call-protocol", tool_call_protocol_version])
                 if env_file is not None:
                     argv.extend(["--env-file", env_file])
+                if arena_id is not None:
+                    argv.extend(["--arena", arena_id])
                 cells.append(
                     GatePlanCell(
                         seed=seed,
@@ -225,6 +245,7 @@ def build_gate_plan(
         raise ValueError("Phase 0.5 Gate plan requires an explicit SQLite database URL")
     if not report_directory.strip():
         raise ValueError("report_directory must not be empty")
+    arena_id = _plan_arena_id(seed_plan)
     cells = _build_cells(
         seed_plan,
         max_attempts=max_attempts,
@@ -233,6 +254,7 @@ def build_gate_plan(
         execution_host_profile=execution_host_profile,
         tool_call_protocol_version=tool_call_protocol.value,
         env_file=env_file,
+        arena_id=arena_id,
     )
     return GatePlan(
         seed_plan_digest=seed_plan_digest(seed_plan),
@@ -241,6 +263,7 @@ def build_gate_plan(
         execution_host_profile=execution_host_profile,
         tool_call_protocol_version=tool_call_protocol.value,
         env_file=env_file,
+        arena_id=arena_id,
         max_attempts=max_attempts,
         primary_cells=len(seed_plan.primary) * len(_TREATMENTS),
         reserve_cells=len(seed_plan.reserve) * len(_TREATMENTS),

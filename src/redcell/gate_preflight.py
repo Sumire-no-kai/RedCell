@@ -23,6 +23,8 @@ from pathlib import Path
 
 from pydantic import Field
 
+from redcell.arena.definition import ArenaDefinition
+from redcell.arena.registry import DEFAULT_ARENA_ID, get_arena
 from redcell.arena.support_agent.codec import TOOL_CALL_CODEC_VERSION, ToolCallProtocol
 from redcell.config import (
     AttackerSettings,
@@ -38,6 +40,7 @@ from redcell.gate_analysis import (
     PHASE_0_5_EXPERIMENT,
     PHASE_0_5B_EXPERIMENT,
     SeedPlan,
+    experiment_arena_id,
     require_frozen_seed_plan,
     seed_plan_digest,
 )
@@ -263,6 +266,7 @@ def _utility_baseline_checks(
     *,
     expected_target: ProviderRunConfiguration,
     expected_tool_protocol: ToolCallProtocol | None,
+    expected_arena: ArenaDefinition,
 ) -> list[PreflightCheck]:
     if controls is None:
         return [
@@ -282,6 +286,19 @@ def _utility_baseline_checks(
         ]
 
     checks: list[PreflightCheck] = []
+    # utility context 指纹只能说明 controls 与 baseline 同源;两者若都来自别的靶场,指纹照样一致。
+    # 所以靶场要单独对照实验登记的那一个(2026-09-25)。
+    if controls.conditions is not None and controls.conditions.arena().id != expected_arena.id:
+        checks.append(
+            PreflightCheck(
+                name="controls_arena_mismatch",
+                passed=False,
+                detail=(
+                    f"controls 跑在 {controls.conditions.arena().id} 上;"
+                    f"本实验登记的靶场是 {expected_arena.id}"
+                ),
+            )
+        )
     if controls.conditions is None or controls.conditions.target != expected_target:
         checks.append(
             PreflightCheck(
@@ -386,9 +403,10 @@ def _utility_confirmation_check(
     )
 
 
-def _golden_check(fixtures: Path) -> PreflightCheck:
+def _golden_check(fixtures: Path | None, arena: ArenaDefinition) -> PreflightCheck:
+    """用实验所在靶场的考卷与答案;不给路径时取靶场登记的那份。"""
     try:
-        report = evaluate_golden(fixtures)
+        report = evaluate_golden(fixtures or arena.golden_fixture, arena=arena)
     except (OSError, ValueError) as exc:
         return PreflightCheck(name="level1_golden", passed=False, detail=str(exc))
     detail = (
@@ -440,7 +458,7 @@ def run_preflight(
     *,
     seed_plan_json: Path,
     database_url: str,
-    golden_fixtures: Path,
+    golden_fixtures: Path | None = None,
     roles: list[tuple[str, ProviderSettings]] | None = None,
     shared_rate_limit_db: str | None = None,
     billing_evidence: BillingEvidenceBundle | None = None,
@@ -504,6 +522,10 @@ def run_preflight(
         )
     seed_plan, seed_plan_check = _load_seed_plan(seed_plan_json)
     checks.append(seed_plan_check)
+    # 靶场由实验登记推出;seed plan 无效时下面已经记了失败,golden 退回默认靶场照常检查。
+    arena = get_arena(
+        experiment_arena_id(seed_plan.experiment) if seed_plan is not None else DEFAULT_ARENA_ID
+    )
     target = next(settings for name, settings in roles if name == "target")
     if seed_plan is None:
         # Which utility evidence applies depends on the experiment; without a valid
@@ -529,9 +551,10 @@ def run_preflight(
                 utility_baseline,
                 expected_target=target.run_configuration(),
                 expected_tool_protocol=protocol,
+                expected_arena=arena,
             )
         )
-    checks.append(_golden_check(golden_fixtures))
+    checks.append(_golden_check(golden_fixtures, arena))
     checks.append(_database_check(database_url))
     checks.append(
         _shared_rate_limit_check(
