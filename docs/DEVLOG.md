@@ -120,6 +120,30 @@
   dry-run → 正式矩阵(长时间运行放 Windows)→ replay → `gate-report`。
 - **剩余状态:** DONE(登记与代码);PR 待开。
 
+### 2026-09-25 16:59 AEST · Step 06 · #75 合并;Controller 候选 DeepSeek 契约对照
+
+- **作者指示:** 合并 #75;Controller 换 DeepSeek,先测表现。
+- **进度:**
+  - #75 已合并(`5fc3765`),master 上 1083 passed。
+  - 候选配置写在已忽略的叠加文件 `.env.controller-deepseek`,只改 Controller 一位:`deepseek-flash`(V4.1),
+    `thinking.type=disabled`,temperature 0,max_tokens 512,`total-minus-prompt-v1`,coverage false。`.env` 未改动。
+  - 价格按官方定价页(2026-09-25 核对)的高峰价填:input $0.30、cached $0.006、output $1.20 / 1M;非高峰减半,
+    高峰为周一至周五 01:00–04:00 与 06:00–10:00 UTC。
+  - **遇到的问题:** 叠加文件里把缓存价留空,本意是"未知",实际被当作未设置、回落成 `.env` 里 Gemini 的 0.025。
+    这正是 `role_settings` 注释里写的整键替换行为。**解决:** 查到官方缓存价后写成字面值,叠加文件里每个价格
+    都显式写出。
+  - API key 不写进任何文件:只在这一条命令的进程环境里从 `.env` 的 `DEEPSEEK_API_KEY` 读入,未打印。
+  - 付费调用(作者授权的 Controller 测试):`controller-controls --controller-prompt-version controller-prompt-v1`
+    (0.5e 的 Gate 计划不传 prompt 版本,LLM treatment 默认 v1)。
+- **结果:** **PASSED**。12/12 通过,12/12 一次通过,0 次修复,12/12 用量可知;冷启动、受限候选集、单一候选、
+  带历史、历史投毒三类各用例全过。与此前 Gemini Controller 的对照标准(12/12、零修复)相同。
+  产物 `runs/controller-contract-controls-deepseek-flash-v1.json`(已忽略)。报告不记 Token,精确花费以 DeepSeek
+  账户为准;12 次调用、每次上限 512 输出 token,量级在 $0.01 以内。
+- **边界:** 这是契约对照,只证明它能稳定地从候选集里给出合法选择、不被历史里的注入带偏;它**不**衡量选得好不好,
+  那正是矩阵要回答的问题。
+- **剩余状态:** DONE(测试);待作者决定是否把 `.env` 的 Controller 一位换成这组值。若换且配置逐字段相同,
+  这份报告可作 0.5e 的 Controller 对照;任何一个值不同(包括价格)都要重跑。
+
 ## 2026-09-24 · M1-B 小规模反馈执行路径
 
 ### 2026-09-24 19:52 AEST · Step 01 · 开始接入反馈驱动器
