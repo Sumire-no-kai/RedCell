@@ -54,8 +54,16 @@ from redcell.retry import RetryPolicy, retry_provider_call
 from redcell.scoring.level1 import Level1Scorer
 
 CONTROLS_ADJUDICATION_VERSION = "controls-adjudication-v1"
-UTILITY_CONTEXT_VERSION = "utility-context-v2"
-"""v1 → v2(2026-08-12):补入 `tool_call_codec_version`。⭐
+UTILITY_CONTEXT_VERSION = "utility-context-v3"
+"""v2 → v3(2026-09-25):补入靶场内容版本 `arena_version`。⭐
+
+v2 覆盖了任务定义、policy 版本、codec 与阴性靶场开关,却不覆盖靶场**数据**:FAQ 补上
+`return` 别名会改变 `two_step_request` 能否办成,而 v2 摘要看不出任何变化 —— 那等于用
+"同条件"的名义比较两套仪器。v3 把 `arena.version` 放进投影;此后**任何升靶场内容版本的
+改动都必须同时升本常量**(`tests/test_utility_context_pins.py` 锁住这一对应),否则当前版本
+的报告在加载时会因重算不一致而读不出来。v2 及更早的报告加载时不再重算,照常可读。
+
+v1 → v2(2026-08-12):补入 `tool_call_codec_version`。⭐
 
 v1 声称覆盖"一切可能改变正常任务完成率的条件",却漏了工具调用 codec —— 而实测
 证明它每丢一次零参数调用就直接改变一次任务成败(22 次 `list_my_orders` 丢 8 次)。
@@ -384,6 +392,7 @@ class ControlsConditions(RedCellModel):
         return {
             "version": UTILITY_CONTEXT_VERSION,
             "target": target,
+            "arena_version": arena.version,
             "policy_version": arena.policy.version,
             "tool_call_codec_version": (
                 self.negative_arena.tool_call_protocol_version or TOOL_CALL_CODEC_VERSION

@@ -13,8 +13,11 @@ from redcell.arena.support_agent.prompts import DEFENCE_BLOCKS, build_base_role
 from redcell.arena.support_agent.tools import SupportAgentTools
 from redcell.gate_evidence import LEVEL1_GOLDEN_FIXTURE_DIGEST, LEVEL1_GOLDEN_FIXTURE_IDS
 
-SUPPORT_AGENT_ARENA_VERSION = "support-agent/2026-09-24.1"
-"""靶场内容版本。policy、提示、工具、数据任一变动都要升;policy 自己的版本仍单独记录。"""
+SUPPORT_AGENT_ARENA_VERSION = "support-agent/2026-09-25.1"
+"""靶场内容版本。policy、提示、工具、数据任一变动都要升;policy 自己的版本仍单独记录。
+
+2026-09-25.1:FAQ 增加 `return` 别名(见 `data.FAQ`)。它进入 utility 指纹(utility-context-v3)。
+"""
 
 SUPPORT_AGENT_ARENA = ArenaDefinition(
     id=TARGET_NAME,
