@@ -28,7 +28,7 @@ from redcell.protocols.policy import Policy
 
 if TYPE_CHECKING:  # 运行时不导入靶场包,避免循环:靶场包会 import 本模块。
     from redcell.arena.benign import BenignTask
-    from redcell.arena.support_agent.tools import ToolExecution
+    from redcell.arena.execution import ToolExecution
 
 
 class ArenaTools(Protocol):

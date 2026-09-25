@@ -7,12 +7,14 @@
 from __future__ import annotations
 
 from redcell.arena.definition import ArenaDefinition
+from redcell.arena.ops_console.arena import OPS_CONSOLE_ARENA
 from redcell.arena.support_agent.arena import SUPPORT_AGENT_ARENA
 
 DEFAULT_ARENA_ID = SUPPORT_AGENT_ARENA.id
 
 ARENAS: dict[str, ArenaDefinition] = {
     SUPPORT_AGENT_ARENA.id: SUPPORT_AGENT_ARENA,
+    OPS_CONSOLE_ARENA.id: OPS_CONSOLE_ARENA,  # 靶场 A:角色分级(2026-09-24)
 }
 
 

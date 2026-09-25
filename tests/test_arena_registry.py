@@ -105,7 +105,7 @@ def _ops_arena() -> ArenaDefinition:
 
 def test_default_arena_is_the_support_agent_and_unknown_ids_fail_closed() -> None:
     assert DEFAULT_ARENA_ID == "support-agent"
-    assert set(ARENAS) == {"support-agent"}
+    assert "support-agent" in ARENAS  # 完整名单由各靶场自己的测试钉住
     assert get_arena(DEFAULT_ARENA_ID) is SUPPORT_AGENT_ARENA
     # 落盘的 Run.target_name 就是靶场 id:resume / validate-paths 靠它反查靶场。
     assert arena_for_run(SUPPORT_AGENT_POLICY.target_name) is SUPPORT_AGENT_ARENA
