@@ -129,6 +129,11 @@ class GatePlan(RedCellModel):
         if self.arena_id != _plan_arena_id(seed_plan):
             raise ValueError("Gate plan 的 arena_id 与该实验预注册的靶场不一致")
         if (
+            frozen.tool_call_protocol is not None
+            and self.tool_call_protocol_version != frozen.tool_call_protocol
+        ):
+            raise ValueError("Gate plan 的工具协议与该实验预注册的协议不一致")
+        if (
             self.plan_version in {HOST_BOUND_GATE_PLAN_VERSION, GATE_PLAN_VERSION}
             and self.execution_host_profile is None
         ):
@@ -234,10 +239,14 @@ def build_gate_plan(
     database_url: str,
     report_directory: str,
     execution_host_profile: ExecutionHostProfile = ExecutionHostProfile.WINDOWS_WAKELOCK_V1,
-    tool_call_protocol: ToolCallProtocol = NEW_EXPERIMENT_TOOL_CALL_PROTOCOL,
+    tool_call_protocol: ToolCallProtocol | None = None,
     env_file: str | None = None,
 ) -> GatePlan:
-    """Build commands without executing a Provider or touching the run database."""
+    """Build commands without executing a Provider or touching the run database.
+
+    `tool_call_protocol=None` 取实验登记的协议;登记没有冻结协议的实验(0.5 到 0.5d)
+    取新实验默认。显式传入与登记不符的协议直接拒绝。
+    """
     if max_attempts != FORMAL_MAX_ATTEMPTS:
         raise ValueError(f"Phase 0.5 Gate max_attempts must be {FORMAL_MAX_ATTEMPTS}")
     require_frozen_seed_plan(seed_plan)
@@ -245,6 +254,16 @@ def build_gate_plan(
         raise ValueError("Phase 0.5 Gate plan requires an explicit SQLite database URL")
     if not report_directory.strip():
         raise ValueError("report_directory must not be empty")
+    registered = FROZEN_SEED_PLANS[seed_plan.experiment].tool_call_protocol
+    if tool_call_protocol is None:
+        tool_call_protocol = (
+            ToolCallProtocol(registered) if registered else NEW_EXPERIMENT_TOOL_CALL_PROTOCOL
+        )
+    elif registered is not None and tool_call_protocol.value != registered:
+        raise ValueError(
+            f"{seed_plan.experiment} 预注册的工具协议是 {registered},"
+            f"不能用 {tool_call_protocol.value}"
+        )
     arena_id = _plan_arena_id(seed_plan)
     cells = _build_cells(
         seed_plan,

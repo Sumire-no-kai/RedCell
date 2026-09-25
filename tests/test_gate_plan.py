@@ -156,3 +156,62 @@ def test_loaded_gate_plan_rejects_a_cell_that_dropped_its_env_file() -> None:
 
     with pytest.raises(ValueError, match="canonical frozen matrix"):
         GatePlan.model_validate(payload)
+
+
+# ── 0.5e:工具协议随登记冻结(2026-09-25) ─────────────────────────────────
+
+PHASE_0_5E_SEED_PLAN_PATH = Path(__file__).parents[1] / "docs" / "PHASE0_5E_SEED_PLAN.json"
+
+
+def _phase_0_5e_plan(**kwargs) -> GatePlan:
+    seed_plan = SeedPlan.model_validate_json(PHASE_0_5E_SEED_PLAN_PATH.read_text(encoding="utf-8"))
+    return build_gate_plan(
+        seed_plan,
+        max_attempts=500,
+        database_url="sqlite:///runs/phase-0-5e.db",
+        report_directory="runs/phase-0-5e",
+        **kwargs,
+    )
+
+
+def test_phase_0_5e_plan_takes_native_v2_from_its_registration() -> None:
+    plan = _phase_0_5e_plan()
+    assert plan.tool_call_protocol_version == ToolCallProtocol.NATIVE_V2.value
+    assert (plan.primary_cells, plan.reserve_cells) == (144, 48)
+    assert all(
+        cell.argv[cell.argv.index("--tool-call-protocol") + 1] == ToolCallProtocol.NATIVE_V2.value
+        for cell in plan.cells
+    )
+    assert _phase_0_5e_plan(tool_call_protocol=ToolCallProtocol.NATIVE_V2) == plan
+
+
+@pytest.mark.parametrize("protocol", [ToolCallProtocol.NATIVE_V1, ToolCallProtocol.TEXT_V2])
+def test_phase_0_5e_refuses_any_other_protocol(protocol: ToolCallProtocol) -> None:
+    with pytest.raises(ValueError, match="预注册的工具协议"):
+        _phase_0_5e_plan(tool_call_protocol=protocol)
+
+
+def test_a_loaded_phase_0_5e_plan_with_another_protocol_is_rejected() -> None:
+    payload = _phase_0_5e_plan().model_dump(mode="python")
+    payload["tool_call_protocol_version"] = ToolCallProtocol.NATIVE_V1.value
+    for cell in payload["cells"]:
+        argv = cell["argv"]
+        argv[argv.index("--tool-call-protocol") + 1] = ToolCallProtocol.NATIVE_V1.value
+    with pytest.raises(ValueError, match="预注册的协议不一致"):
+        GatePlan.model_validate(payload)
+
+
+def test_unregistered_protocol_experiments_keep_the_new_experiment_default() -> None:
+    """0.5d 没有冻结协议:不传参数时仍取新实验默认,与改动前相同。"""
+    seed_plan = SeedPlan.model_validate_json(
+        (Path(__file__).parents[1] / "docs" / "PHASE0_5D_SEED_PLAN.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    plan = build_gate_plan(
+        seed_plan,
+        max_attempts=500,
+        database_url="sqlite:///runs/phase-0-5d.db",
+        report_directory="runs/phase-0-5d",
+    )
+    assert plan.tool_call_protocol_version == ToolCallProtocol.NATIVE_V1.value

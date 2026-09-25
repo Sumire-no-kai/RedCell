@@ -21,6 +21,8 @@ from redcell.gate_analysis import (
     PHASE_0_5C_SEED_PLAN_DIGEST,
     PHASE_0_5D_EXPERIMENT,
     PHASE_0_5D_SEED_PLAN_DIGEST,
+    PHASE_0_5E_EXPERIMENT,
+    PHASE_0_5E_SEED_PLAN_DIGEST,
     SeedPlan,
     require_frozen_seed_plan,
     seed_plan_digest,
@@ -104,6 +106,39 @@ def test_phase_0_5d_reuses_no_observed_seed_from_the_invalid_matrix() -> None:
     require_frozen_seed_plan(new)
 
 
+def test_phase_0_5e_is_a_fresh_native_only_registration() -> None:
+    """2026-09-25:0.5e 不再与 0.5d 配对,重抽全部 seed,工具协议随登记冻结。⭐
+
+    0.5d 的 seed 已在 0.5d 矩阵里被观察;原登记让 0.5e 复用它们是为了配对,配对取消后
+    复用就只剩污染。
+    """
+    prior = [
+        _load("PHASE0_5_SEED_PLAN.json"),
+        _load("PHASE0_5B_SEED_PLAN.json"),
+        _load("PHASE0_5C_SEED_PLAN.json"),
+        _load("PHASE0_5D_SEED_PLAN.json"),
+    ]
+    new = _load("PHASE0_5E_SEED_PLAN.json")
+    prior_seeds = set().union(*(set(plan.ordered) for plan in prior))
+
+    assert new.experiment == PHASE_0_5E_EXPERIMENT
+    assert (len(new.primary), len(new.reserve)) == (24, 8)
+    assert seed_plan_digest(new) == PHASE_0_5E_SEED_PLAN_DIGEST
+    assert set(new.ordered).isdisjoint(prior_seeds)
+    assert set(new.ordered).isdisjoint({5000, 5001, 5002})
+    require_frozen_seed_plan(new)
+    assert FROZEN_SEED_PLANS[PHASE_0_5E_EXPERIMENT].tool_call_protocol == (
+        "native-function-calling-v2"
+    )
+
+
+def test_historical_registrations_froze_no_tool_protocol() -> None:
+    """0.5 到 0.5d 登记时没有冻结协议;补上会让它们的计划改由登记推出,历史不能这样被改写。"""
+    for experiment, frozen in FROZEN_SEED_PLANS.items():
+        if experiment != PHASE_0_5E_EXPERIMENT:
+            assert frozen.tool_call_protocol is None, experiment
+
+
 def test_a_plan_whose_shape_disagrees_with_its_experiment_is_rejected() -> None:
     old = json.loads((_DOCS / "PHASE0_5_SEED_PLAN.json").read_text(encoding="utf-8"))
 
@@ -115,7 +150,7 @@ def test_an_unregistered_experiment_is_rejected() -> None:
     new = json.loads((_DOCS / "PHASE0_5B_SEED_PLAN.json").read_text(encoding="utf-8"))
 
     with pytest.raises(ValueError, match="未登记"):
-        SeedPlan.model_validate({**new, "experiment": "phase-0.5e"})
+        SeedPlan.model_validate({**new, "experiment": "phase-0.5z"})
 
 
 def test_every_registered_plan_declares_its_own_shape() -> None:
@@ -124,6 +159,7 @@ def test_every_registered_plan_declares_its_own_shape() -> None:
         PHASE_0_5B_EXPERIMENT,
         PHASE_0_5C_EXPERIMENT,
         PHASE_0_5D_EXPERIMENT,
+        PHASE_0_5E_EXPERIMENT,
     }
     for experiment, frozen in FROZEN_SEED_PLANS.items():
         assert frozen.experiment == experiment
