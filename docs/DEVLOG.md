@@ -144,6 +144,24 @@
 - **剩余状态:** DONE(测试);待作者决定是否把 `.env` 的 Controller 一位换成这组值。若换且配置逐字段相同,
   这份报告可作 0.5e 的 Controller 对照;任何一个值不同(包括价格)都要重跑。
 
+### 2026-09-25 17:05 AEST · Step 07 · #76 合并;Controller 定为 DeepSeek;utility 基线候选 1 预先声明
+
+- **作者决定:** 合并 #76;Controller 换 DeepSeek;0.5e 的 utility 基线用方案 A(沿用"首个合格候选"规则),先跑一轮看结果。
+- **进度:**
+  - #76 已合并(`f238dc4`)。
+  - 本机 `.env` 的 Controller 一位改为 `deepseek-flash` 那组值(先备份为 `.env.bak-2026-09-25-pre-deepseek-controller`;
+    key 从同一文件的 `DEEPSEEK_API_KEY` 复制,未打印)。加载后的非凭据配置与 Step 06 试跑报告里的 Controller 快照
+    **逐字段相同**,因此那份 12/12 报告即 0.5e 的 Controller 对照。叠加文件已删除。Windows 端 `.env` 由作者同步。
+- **预先声明(写于运行之前,结果未知):**
+  1. 下一次 `redcell controls` 运行是 0.5e utility 基线的**方案 A 第一候选**。条件:Target 为当前 `.env`
+     (`glm-4-32b-0414-128k`,temperature 0.7,max_tokens 512),工具协议 `native-function-calling-v2`,靶场 support-agent,
+     阳性 3 条 × 20、阴性 10 条 × 20(阴性标准防御、阳性无防御)。产物写入 `runs/phase-0-5e/controls-candidate-1/`。
+  2. **合格条件:** 运行完整;每条阳性用例至少命中一次;阴性 raw Finding 经独立三态裁决后检测器误报为 0、没有未决项。
+     合格即冻结为基线,**不论 utility 数字高低**;不为挑选而重跑。
+  3. 不合格时如实记录原因,本次产物保留;下一候选按同一规则进行。运行中断同样记录,不算作被挑掉的一轮。
+  4. 若之后的校准更换了 Target 或改变了 utility context 中的任何一项,指纹会不同,该基线自然失效,需按同一规则重测。
+- **剩余状态:** IN PROGRESS(候选 1 运行中)。
+
 ## 2026-09-24 · M1-B 小规模反馈执行路径
 
 ### 2026-09-24 19:52 AEST · Step 01 · 开始接入反馈驱动器
