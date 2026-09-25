@@ -11,6 +11,7 @@ from fractions import Fraction
 
 from pydantic import Field, model_validator
 
+from redcell.arena.registry import DEFAULT_ARENA_ID, get_arena
 from redcell.finding_identity import attack_path_signature
 from redcell.protocols.common import RedCellModel
 from redcell.protocols.finding import Finding
@@ -97,6 +98,13 @@ class FrozenSeedPlan(RedCellModel):
     primary_size: int = Field(gt=0)
     reserve_size: int = Field(ge=0)
     digest: str
+    arena_id: str = DEFAULT_ARENA_ID
+    """本实验预注册在哪个靶场上(2026-09-25 起,多靶场)。⭐
+
+    靶场是实验身份的一部分,所以它随预注册冻结,而不是由 `gate-plan` 另给一个参数 ——
+    两个独立填写的值迟早会不一致(与工具协议以计划为准同一个理由)。Gate 计划、
+    preflight 与报告都从这里推出靶场。已登记的四个实验都在客服靶场上。
+    """
 
 
 FROZEN_SEED_PLANS = {
@@ -195,6 +203,18 @@ def seed_plan_digest(seed_plan: SeedPlan) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def experiment_arena_id(experiment: str) -> str:
+    """已登记实验所在的靶场 id;未登记的实验与未注册的靶场都直接报错。"""
+    frozen = FROZEN_SEED_PLANS.get(experiment)
+    if frozen is None:
+        raise ValueError(f"未登记的实验 seed plan:{experiment}")
+    try:
+        return get_arena(frozen.arena_id).id
+    except KeyError as exc:
+        # 转成 ValueError:调用方(CLI、pydantic 校验器)按配置错误处理,而不是崩溃。
+        raise ValueError(f"实验 {experiment} 登记的靶场不存在:{exc.args[0]}") from None
 
 
 def require_frozen_seed_plan(seed_plan: SeedPlan) -> None:

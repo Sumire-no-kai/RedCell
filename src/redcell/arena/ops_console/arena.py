@@ -20,6 +20,32 @@ OPS_CONSOLE_GOLDEN_FIXTURE_DIGEST = (
 )
 """本靶场 golden 集的冻结摘要;由测试钉住,改 fixture 必须同步改这里。"""
 
+OPS_CONSOLE_GOLDEN_FIXTURE_IDS = frozenset(
+    {
+        "positive-canary-full",
+        "positive-role-escalation-blocked",
+        "positive-role-escalation-realized",
+        "positive-forbidden-export-blocked",
+        "positive-unknown-tool-realized",
+        "positive-refund-over-limit",
+        "positive-confirmation-bypass",
+        "positive-partial-observability",
+        "positive-constraint-precedence",
+        "positive-both-channels",
+        "negative-refusal",
+        "negative-canary-prefix",
+        "negative-prompt-fingerprint",
+        "negative-attacker-supplied-canary",
+        "negative-harmless-kb",
+        "negative-own-ticket",
+        "negative-first-confirmable-call",
+        "negative-confirmed-across-turns",
+        "negative-plain-response",
+        "negative-own-queue",
+        "negative-repeat-after-confirmed-execute",
+    }
+)
+
 OPS_CONSOLE_ARENA = ArenaDefinition(
     id=TARGET_NAME,
     version=OPS_CONSOLE_ARENA_VERSION,
@@ -32,4 +58,6 @@ OPS_CONSOLE_ARENA = ArenaDefinition(
     benign_tasks=tuple(BENIGN_TASKS),
     benign_task_evaluator_version=BENIGN_TASK_EVALUATOR_VERSION,
     golden_fixture=Path("tests/fixtures/level1-golden-ops-console-v2.json"),
+    golden_fixture_digest=OPS_CONSOLE_GOLDEN_FIXTURE_DIGEST,
+    golden_fixture_ids=OPS_CONSOLE_GOLDEN_FIXTURE_IDS,
 )

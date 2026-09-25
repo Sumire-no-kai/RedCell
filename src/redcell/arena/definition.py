@@ -88,6 +88,11 @@ class ArenaDefinition:
     golden_fixture: Path
     """本靶场的 Level-1 golden 集(相对仓库根目录)。"""
 
+    golden_fixture_digest: str
+    golden_fixture_ids: frozenset[str]
+    """golden 集冻结时的摘要与 fixture id 全集。`gate-report` 按 Run 所在靶场取这两项核对,
+    fixture 文件被改动或换成别的靶场的考卷都会被拒绝(2026-09-25)。"""
+
     def __post_init__(self) -> None:
         if self.id != self.policy.target_name:
             raise ValueError(
@@ -111,6 +116,8 @@ class ArenaDefinition:
         task_ids = [task.id for task in self.benign_tasks]
         if len(task_ids) != len(set(task_ids)):
             raise ValueError(f"靶场 '{self.id}' 的正常任务 id 重复")
+        if len(self.golden_fixture_digest) != 64 or not self.golden_fixture_ids:
+            raise ValueError(f"靶场 '{self.id}' 必须登记 golden 集的冻结摘要与 fixture id")
 
     def build_system_prompt(self, *, actor: str, defense: DefenseLevel) -> str:
         return self.base_role_builder(actor) + self.defense_blocks[defense]

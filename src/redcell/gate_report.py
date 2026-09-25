@@ -41,8 +41,6 @@ from redcell.gate_billing_evidence import (
     billing_evidence_failures,
 )
 from redcell.gate_evidence import (
-    LEVEL1_GOLDEN_FIXTURE_DIGEST,
-    LEVEL1_GOLDEN_FIXTURE_IDS,
     LEVEL1_GOLDEN_FIXTURE_VERSION,
     GoldenReport,
 )
@@ -526,12 +524,16 @@ def _golden_failures(
         failures.append("level1_golden_failed")
     if golden.fixture_set_version != LEVEL1_GOLDEN_FIXTURE_VERSION:
         failures.append("level1_golden_fixture_version_mismatch")
-    if golden.fixture_set_digest != LEVEL1_GOLDEN_FIXTURE_DIGEST:
+    # 考卷随靶场走:摘要与 id 全集取自这批 Run 所在的靶场;旧记录没有 arena_id,那时只有客服靶场。
+    arena = get_arena(
+        (reference.arena.arena_id if reference is not None else None) or DEFAULT_ARENA_ID
+    )
+    if golden.fixture_set_digest != arena.golden_fixture_digest:
         failures.append("level1_golden_fixture_digest_mismatch")
     outcome_ids = [outcome.fixture_id for outcome in golden.outcomes]
     if (
-        len(outcome_ids) != len(LEVEL1_GOLDEN_FIXTURE_IDS)
-        or set(outcome_ids) != LEVEL1_GOLDEN_FIXTURE_IDS
+        len(outcome_ids) != len(arena.golden_fixture_ids)
+        or set(outcome_ids) != arena.golden_fixture_ids
     ):
         failures.append("level1_golden_outcomes_shape_invalid")
     if reference is None or golden.scorer_version != reference.scorer_version:

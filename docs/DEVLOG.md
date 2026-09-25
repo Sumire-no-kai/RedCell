@@ -5,6 +5,53 @@
 
 ---
 
+## 2026-09-25 · 让靶场 A 可以进入正式实验
+
+### 2026-09-25 15:30 AEST · Step 01 · 三件遗留事项的分工
+
+- **背景:** #72(靶场 A)的 DEVLOG 2026-09-24 Step 08 列了三件"在本靶场上正式跑之前必须处理"的事。
+  作者问能否自行处理,并要求记入开发日志。
+- **决定:**
+  1. **Gate 多靶场** —— 自行处理,单独一个 PR(本节 Step 02)。
+  2. **决策 8(策略模板)** —— 自行处理,按方案 §6.5 的推荐方案 A(每个靶场注册自己的模板,客服靶场字节不变),
+     另开一个 PR,叠在 Gate 那个之上。
+  3. **决策 7(观察投影的公开错误类别)** —— **不由本方处理,交给维护反馈驱动攻击者模块的一方(Codex)。**
+     理由:方案 §6.6 本就写明"由维护该模块的一方处理,本方案只定接口";且该模块的审阅与集成此前三次被
+     自动审批拦下(2026-09-24),不再尝试。交接所需的靶场侧事实(只描述工单台自己的错误字符串,不涉及
+     反馈机制):
+     - 与客服靶场格式相同、现有分类已能识别的:`permission denied: …`、`confirmation required: …`、
+       `unknown tool: …`、`unknown account: …`、`refund of <x> exceeds the <y> limit`、`invalid amount: …`;
+     - 工单台新增、现有分类会落到 `UNCLASSIFIED` 的:`unknown ticket: <id>`(应属"不存在")、
+       `invalid note: text is empty`(应属"参数无效")。
+     - 方案 §6.6 的接口:由 `ArenaDefinition` 提供本靶场的分类函数,投影按 Run 所在靶场调用。
+     在它落地之前,工单台上的反馈驱动 Run 若开启诊断级可见性,这两类错误只会显示为未分类,不会被错归。
+- **剩余状态:** DONE(分工);决策 7 等交接方。
+
+### 2026-09-25 15:41 AEST · Step 02 · Gate 流水线按实验登记绑定靶场
+
+- **范围与分支:** `feat/gate-arena-binding`,叠在 #72 之上。不调用 Provider。
+- **问题:** `gate-plan` / `gate-runner` 生成与执行的每格命令不带靶场;`gate-preflight` 的 golden 检查与
+  `gate-report` 的 golden 摘要、fixture id 集合都钉死客服靶场。工单台上即使预注册了实验,矩阵也会在客服靶场上跑,
+  或在报告阶段被错误地拒绝。
+- **做法:**
+  - **靶场随预注册冻结:** `FrozenSeedPlan` 新增 `arena_id`(默认客服靶场),`experiment_arena_id()` 从登记推出靶场。
+    **不给 `gate-plan` 另加 `--arena` 参数** —— 与工具协议"以计划为准"同一个理由:两个独立填写的值迟早会不一致。
+  - **Gate 计划:** `GatePlan.arena_id` 由登记推出,默认靶场为 `None` 且不序列化;其他靶场写入并在每格 argv 末尾
+    追加 `--arena <id>`。加载时校验 `arena_id` 与登记一致,删掉或偷塞都会在执行前被拒绝。
+  - **golden 答案随靶场走:** `ArenaDefinition` 新增 `golden_fixture_digest` 与 `golden_fixture_ids`(客服靶场取
+    `gate_evidence` 里原有的两个常量,工单台取 #72 钉的摘要与 21 个 id)。`gate-report` 按这批 Run 的靶场核对;
+    `gate-preflight` 按实验登记的靶场取考卷,`--golden-fixtures` 默认改为"该靶场登记的那份"。
+  - **controls 必须来自同一靶场:** preflight 新增 `controls_arena_mismatch`。utility context 指纹只能证明 controls
+    与 baseline 同源,两者若都来自别的靶场,指纹照样一致 —— 只有显式核对拦得住。
+- **兼容性:** 已登记的四个实验(0.5 / 0.5b / 0.5c / 0.5d)都在客服靶场上。用 master 与本分支分别生成 0.5d 的
+  Gate 计划 JSON,SHA-256 相同(`5abf0593…`),逐字节一致;既有 Gate 测试原样通过。
+- **验证证据:** 1054 passed(新增 11 条:登记全在客服靶场、默认计划不含靶场、别的靶场进入每格 argv、两种篡改被拒、
+  未注册靶场按配置错误处理、preflight 默认考卷 / 跨靶场 controls / 错靶场考卷、gate-report 按 Run 的靶场核对);
+  `ruff check`、`ruff format --check`、`black --check`、`git diff --check` 通过。全部离线。
+- **仍需作者决定:** 工单台上还没有预注册的实验。要跑正式矩阵,需要登记一个新实验(seed plan、功效规划、
+  预测秩的预注册),那是研究设计,不在本 PR 范围。
+- **剩余状态:** DONE(代码与测试);IN PROGRESS(PR 待开)。
+
 ## 2026-09-24 · M1-B 小规模反馈执行路径
 
 ### 2026-09-24 19:52 AEST · Step 01 · 开始接入反馈驱动器

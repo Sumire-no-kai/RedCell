@@ -1388,9 +1388,10 @@ def gate_plan(
 def gate_preflight(
     seed_plan_json: Annotated[Path, typer.Option(help="冻结的 Phase 0.5/0.5b seed plan JSON")],
     db: Annotated[str, typer.Option(help="正式矩阵专用 SQLite 连接串;必须为空且不得混用开发库")],
-    golden_fixtures: Annotated[Path, typer.Option(help="冻结 Level-1 fixture JSON")] = Path(
-        "tests/fixtures/level1-golden-v2.json"
-    ),
+    golden_fixtures: Annotated[
+        Path | None,
+        typer.Option(help="冻结 Level-1 fixture JSON;默认用本实验登记的靶场自己的那份"),
+    ] = None,
     billing_evidence_json: Annotated[
         Path | None,
         typer.Option(help="三角色计费 Token coverage 的非凭据证据 JSON；缺失即拒绝正式 Gate"),
