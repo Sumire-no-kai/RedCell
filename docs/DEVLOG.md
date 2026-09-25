@@ -217,7 +217,30 @@
   0.5 到 0.5e 的全部历史 controls 读不出来。修复必须走不破坏历史的路线。
 - **刻意没做的:** 没有在 Target 上试不同措辞、挑表现最好的那种。按模型得分选题目等于把考卷调成适合被测对象。
   修复的依据只能是"成功路径被堵死"这个工具层面的事实。
-- **剩余状态:** 待作者决定修复路线。
+- **剩余状态:** 作者选路线 1,见 Step 10。
+
+### 2026-09-25 17:37 AEST · Step 10 · 路线 1 落地;候选 1 作废;utility 基线候选 2 预先声明
+
+- **作者决定:** 走路线 1(FAQ 能按 "return" 查到同一条政策),接受基线重测。
+- **改动(`5afe81f`,分支 `fix/faq-return-alias`):**
+  - FAQ 增加 `return` 别名,指向同一条退款政策文本;放在最后,此前能命中别的键的主题结果不变
+    ("return shipping" 仍命中 shipping),变化只发生在原来"没有匹配"的主题上。
+  - 客服靶场内容版本升为 `support-agent/2026-09-25.1`;policy 版本**不动**(FAQ 不是 policy,升它会让历史 Run
+    与 controls 的核对失效)。
+  - utility 指纹升为 `utility-context-v3`,投影里加入靶场内容版本。v2 不含靶场数据,FAQ 的改动在 v2 下完全看不出来。
+    v2 及更早的报告加载时不再重算,照常可读;0.5b 的确认性复测只比较存下的指纹,不受影响。
+  - 新增 `tests/test_utility_context_pins.py`:把"utility 指纹版本 → 各靶场内容版本"钉成字面量,以后改靶场内容
+    而不升 utility 指纹版本会当场变红。另测:return 类主题能查到政策、既有主题不变、按原话查能办成
+    `two_step_request`、不查就凭常识作答仍判失败。
+  - 验证:1090 passed;`ruff check`、`ruff format --check`、`black --check`、`git diff --check` 通过。
+- **候选 1 作废:** 它是在 v2 指纹、旧 FAQ 下量的,与修复后的仪器不同,按 Step 07 第 4 条自然失效。作废的原因是
+  **仪器改了**,不是它的数字。本机副本改名为 `docs/PHASE0_5E_UTILITY_BASELINE.candidate-1-void.json`(忽略规则
+  改为 `/docs/PHASE0_5E_UTILITY_BASELINE*.json`),私有仓库同样改名保留;原始 controls 仍在
+  `runs/phase-0-5e/controls-candidate-1/`。
+- **预先声明(写于运行之前,结果未知):** 下一次 `redcell controls` 运行是 0.5e utility 基线的**方案 A 候选 2**。
+  代码为 `5afe81f`;其余条件、合格条件与"合格即冻结、不论数字、不为挑选而重跑"的承诺与 Step 07 相同。
+  产物写入 `runs/phase-0-5e/controls-candidate-2/`。
+- **剩余状态:** IN PROGRESS(候选 2 运行中)。
 
 ## 2026-09-24 · M1-B 小规模反馈执行路径
 

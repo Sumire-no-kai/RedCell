@@ -10,7 +10,7 @@ CLAUDE.md
 /docs/internal/
 /docs/RELATED_WORK.md
 /docs/PHASE0_5_UTILITY_BASELINE.json
-/docs/PHASE0_5E_UTILITY_BASELINE.json
+/docs/PHASE0_5E_UTILITY_BASELINE*.json
 *.private.md
 NOTES.md
 
