@@ -100,6 +100,9 @@ class ArenaAdapter(TargetAdapter):
             self._codec = codec
         elif tool_call_protocol is ToolCallProtocol.NATIVE_V1:
             self._codec = NativeToolCallCodec()
+        elif tool_call_protocol is ToolCallProtocol.NATIVE_V2:
+            # v2 按本轮实际发送的声明校验,两者同源,不会出现"校验的不是发出去的那份"。
+            self._codec = NativeToolCallCodec(specs=self._tool_specs)
         else:
             self._codec = TextToolCallCodec(known_tools=[spec["name"] for spec in self._tool_specs])
 

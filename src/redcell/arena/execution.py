@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 
@@ -33,6 +34,16 @@ class ToolExecution(RedCellModel):
     @property
     def rejected(self) -> bool:
         return self.error is not None
+
+
+def tool_schema_digest(specs: list[dict[str, Any]]) -> str:
+    """工具声明(名称、描述、参数 schema,按发送顺序)的 SHA-256。
+
+    原生 FC 把这份声明原样发给 Provider,它是 Target 输入的一部分;改一个描述或参数类型,
+    模型看到的就是另一个接口。所以 native v2 把它写进实验条件(见 `ArenaRunConfiguration`)。
+    """
+    payload = json.dumps(specs, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def call_signature(name: str, arguments: dict[str, Any]) -> str:

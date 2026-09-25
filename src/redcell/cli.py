@@ -322,7 +322,15 @@ def _experiment_conditions(
 
     `arena_id` / `arena_version`:新 Run 传 `recorded_identity()` 的结果(默认靶场为 `None`);
     `resume` 照抄落盘值,这样重算出的指纹才与原记录一致,忘传或改传都会在碰到 Target 前被拦下。
+
+    native v2 的工具声明摘要**在这里现算**,不由调用方传入:`resume` 因此拿当前代码的声明
+    重算指纹,声明在两次运行之间变过就对不上,续跑在碰到 Target 前被拒绝。
     """
+    tool_schema_sha256 = (
+        get_arena(arena_id or DEFAULT_ARENA_ID).tool_schema_sha256
+        if tool_call_protocol_version == ToolCallProtocol.NATIVE_V2.value
+        else None
+    )
     if providers is None:
         target = ProviderRunConfiguration(
             provider="scripted",
@@ -371,6 +379,7 @@ def _experiment_conditions(
             tool_call_protocol_version=tool_call_protocol_version,
             arena_id=arena_id,
             arena_version=arena_version,
+            tool_schema_sha256=tool_schema_sha256,
         ),
         request_timeouts=request_timeouts,
         execution_host=execution_host,
@@ -420,6 +429,7 @@ def run(
         ToolCallProtocol,
         typer.Option(
             help="Target 工具协议：native-function-calling-v1(新实验默认)/ "
+            "native-function-calling-v2(带接口校验,Phase 0.5e 用)/ "
             "text-tool-call-codec-v2(仅用于复现旧实验)"
         ),
     ] = NEW_EXPERIMENT_TOOL_CALL_PROTOCOL,
@@ -1619,6 +1629,14 @@ def validate_paths(
         raise typer.Exit(ExitCode.BAD_CONFIG)
 
     arena_definition = _arena_for_stored_run(evidence.runs[0].target_name)
+    recorded_schema = reference.arena.tool_schema_sha256
+    if recorded_schema is not None and recorded_schema != arena_definition.tool_schema_sha256:
+        typer.secho(
+            "配置被拒绝:这批 Run 记录的工具声明与当前靶场代码不一致,重放不再是同一接口",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(ExitCode.BAD_CONFIG)
     adapter = _arena_adapter(
         target,
         target_configuration,

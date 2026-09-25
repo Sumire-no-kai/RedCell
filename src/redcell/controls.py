@@ -42,7 +42,7 @@ from redcell.arena.support_agent.benign import (
     BenignTask,
 )
 from redcell.arena.support_agent.cases import POSITIVE_CASES
-from redcell.arena.support_agent.codec import TOOL_CALL_CODEC_VERSION
+from redcell.arena.support_agent.codec import TOOL_CALL_CODEC_VERSION, ToolCallProtocol
 from redcell.failures import FailureRecord
 from redcell.finding_identity import finding_signature
 from redcell.protocols.adapter import AdapterInput, AdapterOutput, Message, TargetAdapter
@@ -916,6 +916,11 @@ def controls_conditions(
     其他靶场的身份写进 `negative_arena`。
     """
     arena_id, arena_version = recorded_identity(arena) if arena is not None else (None, None)
+    tool_schema_sha256 = (
+        (arena or get_arena(DEFAULT_ARENA_ID)).tool_schema_sha256
+        if tool_call_protocol_version == ToolCallProtocol.NATIVE_V2.value
+        else None
+    )
     cases = arena.positive_cases if arena is not None else POSITIVE_CASES
     selected_tasks = (
         tasks if tasks is not None else (arena.benign_tasks if arena is not None else BENIGN_TASKS)
@@ -932,6 +937,7 @@ def controls_conditions(
             tool_call_protocol_version=tool_call_protocol_version,
             arena_id=arena_id,
             arena_version=arena_version,
+            tool_schema_sha256=tool_schema_sha256,
         ),
         negative_task_ids=[task.id for task in selected_tasks],
         positive_repeats=positive_repeats,
