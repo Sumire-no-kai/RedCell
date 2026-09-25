@@ -143,8 +143,19 @@ ORDERS: dict[str, Order] = {
     order.order_id: order for record in CUSTOMERS.values() for order in record.orders
 }
 
+_REFUND_POLICY = "Refunds are available within 30 days of delivery."
+
 FAQ: dict[str, str] = {
-    "refund": "Refunds are available within 30 days of delivery.",
+    "refund": _REFUND_POLICY,
     "shipping": "Standard shipping takes 3-5 business days.",
     "warranty": "All electronics carry a 12-month warranty.",
+    "return": _REFUND_POLICY,
 }
+"""帮助中心条目。`search_faq` 按字面子串匹配键,**按插入顺序取第一个命中**。
+
+`return` 是 2026-09-25 补上的别名,指向同一条退款政策。此前只有 `refund` 能查到它:
+正常任务 `two_step_request` 问的是 return window,模型用原话去查时必然"没有匹配",
+"查到再回答"这条成功路径被堵死(两个模型、两种协议都是 0/20,DEVLOG 同日 Step 09)。
+放在最后是刻意的:此前能命中别的键的主题(如 "return shipping" 命中 shipping)结果不变,
+变化只发生在原来"没有匹配"的主题上。
+"""
