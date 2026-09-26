@@ -202,6 +202,16 @@ class TargetAdapter(ABC):
     """所有目标适配器的接口。"""
 
     @property
+    def tool_call_protocol_version(self) -> str | None:
+        """运行时工具调用协议身份；不提供工具调用的 Adapter 可保持 None。"""
+        return None
+
+    @property
+    def tool_schema_sha256(self) -> str | None:
+        """实际发送给 Target 的工具声明摘要；原生 v2 Run 用于执行前核对。"""
+        return None
+
+    @property
     @abstractmethod
     def adapter_type(self) -> str:
         """写进 ReproductionContext,用于复现时定位是哪种适配器。"""

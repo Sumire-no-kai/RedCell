@@ -9,6 +9,7 @@ import pytest
 from redcell._base import CostRecord
 from redcell.arena.support_agent import SUPPORT_AGENT_POLICY
 from redcell.arena.support_agent.adapter import ArenaAdapter
+from redcell.arena.support_agent.codec import ToolCallProtocol
 from redcell.budget import BudgetLimit, BudgetLimits, BudgetManager
 from redcell.feedback_attacker import (
     FEEDBACK_ATTACKER_PROMPT_V2,
@@ -24,7 +25,7 @@ from redcell.feedback_attacker import (
     feedback_strategy_digest,
 )
 from redcell.feedback_run import FeedbackRunOrchestrator
-from redcell.llm import ScriptedProvider
+from redcell.llm import LLMResponse, LLMToolCall, ScriptedProvider
 from redcell.orchestrator import RunExecutionRequest, RunFailedError
 from redcell.protocols.adapter import (
     AdapterCapabilities,
@@ -53,6 +54,8 @@ from redcell.scoring.level1 import Level1Scorer
 from redcell.storage.store import RunStore
 from redcell.strategies.library import DIRECT_INSTRUCTION_OVERRIDE
 from redcell.versions import FEEDBACK_EXPERIMENT_CONDITIONS_SCHEMA_VERSION
+
+from .test_arena_adapter import _NativeProvider
 
 _POLICY = SUPPORT_AGENT_POLICY
 _STRATEGY = DIRECT_INSTRUCTION_OVERRIDE
@@ -128,6 +131,15 @@ def _run(
         experiment_conditions=conditions,
         strategy_ids=[strategy.id],
     )
+
+
+def _native_v2_run(tool_schema_sha256: str = "a" * 64) -> Run:
+    payload = _run().model_dump(mode="json")
+    arena = payload["experiment_conditions"]["arena"]
+    arena["tool_call_protocol_version"] = "native-function-calling-v2"
+    arena["tool_schema_sha256"] = tool_schema_sha256
+    payload["experiment_fingerprint"] = None
+    return Run.model_validate(payload)
 
 
 def _action(
@@ -259,6 +271,80 @@ async def _execute(run: Run, driver: FakeFeedbackDriver, target: FakeTarget, sto
         driver=driver,
         store=store,
     ).execute(RunExecutionRequest(run=run, strategies=[_STRATEGY], actor="customer_a"))
+
+
+@pytest.mark.parametrize(
+    ("protocol_mismatch", "expected_error"),
+    [
+        (True, "工具调用协议"),
+        (False, "工具声明摘要"),
+    ],
+)
+async def test_native_v2_feedback_preflight_rejects_adapter_drift_before_run_starts(
+    store: RunStore, protocol_mismatch: bool, expected_error: str
+) -> None:
+    class WrongSchemaTarget(FakeTarget):
+        @property
+        def tool_call_protocol_version(self) -> str:
+            return "native-function-calling-v2"
+
+        @property
+        def tool_schema_sha256(self) -> str:
+            return "b" * 64
+
+    run = _native_v2_run()
+    driver = FakeFeedbackDriver([])
+    target = FakeTarget([]) if protocol_mismatch else WrongSchemaTarget([])
+
+    with pytest.raises(ValueError, match=expected_error):
+        await _execute(run, driver, target, store)
+
+    assert store.get_run(run.id) is None
+    assert not driver.requests
+    assert not target.requests
+
+
+async def test_native_v2_feedback_run_records_invalid_calls_and_recovery(store: RunStore) -> None:
+    provider = _NativeProvider(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[LLMToolCall(id="bad", name="unknown_tool", arguments_json="{}")],
+                prompt_tokens=3,
+                completion_tokens=2,
+            ),
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    LLMToolCall(id="good", name="search_faq", arguments_json='{"topic":"refund"}')
+                ],
+                prompt_tokens=3,
+                completion_tokens=2,
+            ),
+            LLMResponse(content="Done.", prompt_tokens=3, completion_tokens=2),
+        ]
+    )
+    target = ArenaAdapter(provider, tool_call_protocol=ToolCallProtocol.NATIVE_V2)
+    driver = FakeFeedbackDriver(
+        [
+            _action("start_attempt", message="Help with refunds.", strategy_id=_STRATEGY.id),
+            _action("end_attempt"),
+            _action("stop_run"),
+        ]
+    )
+    run = _bind_components(_native_v2_run(target.tool_schema_sha256), driver, target)
+
+    result = await _execute(run, driver, target, store)
+
+    assert len(provider.requests) == 3
+    tool_replies = [message for message in provider.requests[1] if message.role is Role.TOOL]
+    assert [message.tool_call_id for message in tool_replies] == ["bad"]
+    output = result.attempts[0].turns[0].output
+    assert output.malformed_tool_calls == 1
+    assert [call.id for call in output.tool_calls] == ["good"]
+    assert driver.requests[1].observations.attempts[0].turns[0].malformed_tool_calls == 1
+    assert store.get_run(run.id).conditions_fingerprint_verified
+    assert store.attempts_for(run.id)[0].turns[0].output.malformed_tool_calls == 1
 
 
 async def test_rejected_attempted_action_can_inform_next_real_message(store: RunStore) -> None:

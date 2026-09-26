@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from redcell.arena.support_agent.arena import SUPPORT_AGENT_ARENA
 from redcell.arena.support_agent.codec import TOOL_CALL_CODEC_VERSION
 from redcell.feedback_attacker import feedback_strategy_digest
 from redcell.protocols.run import ExperimentConditions, Run
@@ -256,6 +257,23 @@ def test_v5_accepts_scripted_feedback_and_explicit_text_protocol() -> None:
     payload["arena"]["tool_call_protocol_version"] = TOOL_CALL_CODEC_VERSION
 
     ExperimentConditions.model_validate(payload).require_feedback()
+
+
+def test_v5_native_v2_binds_tool_interface_into_fingerprint() -> None:
+    payload = _feedback().model_dump(mode="json")
+    payload["arena"]["tool_call_protocol_version"] = "native-function-calling-v2"
+    payload["arena"]["tool_schema_sha256"] = SUPPORT_AGENT_ARENA.tool_schema_sha256
+
+    conditions = ExperimentConditions.model_validate(payload)
+    conditions.require_feedback()
+    assert conditions.fingerprint() != _feedback().fingerprint()
+    assert conditions.arena.tool_schema_sha256 == SUPPORT_AGENT_ARENA.tool_schema_sha256
+
+    payload["arena"]["tool_schema_sha256"] = "f" * 64
+    assert ExperimentConditions.model_validate(payload).fingerprint() != conditions.fingerprint()
+    payload["arena"].pop("tool_schema_sha256")
+    with pytest.raises(ValueError, match="tool_schema_sha256"):
+        ExperimentConditions.model_validate(payload)
 
 
 @pytest.mark.parametrize(

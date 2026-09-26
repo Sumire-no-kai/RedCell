@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from typer.testing import CliRunner
 
+from redcell.arena.support_agent.arena import SUPPORT_AGENT_ARENA
 from redcell.budget import BudgetLimit
 from redcell.cli import ExitCode, app
 from redcell.feedback_attacker import LLMFeedbackAttackAdapter
@@ -91,6 +92,25 @@ def test_offline_feedback_cli_persists_v5_run_and_decision_events(tmp_path: Path
     html = (tmp_path / "reports" / run.id / "report.html").read_text(encoding="utf-8")
     assert "M1-B development run" in html
     assert "Feedback stop reason" in html
+
+
+def test_offline_feedback_cli_accepts_native_v2_and_records_tool_schema(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [*_feedback_args(tmp_path), "--tool-call-protocol", "native-function-calling-v2"],
+    )
+
+    assert result.exit_code == ExitCode.CLEAN, result.output
+    with RunStore(_db(tmp_path)) as store:
+        run = store.list_runs()[0]
+        assert run.conditions_fingerprint_verified
+        assert run.experiment_conditions.arena.tool_call_protocol_version == (
+            "native-function-calling-v2"
+        )
+        assert run.experiment_conditions.arena.tool_schema_sha256 == (
+            SUPPORT_AGENT_ARENA.tool_schema_sha256
+        )
+        assert len(store.attempts_for(run.id)) == 1
 
 
 @pytest.mark.parametrize(

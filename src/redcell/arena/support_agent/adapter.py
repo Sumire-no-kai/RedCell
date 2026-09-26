@@ -13,6 +13,7 @@ import time
 
 from redcell._base import CostRecord
 from redcell.arena.definition import ArenaDefinition, ArenaTools
+from redcell.arena.execution import tool_schema_digest
 from redcell.arena.support_agent.codec import (
     NativeToolCallCodec,
     TextToolCallCodec,
@@ -150,6 +151,10 @@ class ArenaAdapter(TargetAdapter):
     def tool_call_protocol_version(self) -> str:
         return self._codec.version
 
+    @property
+    def tool_schema_sha256(self) -> str:
+        return tool_schema_digest(self._tool_specs)
+
     async def reset(self) -> None:
         self._tools.reset()
 
@@ -263,7 +268,10 @@ class ArenaAdapter(TargetAdapter):
             visible = decoded.visible
             # 跨轮累加:一轮里格式坏掉、下一轮改对了,两次尝试都要留痕。
             malformed_tool_calls += decoded.malformed
-            if not decoded.calls:
+            # v2 即使整批调用都不合接口,也必须逐个回 tool 消息,再让模型继续。
+            if not decoded.calls and (
+                self._codec.version != ToolCallProtocol.NATIVE_V2.value or not response.tool_calls
+            ):
                 break
 
             executed = self._execute(decoded.calls, actor=payload.actor)
