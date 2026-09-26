@@ -74,6 +74,18 @@ redcell run --attack-driver feedback --budget 2 --max-tokens 5000 \
 `--feedback-visibility` 默认 `response-only`；需要更详细的工具反馈时，显式选择上表列出的权限，
 实际可见内容仍受 Adapter 的采集能力限制。
 
+反馈 Run 可显式指定 `--tool-call-protocol native-function-calling-v2`，复用 Phase 0.5e 已实现的原生
+工具声明与结果回执。默认仍为 `native-function-calling-v1`，以保持已有开发运行的条件。v2 运行会把
+工具声明 SHA-256 写入实验条件与指纹；执行前核对 Adapter 的实际协议和工具声明摘要，避免声明
+变化后沿用旧指纹。当某轮返回的原生工具调用全部无效时，Adapter 会为每个调用 ID 准备错误回执；
+若迭代上限与共用预算允许下一次 Provider 调用，目标模型便能在同一轮看到错误并修正。
+离线验证命令可加上：
+
+```bash
+redcell run --attack-driver feedback --tool-call-protocol native-function-calling-v2 \
+  --budget 2 --max-tokens 5000 --max-decision-steps 6 --max-turns-per-attempt 2 --seed 0
+```
+
 每次决策和 Target 调用前记录请求，选择与已完成轮次继续追加事件；完成的 Attempt、Finding、Run
 状态和事件原子落盘。后端拦下的违规调用仍可成为下一步反馈，不自动结束当前会话；明确的结束出口包括
 驱动器结束、确定性实际影响、Token/Attempt/步数/轮数上限和运行故障。未知用量或无法判定的执行失败

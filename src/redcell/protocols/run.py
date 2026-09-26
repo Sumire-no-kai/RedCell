@@ -377,8 +377,14 @@ class ExperimentConditions(RedCellModel):
         if not has_protocol_identity and protocol is not None:
             raise ValueError(f"只有 v4/v5 实验条件可以记录工具调用协议;实际为 {schema}")
         if schema == FEEDBACK_EXPERIMENT_CONDITIONS_SCHEMA_VERSION:
-            if protocol not in {"text-tool-call-codec-v2", "native-function-calling-v1"}:
-                raise ValueError("反馈驱动 Run 必须显式选择 text-v2 或 native-v1 工具调用协议")
+            if protocol not in {
+                "text-tool-call-codec-v2",
+                "native-function-calling-v1",
+                "native-function-calling-v2",
+            }:
+                raise ValueError(
+                    "反馈驱动 Run 必须显式选择 text-v2、native-v1 或 native-v2 工具调用协议"
+                )
             if self.feedback is None:
                 raise ValueError("v5 反馈驱动 Run 必须记录 feedback 配置")
             if any(

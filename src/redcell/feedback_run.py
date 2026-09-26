@@ -114,6 +114,11 @@ class FeedbackRunOrchestrator:
             or config.stop_policy_version != FEEDBACK_STOP_POLICY_V1
         ):
             raise ValueError("Feedback Run 的版本身份与当前执行器不一致")
+        if conditions.arena.tool_call_protocol_version == "native-function-calling-v2":
+            if self._adapter.tool_call_protocol_version != "native-function-calling-v2":
+                raise ValueError("Feedback Run 的原生 v2 工具调用协议与 Target Adapter 不一致")
+            if self._adapter.tool_schema_sha256 != conditions.arena.tool_schema_sha256:
+                raise ValueError("Feedback Run 的工具声明摘要与 Target Adapter 不一致")
         visibility = AttackerVisibility(config.observation_visibility)
         if run.status is not RunStatus.PENDING or self._store.get_run(run.id) is not None:
             raise ValueError("Feedback Run 必须使用尚未落盘的新 Run ID")

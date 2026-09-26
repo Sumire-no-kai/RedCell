@@ -28,6 +28,7 @@ from redcell.arena.support_agent.codec import (
     NativeToolCallCodec,
     ToolCallProtocol,
 )
+from redcell.budget import BudgetLimit, CallBudgetExhaustedError
 from redcell.cli import ExitCode, _experiment_conditions, app
 from redcell.controls import UTILITY_CONTEXT_VERSION, ControlsReport, controls_conditions
 from redcell.gate_analysis import SeedPlan
@@ -156,6 +157,104 @@ async def test_v2_does_not_execute_invalid_calls_but_answers_every_call_id() -> 
     assert result.malformed_tool_calls == 2
     assert result.side_effects == []
     assert adapter.tool_call_protocol_version == V2.value
+    assert adapter.tool_schema_sha256 == tool_schema_digest(adapter.tools.specs())
+
+
+async def test_v2_all_invalid_calls_get_replies_before_a_same_turn_recovery() -> None:
+    provider = _NativeProvider(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    _native("c1", "delete_everything", {}),
+                    _native("c2", "issue_refund", {"order_id": "ORD-1001"}),
+                    _native("c3", "search_faq", "not-json"),
+                ],
+                prompt_tokens=11,
+                completion_tokens=3,
+            ),
+            LLMResponse(
+                content="",
+                tool_calls=[_native("c4", "search_faq", {"topic": "refund"})],
+                prompt_tokens=13,
+                completion_tokens=5,
+            ),
+            LLMResponse(content="Done.", prompt_tokens=17, completion_tokens=7),
+        ]
+    )
+    adapter = ArenaAdapter(provider, tool_call_protocol=V2)
+
+    result = await adapter.send(
+        AdapterInput(messages=[Message(role=Role.USER, content="hi")], actor="customer_a")
+    )
+
+    assert len(provider.requests) == 3
+    first_followup = provider.requests[1]
+    assistant = next(message for message in first_followup if message.tool_calls)
+    replies = [message for message in first_followup if message.role is Role.TOOL]
+    assert [call.id for call in assistant.tool_calls] == ["c1", "c2", "c3"]
+    assert [reply.tool_call_id for reply in replies] == ["c1", "c2", "c3"]
+    assert [json.loads(reply.content)["status"] for reply in replies] == [
+        "invalid_call",
+        "invalid_arguments",
+        "invalid_arguments",
+    ]
+    assert [message.role for message in first_followup].count(Role.USER) == 1
+    assert [call.id for call in result.tool_calls] == ["c4"]
+    assert [tool_result.tool_call_id for tool_result in result.tool_results] == ["c4"]
+    assert adapter.tools.calls == [("search_faq", {"topic": "refund"})]
+    assert result.malformed_tool_calls == 3
+    assert result.assistant_message == "Done."
+    assert result.trace_metadata.prompt_tokens == 41
+    assert result.trace_metadata.completion_tokens == 15
+
+
+async def test_v2_all_invalid_calls_respect_iteration_and_budget_stops() -> None:
+    invalid = LLMResponse(
+        content="",
+        tool_calls=[_native("c1", "delete_everything", {})],
+        prompt_tokens=11,
+        completion_tokens=3,
+    )
+    payload = AdapterInput(messages=[Message(role=Role.USER, content="hi")], actor="customer_a")
+
+    capped_provider = _NativeProvider([invalid])
+    capped = await ArenaAdapter(capped_provider, tool_call_protocol=V2, max_tool_iterations=1).send(
+        payload
+    )
+    assert len(capped_provider.requests) == 1
+    assert capped.malformed_tool_calls == 1
+    assert capped.tool_calls == []
+
+    guarded_provider = _NativeProvider([invalid])
+    seen_tokens = []
+
+    def guard(usage):
+        seen_tokens.append(usage.total_tokens)
+        if usage.total_tokens >= 14:
+            raise CallBudgetExhaustedError(BudgetLimit.TOKENS, usage)
+
+    guarded = await ArenaAdapter(guarded_provider, tool_call_protocol=V2).send_with_budget(
+        payload, guard
+    )
+    assert len(guarded_provider.requests) == 1
+    assert seen_tokens == [0, 14]
+    assert guarded.trace_metadata.total_tokens == 14
+    assert guarded.malformed_tool_calls == 1
+    assert guarded.tool_calls == []
+
+
+async def test_v1_all_malformed_calls_keep_the_frozen_single_request_behavior() -> None:
+    provider = _NativeProvider(
+        [LLMResponse(content="", tool_calls=[_native("c1", "search_faq", "not-json")])]
+    )
+    result = await ArenaAdapter(provider, tool_call_protocol=ToolCallProtocol.NATIVE_V1).send(
+        AdapterInput(messages=[Message(role=Role.USER, content="hi")], actor="customer_a")
+    )
+
+    assert len(provider.requests) == 1
+    assert result.tool_calls == []
+    assert result.malformed_tool_calls == 1
 
 
 def test_v2_followup_rejects_results_that_do_not_match_the_calls() -> None:
