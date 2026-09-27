@@ -28,6 +28,7 @@ from redcell.feedback_attacker import (
     FeedbackAttackDriver,
     FeedbackAttackRequest,
     FeedbackAttackSelection,
+    LLMFeedbackAttackAdapter,
 )
 from redcell.llm.base import LLMMessage, LLMProvider, LLMResponse, LLMToolCall
 from redcell.protocols.adapter import (
@@ -459,6 +460,38 @@ class DriftProvider(LLMProvider):
             completion_tokens=1,
             cost_usd=0.001,
         )
+
+
+def test_attacker_drift_before_repair_preserves_known_usage(tmp_path) -> None:
+    path = tmp_path / "attacker-drift.jsonl"
+    target_settings, attacker_settings = _settings()
+    provider = DriftProvider()
+    audited = smoke.AuditedProvider(
+        provider, role="attacker", expected_model="fake-model", max_requests=6
+    )
+    target = FakeTarget()
+    stop = asyncio.run(
+        run_smoke(
+            driver=LLMFeedbackAttackAdapter(provider=audited, model="fake-model"),
+            adapter=target,
+            path=path,
+            target_settings=target_settings,
+            attacker_settings=attacker_settings,
+            utility_fingerprint="frozen-test",
+            max_total_tokens=1000,
+            max_cost_usd=1.0,
+            max_seconds=60.0,
+            audited_providers=(audited,),
+        )
+    )
+    assert stop == "provider_model_drift"
+    assert provider.requests == 1
+    assert target.requests == []
+    usage = _events(path)[-1]["usage"]
+    assert usage["usage_known"] is True
+    assert usage["prompt_tokens"] == 2
+    assert usage["completion_tokens"] == 1
+    assert usage["usd"] == 0.001
 
 
 def test_actual_model_drift_blocks_next_provider_request(tmp_path) -> None:

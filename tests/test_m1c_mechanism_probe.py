@@ -5,12 +5,15 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import sys
+from pathlib import Path
 
 import pytest
 import scripts.m1c_mechanism_probe as probe
 from scripts.m1c_mechanism_probe import TRIALS, build_request, run_probe, verify_pairs
 
 from redcell.attacker_observation import AttackerVisibility
+from redcell.config import AttackerSettings
 from redcell.llm import ScriptedProvider
 from redcell.llm.base import LLMMessage, LLMProvider, LLMResponse, LLMToolDefinition
 
@@ -254,8 +257,96 @@ async def test_probe_rejects_non_finite_or_zero_budget_before_provider_call(
 
 def test_probe_rejects_tampered_frozen_utility_file(tmp_path, monkeypatch) -> None:
     changed = tmp_path / "baseline.json"
-    changed.write_bytes(probe.BASELINE_PATH.read_bytes() + b"\n")
+    original = b'{"context_fingerprint": "test-frozen-context"}'
+    changed.write_bytes(original + b"\n")
     monkeypatch.setattr(probe, "BASELINE_PATH", changed)
+    monkeypatch.setattr(probe, "FROZEN_BASELINE_SHA256", hashlib.sha256(original).hexdigest())
 
     with pytest.raises(ValueError, match="Frozen utility baseline file changed"):
         probe._check_utility_precondition()
+
+
+def _settings() -> AttackerSettings:
+    return AttackerSettings(
+        provider="fake",
+        base_url="https://example.invalid/v1",
+        api_key="fake-test-key",
+        model="test-model",
+        max_tokens=512,
+        input_usd_per_mtok=0.1,
+        output_usd_per_mtok=0.5,
+        cached_input_usd_per_mtok=0.01,
+    )
+
+
+def test_probe_identity_binds_source_timeout_and_budget(monkeypatch) -> None:
+    source = {"git_head": "test", "working_tree_dirty": False, "script_sha256": "test"}
+    monkeypatch.setattr(probe, "_source_identity", lambda: source)
+    settings = _settings()
+
+    def digest(settings=settings, **overrides):
+        bounds = {"max_tokens": 24000, "max_cost": 0.05, "max_seconds": 1200}
+        return probe._configuration_digest(settings, **(bounds | overrides))
+
+    original = digest()
+    assert digest(settings.model_copy(update={"request_timeout_seconds": 30})) != original
+    assert digest(max_tokens=24001) != original
+    assert digest(max_cost=0.06) != original
+    assert digest(max_seconds=1201) != original
+    source["git_head"] = "changed"
+    assert digest() != original
+
+
+def test_pair_output_rejects_symlinked_runs(tmp_path, monkeypatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (repo / "runs").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(probe, "REPO_ROOT", repo)
+    with pytest.raises(ValueError, match="symlink"):
+        probe._ignored_output_path(repo / "runs/probe.jsonl")
+
+
+def test_pair_online_rejects_dirty_source_without_provider_calls(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(probe, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(probe, "_check_utility_precondition", lambda: "test")
+    monkeypatch.setattr(
+        probe,
+        "_source_identity",
+        lambda: {"git_head": "test", "working_tree_dirty": True, "script_sha256": "test"},
+    )
+    settings = _settings()
+    monkeypatch.setattr(probe, "AttackerSettings", lambda: settings)
+    monkeypatch.setattr(
+        probe,
+        "_run_online",
+        lambda *args: (_ for _ in ()).throw(AssertionError("online path called")),
+    )
+    approved = probe._configuration_digest(
+        settings, max_tokens=24000, max_cost=0.05, max_seconds=1200
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "m1c_mechanism_probe.py",
+            "--online",
+            "--out",
+            "runs/dirty.jsonl",
+            "--budget",
+            "8",
+            "--max-tokens",
+            "24000",
+            "--max-cost",
+            "0.05",
+            "--max-seconds",
+            "1200",
+            "--attacker-config-sha256",
+            approved,
+        ],
+    )
+    with pytest.raises(SystemExit, match="2"):
+        probe.main()
+    assert not Path("runs/dirty.jsonl").exists()

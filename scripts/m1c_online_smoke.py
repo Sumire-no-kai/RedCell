@@ -179,6 +179,11 @@ class AuditedProvider(LLMProvider):
             role=self.role,
             request_index=index,
             response=response.model_dump(mode="json", exclude={"raw"}),
+            response_metadata={
+                key: response.raw[key]
+                for key in ("finish_reason", "usage", "usage_accounting", "pricing")
+                if key in response.raw
+            },
             requested_model=self.expected_model,
             model_drifted=self.model_drifted,
             usage_indeterminate=self.usage_indeterminate,
@@ -400,6 +405,16 @@ async def run_smoke(
         if reached is not None:
             raise CallBudgetExhaustedError(reached, local)
 
+    def attacker_guard(local: CostRecord) -> None:
+        if any(audit.model_drifted for audit in audited_providers):
+            # Reject before parsing/repair, preserving the completed call's known cost.
+            raise FeedbackAttackDecisionError(
+                "Provider response model differs from request model",
+                cost=local,
+                usage_indeterminate=False,
+            )
+        guard(local)
+
     def record(role: str, cost: CostRecord) -> None:
         nonlocal total
         journal.write("usage", role=role, cost=cost.model_dump(mode="json"))
@@ -507,11 +522,13 @@ async def run_smoke(
             )
             decisions += 1
             try:
-                selection = await driver.decide_with_budget(request, guard)
+                selection = await driver.decide_with_budget(request, attacker_guard)
             except (FeedbackAttackDecisionError, CallBudgetExhaustedError) as exc:
                 record("attacker", exc.cost)
                 stop = (
-                    exc.limit.value
+                    "provider_model_drift"
+                    if any(audit.model_drifted for audit in audited_providers)
+                    else exc.limit.value
                     if isinstance(exc, CallBudgetExhaustedError)
                     else "attacker_decision_failed"
                 )

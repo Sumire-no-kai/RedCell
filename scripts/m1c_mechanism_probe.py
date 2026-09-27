@@ -205,11 +205,27 @@ def _digest(payload: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _configuration_digest(settings: AttackerSettings) -> str:
-    return _digest(json.dumps(settings.run_configuration().model_dump(mode="json"), sort_keys=True))
+def _configuration_digest(
+    settings: AttackerSettings, *, max_tokens: int, max_cost: float, max_seconds: float
+) -> str:
+    payload = {
+        "probe_version": PROBE_VERSION,
+        "source": _source_identity(),
+        "attacker": settings.run_configuration().model_dump(mode="json"),
+        "request_timeout_seconds": settings.request_timeout_seconds,
+        "temperature": 0.0,
+        "max_output_tokens": MAX_OUTPUT_TOKENS,
+        "max_total_tokens": max_tokens,
+        "max_cost_usd": max_cost,
+        "max_seconds": max_seconds,
+        "utility_context": FROZEN_UTILITY_CONTEXT,
+        "utility_baseline_sha256": FROZEN_BASELINE_SHA256,
+        "requests": [(trial.label, build_request(trial).digest()) for trial in TRIALS],
+    }
+    return _digest(json.dumps(payload, sort_keys=True))
 
 
-def _git_commit() -> str:
+def _source_identity() -> dict:
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=REPO_ROOT,
@@ -217,7 +233,28 @@ def _git_commit() -> str:
         text=True,
         check=True,
     )
-    return result.stdout.strip()
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return {
+        "git_head": result.stdout.strip(),
+        "working_tree_dirty": bool(status.strip()),
+        "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+    }
+
+
+def _ignored_output_path(path: Path) -> Path:
+    runs = REPO_ROOT / "runs"
+    if runs.is_symlink():
+        raise ValueError("The ignored runs/ directory must not be a symlink")
+    resolved = path.resolve()
+    if resolved.parent != runs.resolve() or resolved.suffix != ".jsonl":
+        raise ValueError("--out must be a new .jsonl file directly under ignored runs/")
+    return resolved
 
 
 def _add_cost(total: CostRecord, local: CostRecord) -> CostRecord:
@@ -310,6 +347,11 @@ class AuditedProvider(LLMProvider):
                 "response_model": response.model,
                 "response_sha256": _digest(response.content),
                 "response_content": response.content,
+                "response_metadata": {
+                    key: response.raw[key]
+                    for key in ("finish_reason", "usage", "usage_accounting", "pricing")
+                    if key in response.raw
+                },
                 "prompt_tokens": response.prompt_tokens,
                 "completion_tokens": response.completion_tokens,
                 "cached_input_tokens": response.cached_input_tokens,
@@ -336,6 +378,8 @@ async def run_probe(
     utility_context: str | None = None,
     attacker_configuration: dict | None = None,
     git_commit: str | None = None,
+    approved_configuration_sha256: str | None = None,
+    request_timeout_seconds: float | None = None,
 ) -> dict:
     """Execute the frozen eight slots once; never retry or top up based on their results."""
     if (
@@ -371,11 +415,8 @@ async def run_probe(
                 "git_commit": git_commit,
                 "utility_context": utility_context,
                 "attacker_configuration": attacker_configuration,
-                "attacker_config_sha256": (
-                    _digest(json.dumps(attacker_configuration, sort_keys=True))
-                    if attacker_configuration is not None
-                    else None
-                ),
+                "attacker_config_sha256": approved_configuration_sha256,
+                "request_timeout_seconds": request_timeout_seconds,
                 "attacker_prompt_version": FEEDBACK_ATTACKER_PROMPT_V2,
                 "attacker_schema_version": FEEDBACK_ATTACKER_SCHEMA_V2,
                 "observation_policy_version": ATTACKER_OBSERVATION_POLICY_V2,
@@ -513,6 +554,8 @@ async def _run_online(
             utility_context=utility_context,
             attacker_configuration=attacker.run_configuration().model_dump(mode="json"),
             git_commit=git_commit,
+            approved_configuration_sha256=args.attacker_config_sha256,
+            request_timeout_seconds=attacker.request_timeout_seconds,
         )
     finally:
         await provider.aclose()
@@ -552,7 +595,7 @@ def main() -> int:
     parser.add_argument("--max-seconds", type=float, required=True, help="Wall time limit")
     parser.add_argument(
         "--attacker-config-sha256",
-        help="Frozen non-secret attacker configuration digest; required online",
+        help="Frozen probe identity including source, config and bounds; required online",
     )
     args = parser.parse_args()
     if args.budget != len(TRIALS):
@@ -565,11 +608,10 @@ def main() -> int:
         or args.max_seconds <= 0
     ):
         parser.error("Token, estimated cost and wall time limits must be positive")
-    runs_dir = (REPO_ROOT / "runs").resolve()
-    if not args.out.resolve().is_relative_to(runs_dir):
-        parser.error("--out must be under the repository's ignored runs/ directory")
-
     try:
+        args.out = _ignored_output_path(args.out)
+        if args.out.exists():
+            raise ValueError("Evidence file already exists; choose a new path")
         verify_pairs()
         utility_context = _check_utility_precondition()
         attacker = AttackerSettings()
@@ -586,13 +628,21 @@ def main() -> int:
             )
         ):
             raise ValueError("Attacker pricing is required for the estimated cost limit")
-        config_digest = _configuration_digest(attacker)
-        git_commit = _git_commit()
+        config_digest = _configuration_digest(
+            attacker,
+            max_tokens=args.max_tokens,
+            max_cost=args.max_cost,
+            max_seconds=args.max_seconds,
+        )
+        source = _source_identity()
+        git_commit = source["git_head"]
     except (OSError, KeyError, ValueError) as exc:
         parser.exit(2, f"Probe preflight failed: {type(exc).__name__}\n")
 
     if args.online and args.attacker_config_sha256 != config_digest:
         parser.error("--attacker-config-sha256 must match the current dry-run identity")
+    if args.online and source["working_tree_dirty"]:
+        parser.error("Commit repository changes before a frozen online probe")
 
     if not args.online:
         print(
@@ -604,6 +654,9 @@ def main() -> int:
                     "attacker_model": attacker.model,
                     "attacker_config_sha256": config_digest,
                     "git_commit": git_commit,
+                    "source": source,
+                    "request_timeout_seconds": attacker.request_timeout_seconds,
+                    "out": str(args.out),
                     "max_tokens_parameter": attacker.max_tokens_parameter,
                     "extra_body": attacker.extra_body.model_dump(exclude_none=True),
                     "temperature": 0.0,
