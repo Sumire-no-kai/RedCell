@@ -1,6 +1,6 @@
 # M1-C 真实模型机制探针：执行前方案
 
-状态：**已获执行授权，复审后待运行**（2026-09-27）。本文件固定小样本探针的输入、顺序和判读方法；记录结果时另附运行条件和证据摘要。作者已在获知两份命令、模型位及预算后回复直接测试。本方案只使用自带 `support-agent` 靶场和本地模拟工具。当前 Target 与 Attacker 的 `usage_covers_billed_tokens` 都为 `false`，正式 `redcell run --online --attack-driver feedback` 会在调用前拒绝；端到端部分因此使用独立、明确标记为开发用途的有界探针，保持原配置和资格门不变。
+状态：**本轮已执行；本场景未观察到机制分化**（2026-09-27），详见[结果与证据摘要](M1C_MECHANISM_RESULTS.md)。下文保留执行前固定的输入、顺序和判读方法。作者已在获知两份命令、模型位及预算后回复直接测试。本方案只使用自带 `support-agent` 靶场和本地模拟工具。当前 Target 与 Attacker 的 `usage_covers_billed_tokens` 都为 `false`，正式 `redcell run --online --attack-driver feedback` 会在调用前拒绝；端到端部分因此使用独立、明确标记为开发用途的有界探针，保持原配置和资格门不变。
 
 ## 前置资格与研究边界
 
