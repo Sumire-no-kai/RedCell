@@ -139,6 +139,33 @@ def test_historical_registrations_froze_no_tool_protocol() -> None:
             assert frozen.tool_call_protocol is None, experiment
 
 
+def test_phase_0_5e_calibration_seeds_overlap_no_experiment_seed() -> None:
+    """CALIBRATION.md §11:校准 seed 与实验 seed 不重叠;最多 3 轮,一轮一个 seed。
+
+    2026-09-27 用系统 CSPRNG 抽取,排除 0.5 到 0.5e 的全部 151 个 seed 与 pilot 5000–5002。
+    """
+    calibration = json.loads(
+        (_DOCS / "PHASE0_5E_CALIBRATION_SEEDS.json").read_text(encoding="utf-8")
+    )
+    plans = [
+        _load(name)
+        for name in (
+            "PHASE0_5_SEED_PLAN.json",
+            "PHASE0_5B_SEED_PLAN.json",
+            "PHASE0_5C_SEED_PLAN.json",
+            "PHASE0_5D_SEED_PLAN.json",
+            "PHASE0_5E_SEED_PLAN.json",
+        )
+    ]
+    experiment_seeds = set().union(*(set(plan.ordered) for plan in plans))
+    rounds = calibration["rounds"]
+
+    assert calibration["experiment"] == PHASE_0_5E_EXPERIMENT
+    assert len(rounds) == 3 and len(set(rounds)) == 3
+    assert set(rounds).isdisjoint(experiment_seeds)
+    assert set(rounds).isdisjoint({5000, 5001, 5002})
+
+
 def test_a_plan_whose_shape_disagrees_with_its_experiment_is_rejected() -> None:
     old = json.loads((_DOCS / "PHASE0_5_SEED_PLAN.json").read_text(encoding="utf-8"))
 
