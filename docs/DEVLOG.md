@@ -43,6 +43,24 @@
 - **最终核对:** 执行后只增加结果文档和日志，运行代码未再修改；`git diff --check` 通过，原始证据仍被忽略，未跟踪内部文件或密钥。无需为纯文档更新重跑已通过的全套测试。
 - **剩余状态:** 用户要求的完整复审、修复、获准付费测试和日志同步 DONE；PR 待审阅，M1-C 机制未获本场景支持，M1-D 未启动。
 
+### 2026-09-27 11:12 AEST · Step 07 · 0.5e 校准运行手册;更正"可以开跑"的说法
+
+- **作者指示:** 写好本轮校准的详细要求并同步远端,Windows 拉下来跑;确认能否开跑;校准 seed、独立数据库怎么处理与同步。
+- **更正:** 昨日 Step 06 之后我口头说"前置条件都齐了"。核对代码后发现**不对**:`run --online` 创建 Run 时调用
+  `ExperimentConditions.require_phase_0_5`,在线 Run 要求 Target 与 Attacker 的 `usage_covers_billed_tokens` 都为
+  `True`,两者现在都是 `false`,命令会在碰到 Provider 之前被拒绝。此前的 controls、positive-control、attacker-control
+  不走这条校验,所以能跑。**账单对账因此是校准的前置门,不只是 Gate 的。**
+- **交付:**
+  - `docs/PHASE0_5E_CALIBRATION_RUNBOOK.md`:只定义操作(冻结条件、前置门、账单对账流程、Windows 命令、恢复、
+    耗时与费用估算、§12 记录清单、禁止事项)。§9 判读、§10 旋钮、§11 路线选择都留给作者。
+  - `docs/PHASE0_5E_CALIBRATION_SEEDS.json`:三轮校准 seed,11:12 之前用系统 CSPRNG 抽取,排除 0.5 至 0.5e 的
+    151 个 seed 与 pilot;`tests/test_seed_plans.py` 新增一条测试锁住不重叠。
+  - 独立数据库无需现在建:`--db sqlite:///runs/phase-0-5e-calibration.db` 首次运行自动创建,与正式库、开发库分开。
+- **同步方式:** 代码与文档经 git(本 PR 合并后 Windows `git pull`);`.env` 不在 git 里,由作者经受信任渠道同步,
+  手册 §5.1 列出要核对的键;校准数据库与产物留在运行主机,结论按 §12 写进 DEVLOG。
+- **不在本手册里的:** 任何关于旋钮或难度的建议。本方不运行、不判读校准。
+- **剩余状态:** 校准 BLOCKED(等 Target / Attacker 账单对账并把覆盖改为 true);手册 READY。
+
 ## 2026-09-26 · M1-C 真实模型机制探针
 
 ### 2026-09-26 13:59 AEST · Step 01 · 启动与正常任务前置核对
