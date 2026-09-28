@@ -81,6 +81,20 @@
   Attacker 也是 3。建议 3。定了以后:改 `.env`(两台)→ 重跑对照 → 填证据的两个上限 → preflight 三角色全绿。
 - **剩余状态:** Controller 对账 DONE;运行上限与对照重跑 PENDING(作者决定)。
 
+### 2026-09-28 15:14 AEST · Step 05 · Controller 并发上限定为 3;对照重跑;三角色计费证据全绿
+
+- **作者决定:** 并发上限 3(API 支持的话可以更多)。说明:Controller 的实际峰值由矩阵调度器决定(默认同时 3 格、每格串行调
+  Controller),给更高也用不上;真正的吞吐瓶颈在 Target 的并发 1 与未定的 RPM,那要按手册先做有上限的 RPM 探测再定。
+- **进度:** Mac `.env` 备份为 `.env.bak-2026-09-28-pre-controller-concurrency` 后 `REDCELL_CONTROLLER_MAX_CONCURRENCY=3`。
+  作者授权后重跑 `controller-controls`:05:13:20–05:13:34 UTC,**PASSED** 12/12、一次通过 12/12、用量可知 12/12;
+  12 次请求,prompt 1,622 + completion 673 = 2,295 token,估算 $0.00129;快照 `max_concurrency=3` 与 `.env` 一致。
+  产物 `runs/controller-contract-controls-deepseek-flash-v1-2026-09-28b.json`(忽略)—— 这份是 0.5e 的 Controller 对照,
+  9 月 25 日与今日 05:02 的两份因快照并发为 0 而作废,保留作记录。
+- **证据:** `runs/phase-0-5e/billing-evidence.json` 三条记录全部 `passed`,`billing_evidence_failures` 对当前 `.env` 三个角色
+  **为空**;bundle digest `e1e18774…`。preflight 的计费项从此可以全绿;文件留在本机,与 0.5d 的做法相同。
+- **Windows `.env` 需同步:** 三个覆盖开关 `true`;Controller = DeepSeek、并发 3、key。
+- **剩余状态:** 三角色账单对账 DONE;校准 READY(Windows);Target RPM 探测 TODO(校准后、矩阵前)。
+
 ## 2026-09-27 · M1-C 完整复审与真实模型测试
 
 ### 2026-09-27 10:30 AEST · Step 01 · 作者授权与重新审计
