@@ -44,6 +44,22 @@
   DeepSeek 账单对比。
 - **剩余状态:** 校准 READY(Windows 执行);Controller 对账 TODO(矩阵前)。
 
+### 2026-09-28 15:01 AEST · Step 03 · `controller-controls` 报告记录 Provider 用量
+
+- **作者指示:** 先改代码,跑付费对照之前再问。
+- **改动(分支 `feat/controller-controls-usage`):** `ControllerContractReport` 新增可选的 `usage`:起止时间(UTC)、
+  Provider 请求数(一次 repair 算第二次)、prompt / completion / cached token、估算美元、`usage_known`。数字只从各次
+  `ControllerInvocation.cost` 汇总,失败的 Invocation 也计入;**不参与判定**,12 个 outcome 的合格规则不变。CLI 在
+  PASSED / FAILED 之后打印这一行。旧报告没有 `usage`,照常可读(9 月 25 日的 DeepSeek 报告实测可加载)。
+- **为什么:** 对账需要 RedCell 侧的用量数字与厂商账单比。此前这份报告不记 token;会记用量的 `run --search llm` 又要求
+  Controller 覆盖已为 true 才能启动。加在这里最小,且对照本来就是矩阵前必跑的一步。
+- **验证:** 新增 3 条测试(12 次成功 → 12 请求、token 逐次相加;一次 repair → 13 请求;无 `usage` 的旧报告可读)。
+  全集通过;`ruff check`、`ruff format --check`、`black --check`、`git diff --check` 通过。没有 Provider 调用。
+- **下一步(待作者授权):** 跑一次 `controller-controls`(12 用例,约 $0.01),记下 UTC 起止时间;等 DeepSeek 控制台
+  (GMT+10,5 分钟延迟)刷新后,按 key 筛选读当天 `deepseek-flash` 的请求数与 token,与报告的 `usage` 比对;一致则填
+  证据文件第三条并把 Controller 覆盖开关改为 true。
+- **剩余状态:** 代码 DONE;付费对照等作者一句话。
+
 ## 2026-09-27 · M1-C 完整复审与真实模型测试
 
 ### 2026-09-27 10:30 AEST · Step 01 · 作者授权与重新审计
