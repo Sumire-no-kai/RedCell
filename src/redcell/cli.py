@@ -1737,6 +1737,17 @@ def controller_controls(
     out.write_text(report.model_dump_json(indent=2), encoding="utf-8")
     typer.echo(f"Controller controls: {out}")
     typer.echo("PASSED" if report.passed else "FAILED")
+    usage = report.usage
+    if usage is not None:
+        window = (
+            f"{usage.started_at:%Y-%m-%dT%H:%M:%SZ} → {usage.finished_at:%Y-%m-%dT%H:%M:%SZ} UTC"
+        )
+        typer.echo(
+            f"用量 {window}:{usage.requests} 次请求,prompt {usage.prompt_tokens} + "
+            f"completion {usage.completion_tokens} = {usage.total_tokens} token"
+            f"(cached {usage.cached_input_tokens}),估算 ${usage.cost_usd:.5f}"
+            + ("" if usage.usage_known else ";⚠️ 有 Invocation 的 usage 未知,数字只是下界")
+        )
     if not report.passed:
         raise typer.Exit(ExitCode.BAD_CONFIG)
 

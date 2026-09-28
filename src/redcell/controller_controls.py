@@ -7,6 +7,11 @@ defined Controller role under the frozen output contract.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
+from pydantic import Field
+
+from redcell._base import CostRecord
 from redcell.controller import (
     ControllerBudgetView,
     ControllerDriver,
@@ -33,10 +38,36 @@ class ControllerContractOutcome(RedCellModel):
     detail: str | None = None
 
 
+class ControllerContractUsage(RedCellModel):
+    """12 个用例实际消耗的 Provider 资源,只从各次 Invocation 的 `cost` 汇总(2026-09-28)。⭐
+
+    它不参与判定,判定仍只看 12 个 outcome。加它是为了账单对账:此前这份报告不记 token,
+    RedCell 侧没有任何数字能与 Controller 厂商的账单比 —— 而会记用量的 `run --search llm`
+    又要求 Controller 的计费覆盖已经为 true 才能启动。`requests` 是发给 Provider 的 HTTP 请求数
+    (一次 repair 算第二次),不是用例数。
+    """
+
+    started_at: datetime
+    finished_at: datetime
+    requests: int = Field(ge=0)
+    prompt_tokens: int = Field(ge=0)
+    completion_tokens: int = Field(ge=0)
+    cached_input_tokens: int = Field(ge=0)
+    cost_usd: float = Field(ge=0.0)
+    usage_known: bool
+    """所有 Invocation 的 usage 都可审计;任一未知则为 False,此时数字只是下界。"""
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
+
+
 class ControllerContractReport(RedCellModel):
     policy_version: str = "controller-contract-controls-v1"
     outcomes: list[ControllerContractOutcome]
     controller: ControllerRunConfiguration | None = None
+    usage: ControllerContractUsage | None = None
+    """2026-09-28 起记录;更早的报告没有这一项,照常可读。"""
 
     @property
     def successful_count(self) -> int:
@@ -107,10 +138,31 @@ async def run_controller_contract_controls(
     controller: ControllerRunConfiguration | None = None,
 ) -> ControllerContractReport:
     outcomes: list[ControllerContractOutcome] = []
+    started_at = datetime.now(UTC)
+    requests = 0
+    total = CostRecord()
+    usage_known = True
+
+    def _account(invocation) -> None:
+        nonlocal requests, total, usage_known
+        if invocation is None:
+            return
+        # retry_index 1 = 经过一次 repair,即两次 Provider 请求。
+        requests += invocation.retry_index + 1
+        cost = invocation.cost
+        total = CostRecord(
+            prompt_tokens=total.prompt_tokens + cost.prompt_tokens,
+            completion_tokens=total.completion_tokens + cost.completion_tokens,
+            cached_input_tokens=total.cached_input_tokens + cost.cached_input_tokens,
+            usd=total.usd + cost.usd,
+        )
+        usage_known = usage_known and invocation.usage_status is UsageStatus.KNOWN
+
     for case in controller_contract_cases():
         try:
             selection = await driver.select(case.evidence)
         except ControllerSelectionError as exc:
+            _account(exc.invocation)
             outcomes.append(
                 ControllerContractOutcome(
                     id=case.id,
@@ -123,6 +175,7 @@ async def run_controller_contract_controls(
             )
             continue
         invocation = selection.invocation
+        _account(invocation)
         known_usage = invocation is not None and invocation.usage_status is UsageStatus.KNOWN
         outcomes.append(
             ControllerContractOutcome(
@@ -138,4 +191,14 @@ async def run_controller_contract_controls(
                 repaired=selection.repaired,
             )
         )
-    return ControllerContractReport(outcomes=outcomes, controller=controller)
+    usage = ControllerContractUsage(
+        started_at=started_at,
+        finished_at=datetime.now(UTC),
+        requests=requests,
+        prompt_tokens=total.prompt_tokens,
+        completion_tokens=total.completion_tokens,
+        cached_input_tokens=total.cached_input_tokens,
+        cost_usd=total.usd,
+        usage_known=usage_known,
+    )
+    return ControllerContractReport(outcomes=outcomes, controller=controller, usage=usage)
