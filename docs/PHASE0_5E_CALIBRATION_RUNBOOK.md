@@ -47,7 +47,8 @@
 ## 4. 账单对账:开跑前必须过的那道门
 
 > **2026-09-28 更新:** Target 与 Attacker 已用已有运行记录与控制台账单逐窗口对上,下面第 2 步的已知调用不再需要;
-> 证据在运行主机的 `runs/phase-0-5e/billing-evidence.json`。Controller 仍按本节流程在矩阵前补。
+> 证据在运行主机的 `runs/phase-0-5e/billing-evidence.json`。Controller 也已对上(2026-09-28 Step 04);矩阵前还差
+> 把 Controller 并发上限改为正数并重跑一次 `controller-controls`,因为 billing evidence 要求上限 > 0 且与 `.env` 一致。
 
 `usage_covers_billed_tokens=true` 是运行时声明,不是证明;`gate_billing_evidence.py` 把人工复核的证据绑到
 非凭据的计费主体上。流程与 0.5d 相同,对象换成当前模型:
