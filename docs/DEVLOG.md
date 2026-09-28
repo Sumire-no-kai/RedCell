@@ -29,6 +29,21 @@
   的 12 次契约对照,混有其他 key 或用途;需要按 key 查看并配一批已知调用,矩阵前补。
 - **剩余状态:** 对账 DONE(Target、Attacker);`.env` 两个覆盖开关待作者确认后改为 true(Mac 与 Windows);Controller TODO。
 
+### 2026-09-28 14:51 AEST · Step 02 · 覆盖开关改为 true;校准前置门全部通过
+
+- **作者确认:** 同意把 Target 与 Attacker 的计费覆盖开关改为 true;授权开始校准(小的本机跑,大的交 Windows)。
+- **进度:** Mac `.env` 备份为 `.env.bak-2026-09-28-pre-coverage` 后,两项改为 `true`;其余不动。零成本验证:按 `run` 的
+  装配方式构造在线 static、native-v2 的 Phase 0.5 条件并调用 `require_phase_0_5`,通过 —— 校准命令不再会在碰到 Provider
+  之前被拒绝。Windows 的 `.env` 由作者同步同样两项,并把 Controller 一位改为 DeepSeek。
+- **本方不跑校准:** 校准的运行与判读此前两次被自动审批拦下(2026-09-25、26 日),不再尝试。运行指引即 master 上的
+  `docs/PHASE0_5E_CALIBRATION_RUNBOOK.md`,Windows 拉取后按 §5 执行;结果按 §12 记录,§9 判读由作者或 Codex 完成。
+- **Controller 对账为什么后补:** 校准用 `--search static`,静态选择器不创建、不调用 Controller,所以它不是校准的前置;
+  它是 `gate-preflight` 的前置(三个角色都查)。技术上还差一步:`controller-controls` 的报告不记录 token,没有 RedCell 侧
+  的用量可与 DeepSeek 账单比;而 `run --search llm` 又要求 Controller 覆盖已为 true 才能启动,形成循环。解法是给
+  `controller-controls` 报告加上用量汇总(基础设施改动),再跑一次 12 用例对照(约 $0.01,需作者授权)与按 key 筛选的
+  DeepSeek 账单对比。
+- **剩余状态:** 校准 READY(Windows 执行);Controller 对账 TODO(矩阵前)。
+
 ## 2026-09-27 · M1-C 完整复审与真实模型测试
 
 ### 2026-09-27 10:30 AEST · Step 01 · 作者授权与重新审计
