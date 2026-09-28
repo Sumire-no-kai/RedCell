@@ -1,6 +1,8 @@
 # Phase 0.5e 校准运行手册:glm-4-32b Target,原生 FC v2
 
-> 状态(2026-09-27):**还有一道门没过,现在不能开跑。** `redcell run --online` 在创建 Run 时要求
+> 状态(2026-09-28):**前置门已全部通过,可以按 §5 开跑。** 原 2026-09-27 状态如下,保留作记录。
+>
+> 旧状态(2026-09-27):还有一道门没过,现在不能开跑。 `redcell run --online` 在创建 Run 时要求
 > Target 与 Attacker 都已声明 `USAGE_COVERS_BILLED_TOKENS=true`(`ExperimentConditions.require_phase_0_5`),
 > 两者目前都是 `false`,命令会在碰到 Provider 之前被拒绝。先完成 §4 的账单对账,再按 §5 开跑。
 >
@@ -39,7 +41,7 @@
 | 攻击方对照 | 已过 | 2026-09-23 `gpt-6-luna` none 档:0 截断、0 空输出、0 拒绝(`.env.example` 候选记录) |
 | Target 钉死日期版本、temperature 0.7、policy 版本固定 | 已满足 | §2 表 |
 | 校准 seed 与实验 seed 不重叠 | 已满足 | 测试锁住 |
-| **Target 与 Attacker 计费覆盖 = true** | 对账已完成(2026-09-28,DEVLOG 同日 Step 01);`.env` 开关待作者确认后改为 true | §4 |
+| **Target 与 Attacker 计费覆盖 = true** | 已满足(对账 2026-09-28 Step 01;开关已改,Step 02) | §4 |
 | Windows 环境与 `.env` 同步 | 待做 | §5.1 |
 
 ## 4. 账单对账:开跑前必须过的那道门
