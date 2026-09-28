@@ -60,6 +60,27 @@
   证据文件第三条并把 Controller 覆盖开关改为 true。
 - **剩余状态:** 代码 DONE;付费对照等作者一句话。
 
+### 2026-09-28 15:09 AEST · Step 04 · Controller 对账逐 token 一致;发现并发上限须为正数
+
+- **作者授权:** 在本机跑 Controller 对照。
+- **运行:** `controller-controls --controller-prompt-version controller-prompt-v1`,05:02:04–05:02:18 UTC,**PASSED**
+  (12/12、一次通过 12/12、用量可知 12/12),Controller 快照与 9 月 25 日报告逐字段相同。报告用量:12 次请求,
+  prompt 1,622 + completion 703 = 2,325 token,cached 0,估算 $0.00133。产物
+  `runs/controller-contract-controls-deepseek-flash-v1-2026-09-28.json`(忽略)。
+- **账单(经 Chrome 只读):** DeepSeek 用量页按 API key 筛 "RedCell API Key"(尾号与本机 key 一致)、时间维度"今天"
+  (GMT+10):`deepseek-flash` 12 次请求、2,325 token、<¥0.01。**逐 token 一致。** 账户里另一把 key(OpenCode)承担了
+  近 30 天其余约 1,217 万 token,与 RedCell 无关,此前"远多于 12 次"的疑问就此解释。
+- **进度:** Mac `.env` 备份为 `.env.bak-2026-09-28-pre-controller-coverage` 后,Controller 覆盖开关改为 `true`;证据文件第三条
+  的覆盖事实已填。对账明细追加到 `runs/billing-check/2026-09-28-reconciliation.md`(忽略)。
+- **发现:** `ProviderBillingEvidence.approved_runtime_max_concurrency` 要求 > 0,且 preflight 要求它与 `.env` 的
+  `max_concurrency` 相等;Controller 现在是 0(不限)。所以 Controller 在并发上限改成正数之前**过不了** billing evidence。
+  改并发会改 Controller 快照,Gate 又要求 controls 报告的快照与正式 Run 逐字段相同 —— 改完要再跑一次 12 用例对照
+  (约 $0.001)。证据文件里该角色的两个运行上限先留空,文件可加载;当前 preflight 会报 `rate_limit_mismatch:controller`
+  与 `coverage_unconfirmed:controller`,属预期。
+- **待作者决定:** Controller 并发上限取几。矩阵调度器默认同时跑 3 格,LLM 格各自串行调用 Controller,即最多 3 路并发;
+  Attacker 也是 3。建议 3。定了以后:改 `.env`(两台)→ 重跑对照 → 填证据的两个上限 → preflight 三角色全绿。
+- **剩余状态:** Controller 对账 DONE;运行上限与对照重跑 PENDING(作者决定)。
+
 ## 2026-09-27 · M1-C 完整复审与真实模型测试
 
 ### 2026-09-27 10:30 AEST · Step 01 · 作者授权与重新审计
