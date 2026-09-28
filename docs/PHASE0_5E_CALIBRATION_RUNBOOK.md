@@ -39,10 +39,13 @@
 | 攻击方对照 | 已过 | 2026-09-23 `gpt-6-luna` none 档:0 截断、0 空输出、0 拒绝(`.env.example` 候选记录) |
 | Target 钉死日期版本、temperature 0.7、policy 版本固定 | 已满足 | §2 表 |
 | 校准 seed 与实验 seed 不重叠 | 已满足 | 测试锁住 |
-| **Target 与 Attacker 计费覆盖 = true** | **未满足** | §4 |
+| **Target 与 Attacker 计费覆盖 = true** | 对账已完成(2026-09-28,DEVLOG 同日 Step 01);`.env` 开关待作者确认后改为 true | §4 |
 | Windows 环境与 `.env` 同步 | 待做 | §5.1 |
 
 ## 4. 账单对账:开跑前必须过的那道门
+
+> **2026-09-28 更新:** Target 与 Attacker 已用已有运行记录与控制台账单逐窗口对上,下面第 2 步的已知调用不再需要;
+> 证据在运行主机的 `runs/phase-0-5e/billing-evidence.json`。Controller 仍按本节流程在矩阵前补。
 
 `usage_covers_billed_tokens=true` 是运行时声明,不是证明;`gate_billing_evidence.py` 把人工复核的证据绑到
 非凭据的计费主体上。流程与 0.5d 相同,对象换成当前模型:

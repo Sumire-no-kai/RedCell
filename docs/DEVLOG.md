@@ -5,6 +5,30 @@
 
 ---
 
+## 2026-09-28 · Target / Attacker 账单对账
+
+### 2026-09-28 14:45 AEST · Step 01 · 用已有记录完成对账,无新增付费调用
+
+- **作者指示:** 作者在 Chrome 打开了各家控制台,让本方自己去找对账所需的数据。
+- **方法:** 经 Claude in Chrome 只读访问 OpenAI、Z.AI、DeepSeek 控制台(未改设置、未下载文件、未点任何付款或充值);
+  与本机已有运行记录里 API 返回的 token 数逐窗口比对,只读数字,不读对话内容。结果:**手册 §4 原计划的那批约 $0.02 的
+  已知调用不再需要。**
+- **Target `glm-4-32b-0414-128k`(Z.AI 按分钟账单,时间为 UTC+8;单一 NORMAL 计费,账单用量 = 输入 + 输出):**
+  三个独立窗口逐 token 一致 —— 9 月 23 日资格门 4 分钟 100 次 / 80,904 token(记录 76,760 + 4,144);9 月 25 日 15:31
+  诊断 24 次 / 21,661(记录 21,032 + 629);9 月 27 日 08:36 探针 2 次 / 1,807(807+47、896+57)。9 月 23 日 20:14 另有一次
+  单独的试调用(656 token),在资格门开始前 3 分钟,不属于任何记录的运行,不是漏记的重试。
+- **Attacker `gpt-6-luna`(OpenAI 按模型、UTC 日):** 9 月 27 日 10 次请求各类别逐 token 一致(输入 14,148 = 未缓存 30 +
+  缓存读 6,531 + 缓存写 7,587;输出 1,565)。9 月 23 日记录 375 次(输入 159,767、输出 34,206)对账单 379 次(159,819 /
+  34,222),差额 4 次、52 进 16 出,即当天的 READY 连通性探针。开推理时(low / medium)的推理 token 8,622、14,274 包含在
+  `completion_tokens` 里,账单输出吻合,所以用量字段覆盖推理;正式配置是 `reasoning_effort=none`。
+- **发现:** OpenAI 把写入缓存的输入(`prompt_tokens_details.cache_write_tokens`)算在 `prompt_tokens` 里,控制台既不把它归
+  "未缓存"也不归"缓存",9 月 27 日那 7,587 的"缺口"就是它。token 覆盖不受影响;RedCell 的美元估算按普通输入价计它。
+- **证据文件:** `runs/phase-0-5e/billing-evidence.json`(忽略)中 Target、Attacker 两条已填并通过校验;对账明细在
+  `runs/billing-check/2026-09-28-reconciliation.md`(忽略)。节流参数按当前配置登记(Target 并发 1、Attacker 并发 3、RPM 0)。
+- **未完成:** Controller `deepseek-flash`:DeepSeek 控制台(GMT+10)近 30 天显示 241 次请求、约 1,218 万 token,远多于 RedCell
+  的 12 次契约对照,混有其他 key 或用途;需要按 key 查看并配一批已知调用,矩阵前补。
+- **剩余状态:** 对账 DONE(Target、Attacker);`.env` 两个覆盖开关待作者确认后改为 true(Mac 与 Windows);Controller TODO。
+
 ## 2026-09-27 · M1-C 完整复审与真实模型测试
 
 ### 2026-09-27 10:30 AEST · Step 01 · 作者授权与重新审计
