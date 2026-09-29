@@ -127,6 +127,12 @@
 - **提交:** 文档分支提交 `1f1391ce536c78bd34912a32f71f2531af0e4e0b`（`docs: record phase 0.5e calibration results`）；只含 `docs/DEVLOG.md`。提交前 staged diff 和 7 臂、19 对数字核对均通过。
 - **剩余状态:** 本地文档记录 DONE；远端分支、校准 tag 和 PR 尚未同步。
 
+### 2026-09-29 22:54 AEST · Step 11 · 推送校准标记与结果 PR
+
+- **远端状态:** 文档分支推至 `origin/docs/phase-0-5e-calibration-results`（推送时 HEAD `5418a69cefdbc07000f1e1af5939e836ad5b9109`）；附注 tag `phase-0.5e-arena-calibrated-2026-09-29` 已推至 origin，标签目标仍是校准代码 `f68b2d5781c35454e540fcb42d5fd123da041c6d`。
+- **PR:** [#91](https://github.com/Sumire-no-kai/RedCell/pull/91) 为 `OPEN`，base=`master`，head 为上述文档分支，核对只有 `docs/DEVLOG.md` 一个变更文件。PR 未合并；校准数据库和 `.env` 均未同步到远端。
+- **剩余状态:** 第一轮运行、判读、证据记录与远端交接 DONE；PR REVIEW OPEN。Phase 0.5e 正式矩阵、预测反向原因的后续研究与模型漂移起点证据仍 OPEN，不能把本轮校准通过等同于 Phase Gate 通过。
+
 ## 2026-09-28 · Target / Attacker 账单对账
 
 ### 2026-09-28 14:45 AEST · Step 01 · 用已有记录完成对账,无新增付费调用
