@@ -122,6 +122,11 @@
 - **提交前检查:** `git diff --check` 通过；忽略目录内的核对脚本将 DEVLOG 的 7 行 ASR/CI、7 行得分分布和 19 行成对判决逐项与只读汇总比对，全部一致。跟踪文件差异仅 `docs/DEVLOG.md`，未包含 `.env`、备份数据库、报告、行为指纹原始产物或脚本。离线代码门在 Step 01 已通过，本轮没有改源码、测试或靶场。
 - **剩余状态:** 本地 tag READY；DEVLOG commit、分支/tag 推送和 PR 待完成。
 
+### 2026-09-29 22:51 AEST · Step 10 · 校准记录首次提交
+
+- **提交:** 文档分支提交 `1f1391ce536c78bd34912a32f71f2531af0e4e0b`（`docs: record phase 0.5e calibration results`）；只含 `docs/DEVLOG.md`。提交前 staged diff 和 7 臂、19 对数字核对均通过。
+- **剩余状态:** 本地文档记录 DONE；远端分支、校准 tag 和 PR 尚未同步。
+
 ## 2026-09-28 · Target / Attacker 账单对账
 
 ### 2026-09-28 14:45 AEST · Step 01 · 用已有记录完成对账,无新增付费调用
