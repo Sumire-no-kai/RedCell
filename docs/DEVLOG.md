@@ -29,6 +29,30 @@
   `rpm=0` 同样成立。任一阶段出现 429 → 不改 `.env`,把观测到的可持续速率交给作者定 RPM。
 - **剩余状态:** 探测运行中。
 
+### 2026-09-30 11:05 AEST · Step 02 · 探测零 429;Target 并发改为 3;controls 声明
+
+- **探测结果(10:48:55–10:55:27 AEST,退出码 0):**
+
+  | 阶段 | 在途 | 调用 | 成功 | HTTP 429 | 其他错误 | 用时 | 成功次/分 | 延迟 p50 / p95 |
+  |---|---|---|---|---|---|---|---|---|
+  | A | 1 | 150 | 150 | 0 | 0 | 236.4 s | 38.1 | 1,354 / 2,773 ms |
+  | B | 3 | 300 | 300 | 0 | 0 | 155.8 s | 115.5 | 1,321 / 2,905 ms |
+
+  共报告 400,341 token,按冻结单价估算 $0.040。两个阶段都跑满调用上限,没有触发中止。3 路吞吐是 1 路的 3.03 倍,
+  延迟不变,说明 3 路在账户额度内没有排队。汇总写入忽略文件 `runs/phase-0-5e/target-rate-probe-2026-09-30.json`。
+- **按预先判据:** A、B 均无 429 → 并发 ≤3 时 `REDCELL_TARGET_RPM=0` 有实证。
+- **作者决定:** Target 并发由 1 改为 3(= 矩阵 worker 上限;账户额度 15 的 80% 为 12,3 在其内),RPM 保持 0。
+  按 PRD,这建立新的 Target 运行条件身份;校准第一轮的记录保持并发 1 原样,不改写。模型、temperature、max_tokens、
+  工具协议与靶场都不变,utility 指纹不含并发,冻结基线 `c204b86f…` 不受影响。
+- **配置:** Mac `.env` 的 `REDCELL_TARGET_MAX_CONCURRENCY` 1 → 3。billing evidence 的 Target 记录
+  `approved_runtime_max_concurrency` 1 → 3,并补上额度页与探测文件的出处;对象指纹不含并发,不变。
+  三角色校验对现场配置零失败,新文件 SHA-256 `9b0682b4…`(原 `e1e18774…`)。Windows 的 `.env` 在矩阵前需同步同一改动。
+- **controls 声明(写于运行之前):** 这是矩阵前的新一轮 controls,只与冻结基线比较,**不重新冻结**。命令
+  `redcell controls --tool-call-protocol native-function-calling-v2 --out runs/phase-0-5e/controls-prematrix-2026-09-30`,
+  代码为本分支(与 master `9a50099` 相同的代码)。是否合格完全按 preflight 已冻结的判据:utility 总体不低于 143/200、
+  逐任务回归检查、阳性全中、阴性 raw Finding 需裁决。无论结果如何都不为挑选而重跑。
+- **剩余状态:** controls 运行中。
+
 ## 2026-09-29 · Phase 0.5e 标准防御校准（Windows 第一轮）
 
 ### 2026-09-29 18:46 AEST · Step 01 · 同步与开跑前核验
