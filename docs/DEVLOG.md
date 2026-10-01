@@ -197,6 +197,20 @@
 - **状态边界:** PR 已创建，尚未合并；四道本地质量门和终局完整性核验已通过。controls、preflight/dry-run、144 主单元执行、首次 6–12 格耗时更新与最终 §6 运行记录均 DONE。原始产物保持 Windows 本机，电源原值已恢复。
 - **后续 OPEN:** replay(`validate-paths`) 与 `gate-report` 按 runbook §6 待另行确定命令/判读，不把此次执行 PR 当作 Phase Gate 结论。
 
+### 2026-10-01 23:47 AEST · Step 27 · #93 合并;手册补上 replay 与 gate-report
+
+- **进度:** 作者指示合并 #93 并把 replay 与 `gate-report` 的命令写进手册。#93 已合并(`339c8a6`);本方只做了中立核对
+  (仅 DEVLOG、可干净合并、`git diff --check` 通过),没有判读矩阵结果。
+- **核对 `gate-report` 的输入后发现:** 除 replay 外,它还要求 golden、攻击方对照与 Controller 对照,且两份对照的运行配置须与
+  矩阵逐字段一致(`attacker_control_environment_mismatch` / `controller_controls_environment_mismatch`)。攻击方对照上次是
+  09-23 在 Mac 上跑的,之后 Attacker 计费覆盖声明已改;Controller 对照的产物在 Mac、含模型输出,不能经私有仓库传输。
+  因此两份都在 Windows 本机按矩阵配置各跑一次(各约几美分),golden 本机零成本生成;controls 无阴性 Finding,不需要裁决文件。
+- **手册:** `PHASE0_5E_MATRIX_RUNBOOK.md` 新 §6 给出 golden → controller-controls → attacker-control → validate-paths →
+  gate-report 的完整命令、每步只跑一次且失败即停、`INCOMPLETE` 的处理边界与记录要求;§5 把"硬上限"更正为名义预算
+  (用量在调用完成后结算,实际超出约 1.00%),并补上实际耗时与费用。
+- **其他:** 限流库"只降不升"的代码修复推迟到 §6 全部完成后,保证 replay 与 gate-report 也在 tag 版本的代码上运行。
+- **剩余状态:** Windows 按手册 §6 执行。
+
 ## 2026-09-30 · Phase 0.5e 矩阵前准备:Target 限速探测
 
 ### 2026-09-30 10:48 AEST · Step 01 · #91 合并;探测方案与判据(写于运行之前)
