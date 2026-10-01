@@ -191,6 +191,12 @@
 - **审查与边界:** 全部公开差异只有本日期 DEVLOG 追加，既有日期保留原样；`git diff --check` 通过，原始数据库、controls、账本核验摘要与基线均确认被忽略。结论是执行完整性和离线代码质量通过，不能代替 replay/Gate 判读。
 - **剩余状态:** 结果文档 READY；即将提交、推送 `docs/phase-0-5e-matrix-results` 并开 PR，未合并主干。
 
+### 2026-10-01 23:39 AEST · Step 26 · 结果分支已提交推送；PR #93 已创建
+
+- **交付:** 安全结果记录提交 `f30f36b`（`docs: record Phase 0.5e Windows matrix execution`），已推送 `docs/phase-0-5e-matrix-results`；创建 [PR #93](https://github.com/Sumire-no-kai/RedCell/pull/93)，base 为 master。公开范围只有 `docs/DEVLOG.md`；本条补记作为同一 PR 的后续文档提交。
+- **状态边界:** PR 已创建，尚未合并；四道本地质量门和终局完整性核验已通过。controls、preflight/dry-run、144 主单元执行、首次 6–12 格耗时更新与最终 §6 运行记录均 DONE。原始产物保持 Windows 本机，电源原值已恢复。
+- **后续 OPEN:** replay(`validate-paths`) 与 `gate-report` 按 runbook §6 待另行确定命令/判读，不把此次执行 PR 当作 Phase Gate 结论。
+
 ## 2026-09-30 · Phase 0.5e 矩阵前准备:Target 限速探测
 
 ### 2026-09-30 10:48 AEST · Step 01 · #91 合并;探测方案与判据(写于运行之前)
