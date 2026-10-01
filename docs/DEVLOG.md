@@ -93,6 +93,133 @@
 - **收尾核验:** 当前追加本条交付状态并随同一 PR 推送；四道离线门已于 Step 37 通过，之后只有 DEVLOG 状态记录变动，不重复运行实验或昂贵检查。提交前继续检查 diff 与 env 字节守卫，原始产物留 Windows 忽略路径。
 - **剩余状态:** §6 执行、§6.3 原样记录与结果 PR 创建 DONE；PR OPEN，未合并。Gate 仍为 `EXPERIMENT_INVALID`，研究解读另行进行；没有重跑 controls、角色对照、replay 或 gate-report，没有改配置。
 
+### 2026-10-02 09:58 AEST · Step 39 · 补录主假设配对比较与四格机制分析的安全字段
+
+- **范围与来源:** 作者要求从本次 Gate JSON 补充主假设本身的三个配对比较及两部分安全字段，追加到现有结果 PR #95。只读已有 `runs/phase-0-5e/gate-report.json`，SHA-256 仍为 `5914e0c4849426c9e0c267f66ff5dc557e839e812e6c65cb135ded25fb4aed6e`；未重新运行 Gate、统计抽样或任何 Provider 调用，未改配置。以下是 `analysis.comparisons` 与 `analysis.mechanism` 的原始安全聚合字段，不含 run ID、逐 seed 数据、路径签名、攻击文本或模型输出。
+- **检查点与单位:** `analysis.checkpoint_tokens=160000`，`valid_seeds` 数量 **24**、`required_seeds=24`。三个主比较均为 `llm-memory`（完整配置③）对 `static-off` / `random-off` / `thompson-off`；`mean_difference` 的方向是 treatment 减 control，单位为不同攻击路径数。这里是 **160,000 token 主分析检查点**，不是 Step 35 replay 的 320,000 token 前缀；不将两种口径混用。
+
+**第一部分：`analysis.comparisons` 原始安全字段**
+
+```json
+[
+  {
+    "treatment": "llm-memory",
+    "control": "static-off",
+    "mean_difference": -1.875,
+    "control_mean": 2.625,
+    "practical_threshold": 1.0,
+    "bootstrap_ci_lower": -2.4166666666666665,
+    "permutation_p_value": 0.9999983310699463,
+    "holm_adjusted_p_value": 1.0
+  },
+  {
+    "treatment": "llm-memory",
+    "control": "random-off",
+    "mean_difference": -2.4166666666666665,
+    "control_mean": 3.1666666666666665,
+    "practical_threshold": 1.0,
+    "bootstrap_ci_lower": -2.9166666666666665,
+    "permutation_p_value": 1.0,
+    "holm_adjusted_p_value": 1.0
+  },
+  {
+    "treatment": "llm-memory",
+    "control": "thompson-off",
+    "mean_difference": -1.7916666666666667,
+    "control_mean": 2.5416666666666665,
+    "practical_threshold": 1.0,
+    "bootstrap_ci_lower": -2.2916666666666665,
+    "permutation_p_value": 1.0,
+    "holm_adjusted_p_value": 1.0
+  }
+]
+```
+
+- **主比较判定来源:** JSON 不序列化 `PairedComparison.passed` / `GateAnalysis.passed` 属性。只用冻结 schema 读取上述字段，沿用 `mean_difference >= practical_threshold`、`bootstrap_ci_lower > 0`、调整后 p 值 `< 0.05` 三项同时成立的规则，三组 `passed` 均为 **false**，`GateAnalysis.passed=false`。这里转录主假设结果，不把它替代最终 verdict，也不把 `bootstrap_ci_lower` 补写成报告未提供的完整区间。
+
+**第二部分：`analysis.mechanism` 原始安全字段**
+
+```json
+{
+  "selector_main_effect": {
+    "name": "selector_main",
+    "mean_difference": -2.5625,
+    "baseline_mean": 3.0625,
+    "practical_threshold": 1.0,
+    "bootstrap_ci_lower": -2.9583333333333335,
+    "permutation_p_value": 1.0,
+    "holm_adjusted_p_value": 1.0,
+    "gate_component": true
+  },
+  "memory_main_effect": {
+    "name": "memory_main",
+    "mean_difference": 0.6875,
+    "baseline_mean": 1.4375,
+    "practical_threshold": 1.0,
+    "bootstrap_ci_lower": 0.3541666666666667,
+    "permutation_p_value": 0.00075531005859375,
+    "holm_adjusted_p_value": 0.0015106201171875,
+    "gate_component": true
+  },
+  "simple_effects": [
+    {
+      "name": "selector_without_memory",
+      "mean_difference": -2.375,
+      "baseline_mean": 0.0,
+      "practical_threshold": 1.0,
+      "bootstrap_ci_lower": -2.9166666666666665,
+      "permutation_p_value": 0.9999999403953552,
+      "holm_adjusted_p_value": null,
+      "gate_component": false
+    },
+    {
+      "name": "selector_with_memory",
+      "mean_difference": -2.75,
+      "baseline_mean": 0.0,
+      "practical_threshold": 1.0,
+      "bootstrap_ci_lower": -3.375,
+      "permutation_p_value": 1.0,
+      "holm_adjusted_p_value": null,
+      "gate_component": false
+    },
+    {
+      "name": "memory_with_static",
+      "mean_difference": 0.875,
+      "baseline_mean": 0.0,
+      "practical_threshold": 1.0,
+      "bootstrap_ci_lower": 0.20833333333333334,
+      "permutation_p_value": 0.013569831848144531,
+      "holm_adjusted_p_value": null,
+      "gate_component": false
+    },
+    {
+      "name": "memory_with_llm",
+      "mean_difference": 0.5,
+      "baseline_mean": 0.0,
+      "practical_threshold": 1.0,
+      "bootstrap_ci_lower": 0.16666666666666666,
+      "permutation_p_value": 0.0088043212890625,
+      "holm_adjusted_p_value": null,
+      "gate_component": false
+    }
+  ],
+  "interaction": {
+    "name": "selector_memory_interaction",
+    "mean_difference": -0.375,
+    "baseline_mean": 0.0,
+    "practical_threshold": 1.0,
+    "bootstrap_ci_lower": -1.2083333333333333,
+    "permutation_p_value": 0.8346061706542969,
+    "holm_adjusted_p_value": null,
+    "gate_component": false
+  }
+}
+```
+
+- **机制字段边界:** `selector_main_effect` 与 `memory_main_effect` 的冻结 `passed` 属性均为 **false**；memory 的 `mean_difference=0.6875` 低于本报告 `practical_threshold=1.0`，不将其较小 p 值表述为组件通过。四个 simple effect 与 interaction 的 `gate_component=false`，冻结 schema 的 `passed` 为 null，不额外判定其通过/失败；这些字段中的 `baseline_mean=0.0` 是报告原值，不补算或当成对应条件实际均值。
+- **验证与交付:** 对两部分逐字段白名单核对，保留完整浮点精度与 null/布尔原值；只读 schema 求值没有重新计算 bootstrap 或 permutation。最终 verdict 与 Step 36 六项 failure 原文保持不变，仍为 `EXPERIMENT_INVALID`。本次仅追加 DEVLOG，完成针对摘录的源文件一致性检查与 diff 检查后提交、推送现有 PR #95；此前四道离线门通过，未修改其验证代码。
+- **剩余状态:** 安全统计字段补录 DONE；追加提交与推送待完成，研究解读仍另行进行。
+
 ## 2026-10-01 · Phase 0.5e Windows 正式矩阵执行
 
 ### 2026-10-01 14:31 AEST · Step 01 · 同步与冻结条件核验
