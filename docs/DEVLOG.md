@@ -87,6 +87,12 @@
 - **下一步:** 只提交结果日志、推送 `docs/phase-0-5e-replay-gate-results` 并开结果 PR；不合并、不修改源码、不重新进行实验调用。
 - **剩余状态:** 文档验证 DONE；PR 待创建，研究解读另行进行。
 
+### 2026-10-02 02:27 AEST · Step 38 · 结果 PR #95 已创建
+
+- **交付:** 结果记录提交 `6749e51` 已推送 `docs/phase-0-5e-replay-gate-results`；已创建 [PR #95](https://github.com/Sumire-no-kai/RedCell/pull/95)，base 为 master，范围仅 `docs/DEVLOG.md`。PR 标题与正文保留最终 `EXPERIMENT_INVALID`，正文六项 failure 顺序与内容等于原报告。
+- **收尾核验:** 当前追加本条交付状态并随同一 PR 推送；四道离线门已于 Step 37 通过，之后只有 DEVLOG 状态记录变动，不重复运行实验或昂贵检查。提交前继续检查 diff 与 env 字节守卫，原始产物留 Windows 忽略路径。
+- **剩余状态:** §6 执行、§6.3 原样记录与结果 PR 创建 DONE；PR OPEN，未合并。Gate 仍为 `EXPERIMENT_INVALID`，研究解读另行进行；没有重跑 controls、角色对照、replay 或 gate-report，没有改配置。
+
 ## 2026-10-01 · Phase 0.5e Windows 正式矩阵执行
 
 ### 2026-10-01 14:31 AEST · Step 01 · 同步与冻结条件核验
