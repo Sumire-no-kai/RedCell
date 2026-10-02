@@ -7,8 +7,9 @@ from typer.testing import CliRunner
 
 from redcell._base import CostRecord
 from redcell.arena.support_agent import SUPPORT_AGENT_POLICY
+from redcell.arena.support_agent.arena import SUPPORT_AGENT_ARENA
 from redcell.arena.support_agent.benign import BENIGN_TASKS
-from redcell.arena.support_agent.codec import TOOL_CALL_CODEC_VERSION
+from redcell.arena.support_agent.codec import TOOL_CALL_CODEC_VERSION, ToolCallProtocol
 from redcell.attacker_control import (
     AttackerControlConditions,
     AttackerControlReport,
@@ -40,7 +41,12 @@ from redcell.gate_billing_evidence import (
     ProviderBillingEvidence,
     billing_subject_fingerprint,
 )
-from redcell.gate_report import GateVerdict, _run_reliability_failures, build_gate_report
+from redcell.gate_report import (
+    GateVerdict,
+    _controls_assessment,
+    _run_reliability_failures,
+    build_gate_report,
+)
 from redcell.gate_runner import CellRecord, CellStatus, MatrixState
 from redcell.golden import evaluate_golden
 from redcell.protocols import (
@@ -596,6 +602,38 @@ def test_gate_report_cli_loads_protection_evidence(tmp_path, monkeypatch) -> Non
 
     assert result.exit_code == 0, result.output
     assert "INCOMPLETE" in result.output
+
+
+def test_native_protocol_controls_are_compared_under_the_matrix_protocol() -> None:
+    """Phase 0.5e regression: the expectation was built with the text-protocol default, so
+    valid native-v2 controls (which record the protocol and tool schema digest) always failed
+    with `controls_environment_mismatch`."""
+    run = _formal_run(FROZEN_PLAN.primary[0], GateCondition.STATIC_OFF)
+    assert run.experiment_conditions is not None
+    native = ToolCallProtocol.NATIVE_V2.value
+    reference = run.experiment_conditions.model_copy(
+        update={
+            "arena": run.experiment_conditions.arena.model_copy(
+                update={
+                    "tool_call_protocol_version": native,
+                    "tool_schema_sha256": SUPPORT_AGENT_ARENA.tool_schema_sha256,
+                }
+            )
+        }
+    )
+
+    def failures(conditions) -> list[str]:
+        report = ControlsReport(
+            conditions=conditions,
+            utility_context_fingerprint=conditions.utility_context_fingerprint(),
+        )
+        return _controls_assessment(report, None, reference)[1]
+
+    matching = controls_conditions(target=reference.target, tool_call_protocol_version=native)
+    text_protocol = controls_conditions(target=reference.target)
+
+    assert "controls_environment_mismatch" not in failures(matching)
+    assert "controls_environment_mismatch" in failures(text_protocol)
 
 
 def test_complete_formal_evidence_can_support_the_gate(monkeypatch) -> None:
