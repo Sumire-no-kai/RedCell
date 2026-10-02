@@ -192,6 +192,12 @@ controls 用 §3 那份(`controls-prematrix-windows`);阴性 raw Finding 为 0,�
 - verdict 只有 `SUPPORTED` / `NOT_SUPPORTED` / `INCOMPLETE` / `EXPERIMENT_INVALID` 四种。`INCOMPLETE` 表示缺证据或证据不匹配,
   报告里的 failure 列表会写明是哪一项;先按名字核对文件路径是否传对,**不得为改变 verdict 而重跑对照或替换输入**。
 
+### 6.3 记录
+
+DEVLOG 记:代码 commit;每条命令的起止时间与退出码;golden 结果;两份对照是否合格;replay 的路径条数、
+复现率与用量;`gate-report` 的 verdict 与 failure 列表原文。原始数据库、trace、对照明细、validation 与 gate-report JSON
+都留 Windows 忽略路径,公开仓库只放安全摘要。报告的研究解读另行进行。
+
 ### 6.4 修正报告(gate-report 原生协议 bug 修复后,零成本)
 
 原报告把合格的原生协议 controls 误判为 `controls_environment_mismatch`(DEVLOG 2026-10-02 Step 50)。修复合并后,
@@ -216,9 +222,3 @@ controls 用 §3 那份(`controls-prematrix-windows`);阴性 raw Finding 为 0,�
 - DEVLOG 记录:代码 commit、退出码、修正报告的 verdict 与 failure 列表原文、SHA-256,以及和原报告的逐项差异。
   `analysis.comparisons` 与 `analysis.mechanism` 应与原报告逐字段相同(修复不涉及它们),如有不同要单独写明。
 - 预期只少 `controls_environment_mismatch` 一项;如果还有其他差异,停下来报告。
-
-### 6.3 记录
-
-DEVLOG 记:代码 commit;每条命令的起止时间与退出码;golden 结果;两份对照是否合格;replay 的路径条数、
-复现率与用量;`gate-report` 的 verdict 与 failure 列表原文。原始数据库、trace、对照明细、validation 与 gate-report JSON
-都留 Windows 忽略路径,公开仓库只放安全摘要。报告的研究解读另行进行。
