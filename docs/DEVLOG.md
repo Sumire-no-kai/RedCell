@@ -226,6 +226,50 @@
 - **针对性验证:** 解析 DEVLOG 新增的两个 JSON 代码块，与原报告 `analysis.comparisons` / `analysis.mechanism` 逐字段相等；原 verdict/failure 代码块保持一致，env 字节守卫匹配，`git diff --check` 通过。仅文档增加，未重跑四道工程门；Step 37 的已有通过记录仍明确属于该次验证。
 - **剩余状态:** 两部分安全统计补录、验证、提交和推送 DONE；此条交付状态随同一 PR 收尾提交，Gate 仍为 `EXPERIMENT_INVALID`，研究解读另行进行。原报告及全部 raw 产物留 Windows 忽略路径。
 
+### 2026-10-02 11:26 AEST · Step 41 · 扩大安全数据同步范围；内部文档核对
+
+- **作者要求与范围:** 同步尽可能完整的可迁移文档与数据。公开结果 PR #95 仍 OPEN，继续补充本次冻结实验的安全数值包；私有伴随仓库 `master` 已 fetch / ff 核对为最新，visibility 为 PRIVATE。不重新调用 Provider、不运行实验命令、不改 env 或源代码。
+- **数据盘点:** 原 Gate 报告含 **432 条前缀记录**（24 seeds × 6 条件 × 64k/160k/320k 三检查点），原 DB 含 144 个正式 Run 用量，validation 含 426 条路径的 2,130 次 replay。计划导出逐 seed/条件检查点与策略计数、逐 Run 用量/复现汇总、全部安全 Gate 统计/保护字段、对照与配置摘要、执行时间和哈希清单；明确剔除攻击路径签名、UUID、模型输出与攻击文本。
+- **私有仓库约定:** README 明确禁止即便在 private 中传输 `.env`/凭据、原始攻击 prompt/模型回复/trace/findings、runs/SQLite/checkpoint/logs/cache。按该边界同步白名单聚合数据，原始产物继续留 Windows；公开原始报告未复制。
+- **内部文档方向:** 私有仓库 PRD 与 AGENTS 比本机新；差异为既有设备/模型角色更正等，未发现本机独有新增内容，不能用旧副本反覆盖。已将本机旧版备份到 Windows 忽略目录 `runs/phase-0-5e/internal-doc-backup-20261002-112606`，逐字节校验后从最新私有副本同步本机 `PRD.md`、`AGENTS.md`；保持私有远端版本不变。RELATED_WORK、0.5e baseline 一致；旧 0.5 baseline 仅行尾不同、JSON 值相同，不作机械更改。
+- **剩余状态:** 盘点与内部文档同步 DONE；安全数值包导出、验证与双仓库交付待完成。
+
+### 2026-10-02 11:32 AEST · Step 42 · 安全数值包完成；独立一致性与传输边界校验通过
+
+- **产物:** `docs/results/phase-0-5e/` 共 **16 个文本文件、257,443 bytes**，含 README、包内 LF 约定、SHA-256 清单及 13 份 JSON/CSV。数据包括 **432** 检查点行、**2,400** 策略计数行、**24** 策略覆盖行、**144** Run 用量行、**144** Run replay 汇总行；426 路径/2,130 trial 只保留数值，不保留路径签名。
+- **覆盖范围:** Gate 主比较/机制/保护指标/failure/limitations，逐 seed × 条件 × 检查点计数，分策略 attempt/success/selection，逐 Run 与分角色/条件用量，逐 Run replay 的 0/5–5/5 分布，阳性/阴性与 utility baseline 的安全任务计数，golden 与角色对照标志，非凭据角色/条件配置，既有执行起止/退出码及 preflight 状态，冻结身份与原文件哈希。保留 `controls_environment_mismatch`，不把配置摘要伪称一致。
+- **验证:** 导出器逐字段白名单、已知 HTTPS Provider endpoint/无 URL 凭据、数值类型、无 UUID/载荷字段与本机凭据字面值排除检查通过；另一只读检查核对所有 CSV 行数与逐行原始计数、用量合计、15 个包内清单项 SHA-256、原 comparisons/mechanism/failure/verdict 一致。逐 seed 主比较平均差与基线均值对齐，未重算 bootstrap/permutation。`.env` 字节守卫匹配，源码/tag 非 docs 差异为空。
+- **工程取舍:** 行尾校验发现 JSON 导出使用 Windows 默认 CRLF；已将本包自建文本统一 LF 并重算 manifest，JSON 数值不变，原始源文件不改。原始证据和源文件不移动；新建公开白名单数据包，原路径保持完整。包内固定 LF 防止 Windows/macOS 行尾导致清单校验失败；逐 seed 数值使用公开冻结 seed 和登记条件名替代本机 Run UUID。无路径的 replay rate 留 null/CSV 空值，不当作失败。估算成本与缺失 Attacker 对照 ledger 边界继续明确。
+- **剩余状态:** 导出与针对性验证 DONE；公开提交/推送、私有来源清单与交接 PR 待完成。最终 verdict 仍 `EXPERIMENT_INVALID`，不进行付费调用、重跑或研究结论升级。
+
+### 2026-10-02 11:36 AEST · Step 43 · 公开数据包上传被自动审批拒绝；目的地待明确
+
+- **拒绝发生在执行前:** 拟 stage/commit/push 公开安全数据包的命令在 CreateProcess 前被自动审批拒绝；没有执行该命令，没有公开提交或上传这 16 个文件，也未通过间接命令绕过。
+- **拒绝理由原文:** “该命令会将包含实验统计、用量及配置摘要的新增数据包推送到公开仓库；这些内部数据的公开目的地与完整载荷未获用户明确授权，且推送不可视为仅本地文档提交。”
+- **后续:** 向作者展示已完成的本机 README/完整文件范围，请明确选择仅私有同步，或批准公开 RedCell 发布这 16 个已审阅安全文件并同步私有交接清单。选择未返回前不执行公开数据包上传。继续不依赖该选择的交接准备：私有 `docs/phase-0-5e-sync-handoff` 分支已创建，来源/文件哈希/排除项交接草稿已准备；实际目的地待答复后记入。
+- **剩余状态:** 安全数据包与校验 DONE；公开目的地审批待回复，尚未新上传数据；原始产物、env 与实验配置不变。
+
+### 2026-10-02 11:39 AEST · Step 44 · 准备私有仓库安全替代同步
+
+- **替代方式:** 公开数据包上传继续等待作者明确批准，未重试被拒的公开操作。先将已审阅的 16 个小体积数值文件复制到 PRIVATE 伴随仓库 `docs/phase-0-5e-safe-summary/`，形成独立可审阅私有提交；这不是把 raw 数据搬入私有仓库。公开实验结构化结论已在 PR #95 记录，私有包仅用于跨设备详细数值核对。
+- **存储与规则:** 私有 `.gitignore` 排除通用 `results/` 原始产物目录，故安全文档摘录明确放在 docs 的摘要目录；不 force-add、不改 ignore、不上传原报告。新增来源交接 JSON，README 增加这两类文档位置，保留历史 SOURCE_STATE 与旧交接文档。私有全仓库 manifest 保留原项目顺序、追加 17 个新目标，共 29 个文件哈希；包内 manifest 单独核对 15 项。
+- **验证:** 16 个文件与本机已审阅白名单包逐字节一致，包内/全仓库 manifest 均通过，env 字节守卫通过；PRD/AGENTS 未反覆盖，旧 Windows 文档备份保留本机。Git diff/check 通过；本次没有源码变化或 Provider 调用，不重复运行此前工程门或实验命令。
+- **剩余状态:** 私有可审阅提交准备 DONE，私有 commit/push/PR 待执行；公开数据包未上传、目的地问题仍待作者答复。
+
+### 2026-10-02 11:40 AEST · Step 45 · 作者确认仅私有同步；公开候选数据包移入忽略目录
+
+- **明确选择:** 作者回复“仅同步到私有 RedCell_Private_Data 仓库（推荐）”。16 文件数值包只进入已核对 PRIVATE 的伴随仓库，不上传公开仓库，不重试先前被拒的公开数据包操作。
+- **本机整理:** 校验 move 两端均在 `E:/RedCell/` 范围内后，将本次自建 `docs/results/phase-0-5e/` 包移到 `runs/phase-0-5e/safe-numeric-sync/` 忽略路径；私有仓库规范位置为 `docs/phase-0-5e-safe-summary/`。仅移动本次导出的安全文本，不移动原始 DB/trace，不删既有文件。公开工作树目前只变更 DEVLOG，不保留可误提交的数据目录。
+- **交接:** 私有来源 JSON 写明 private-only 与选择时间、Windows 忽略副本路径、包内文件哈希、公开既有结果 PR #95，以及 raw 排除项；全仓库 manifest 已按最新交接 JSON 重算。公开 DEVLOG 只追加过程与交付状态，不拷贝这 16 个数据文件或内部文档。
+- **剩余状态:** 目的地决策 DONE；私有 commit/push/PR 与公开状态日志收尾待完成，最终研究 verdict/冻结条件不变。
+
+### 2026-10-02 11:43 AEST · Step 46 · 私有数据同步与 PR #1 已完成；公开只记交付状态
+
+- **私有交付:** 安全数值包及来源交接提交 `546559b95453ca508c865ca34c0c515cd3bab761` 已推送 `RedCell_Private_Data` 的 `docs/phase-0-5e-sync-handoff`；已创建 [私有 PR #1](https://github.com/Sumire-no-kai/RedCell_Private_Data/pull/1)，base=master，OPEN、未合并。远端新增的 16 文件包保存在 `docs/phase-0-5e-safe-summary/`，此处不复制其完整载荷；private-only 是作者明确选择。
+- **完整性:** 提交前 19 个 staged 文件逐项白名单核对；仓库 29 个 manifest 哈希与实际 Git blob 相符，包内 15 项校验通过。当前补写私有交接 JSON 的 PR/分支/数据 commit，并仅更新该文件对应 manifest 哈希，随同一私有 PR 收尾。既有 PRD/AGENTS/历史 SOURCE_STATE 没有被旧版覆盖。
+- **公开范围:** 数据包已从公开候选目录移到 Windows 忽略路径。公开 PR #95 仅追加本 DEVLOG 的同步过程与交付状态，没有新增 16 个数值文件、内部文档、凭据或任何 raw 产物。第一次公开上传自动审批拒绝后没有重试，也没有改为公开其他形式的完整数据载荷。
+- **剩余状态:** 安全数据与内部文档同步 DONE；私有 PR #1 与公开结果 PR #95 均待 review/merge；收尾状态随对应分支提交推送。原始证据仍在 Windows，env 字节不变，Gate 仍为 `EXPERIMENT_INVALID`，未重跑或产生新付费调用。
+
 ## 2026-10-01 · Phase 0.5e Windows 正式矩阵执行
 
 ### 2026-10-01 14:31 AEST · Step 01 · 同步与冻结条件核验
