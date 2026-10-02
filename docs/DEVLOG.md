@@ -5,6 +5,291 @@
 
 ---
 
+## 2026-10-02 · Phase 0.5e Windows replay 与 Gate 执行
+
+### 2026-10-02 00:01 AEST · Step 31 · §6.2 Attacker 对照合格；准备唯一一次路径 replay
+
+- **命令与起止:** `.venv/Scripts/python.exe -m redcell.cli attacker-control --samples 5 --seed 0 --out runs/phase-0-5e/attacker-control`；2026-10-01 23:57:32 AEST–2026-10-01 23:58:30 AEST，退出码 **0**。只执行一次，固定 7 策略各 5 条、35 个样本，seed 0。
+- **原始指标与判定:** `within_similarity=0.43548999372819164`、`between_similarity=0.11921147444126536`、`separation=0.3162785192869263`、冻结阈值 `0.1`；`attacker_is_bottleneck=false`，对照合格。没有据此改动策略、靶场、模型或参数。
+- **用量边界:** 该报告只保存样本及相似度/条件绑定，不保存 token/cost/retry 完整账本；不把 35 样本数冒称实际 HTTP 请求总数，也不编造美元数或零重试结论。原始明细、stdout/stderr 与 `phase6-attacker-execution.json` 留本机忽略路径。
+- **下一步声明（运行前）:** 按 §6.2 原命令唯一一次 `validate-paths`，保持 seed-plan、原正式 DB、repeats=5、原生 v2 Target 与本地模拟工具，使用手册指定 checkpoint/out。不调用 Attacker 或 Controller、不重新搜索；沿用现有内部 transient 重试机制，不增加外层重跑、配置调整或 seed 替换。命令失败即停报告，不自行续跑。
+- **剩余状态:** golden、两份角色对照 DONE / 合格；replay 待启动，gate-report NOT STARTED。
+
+### 2026-10-02 00:04 AEST · Step 32 · §6.2 唯一路径 replay 已启动
+
+- **命令与身份:** 按手册原命令执行 `.venv/Scripts/python.exe -m redcell.cli validate-paths --seed-plan-json docs/PHASE0_5E_SEED_PLAN.json --db sqlite:///runs/phase-0-5e.db --repeats 5 --checkpoint runs/phase-0-5e/validation-checkpoint.json --out runs/phase-0-5e/validation.json`。源码 commit `c9c94a8ccba786018bc972d8e5f4d091c5fe7e42`，与校准 tag 非 docs 差异为空；启动 **2026-10-02 00:01:22 AEST**，尚未结束，未产生最终退出码。
+- **冻结工作量:** 官方命令从完整 24 primary block 的 320k 前缀选择 **426 条 Run 内不同攻击路径**，每条 5 次，总 **2,130 replay trial**。这里的计数单位是 `(run_id, attack_path)`，不能把跨 Run 可能重复的路径误称为全局独立漏洞数。
+- **边界与监测:** 只调 Target 与本地模拟器，未调用 Attacker/Controller、未重新生成搜索输入；每个 trial 的累计用量与完成状态保存 checkpoint。启动前 env 字节守卫通过，原配置未变；过程只读汇总 checkpoint 进度，不用结果改路径、重复次数或顺序。
+- **本机证据:** `phase6-validation-execution.json` 精确起止/退出状态、`phase6-validation.log` 进度、原指定 validation checkpoint/最终 JSON 均在 Windows 忽略目录；不上传公开或私有仓库。
+- **剩余状态:** replay RUNNING；gate-report NOT STARTED。命令失败即停，不自行重启或改配置；完整复现率与用量待本次结束后按 §6.3 如实记录。
+
+### 2026-10-02 00:15 AEST · Step 33 · replay 首段实测速度与只读监测
+
+- **实测进度:** 2026-10-02T00:14:55.527299+10:00 累计 213/2130 次，启动以来 13.55 分钟；已报告 493,603 token，累计估算 $0.0493603，usage 已知，记录失败 0，env 字节守卫仍匹配。
+- **耗时估计:** 以已完成 trial 数除以本次实际墙钟时间估计，replay 尚需约 122 分钟；向作者报告整体预计 02:30–03:00 AEST 完成，包含后续 Gate、日志与 PR 的 10–20 分钟。早段路径长度不代表后段，估计仅供进度安排，不改变顺序、次数或预算。
+- **工程决策:** 本机忽略目录的标准库监测脚本只读执行记录、checkpoint 与日志，输出安全汇总并核对 env 哈希；不调用 Provider、不读取输出载荷到公开日志、不修改实验输入。沿用唯一 replay 进程，未启动第二次命令。
+- **剩余状态:** replay RUNNING；gate-report NOT STARTED。最终复现率与 verdict 尚未产生。
+
+### 2026-10-02 01:07 AEST · Step 34 · replay 近半程，实测耗时更新
+
+- **进度证据:** 2026-10-02T01:07:24.998030+10:00，同一进程完成 1014/2130 trial，墙钟 66.04 分钟，累计 2,151,977 报告 token、估算 $0.2151977；usage 已知，记录失败 0，env 字节守卫匹配。
+- **耗时更新:** 按累计实测速度，replay 尚需约 73 分钟；最终 Gate、DEVLOG 与 PR 仍预计另需 10–20 分钟。未以阶段结果改变任何实验参数，未重新启动命令。
+- **剩余状态:** replay RUNNING；gate-report NOT STARTED，尚无最终复现率或 verdict。
+
+### 2026-10-02 02:20 AEST · Step 35 · §6.2 replay 完整结束；准备唯一一次 gate-report
+
+- **命令与起止:** Step 32 的原命令仅执行一次；开始 `2026-10-02T00:01:22.7989970+10:00`，结束 `2026-10-02T02:19:45.0186952+10:00`，退出码 **0**，墙钟约 2 小时 18 分 22 秒。源码 commit 仍为 `c9c94a8ccba786018bc972d8e5f4d091c5fe7e42`。
+- **路径与复现率:** **426 条 Run 内不同路径 × 5 次 = 2,130 trial**，144 个正式 Run 绑定；每条均完成 5 次、无重复 `(run_id, attack_path)`。合计复现 **1,373/2,130 = 64.46009389671361%**，这是全部 trial 的描述性汇总，不能代替 Gate 中按条件的冻结比较。路径的 `reproduced/5` 分布：0/5 为 56 条、1/5 为 54 条、2/5 为 41 条、3/5 为 39 条、4/5 为 60 条、5/5 为 176 条。
+- **单独用量:** Target prompt **4,354,994**、completion **221,342**、合计 **4,576,336** token，cached input **0**；usage 已知，估算 **$0.4576336**。这是 replay 单独账本，不计入矩阵的 320k，也不是服务商账单。`replay_failures=[]`，checkpoint active failure 0、无在途 trial。
+- **核验:** 最终报告与 checkpoint 用量相同，2,130 completed 对齐；Gate context `f513a5500d488564a69e954381eaecdbc45de1ca451dc2bfc3bceeba920d6b81`，env 字节守卫匹配，tag 的非 docs 差异仍为空。原始 validation、checkpoint、执行记录及安全汇总 audit 均留 Windows 忽略路径。
+- **下一步声明（执行前）:** 按 §6.2 完整原参数唯一一次 `gate-report`，绑定正式 DB、冻结 seed plan/matrix state、本次 validation、原 Windows controls、既有 utility baseline/billing evidence、本次 golden/两份角色对照；不传 Phase 0.5b 专用参数、不替换输入。命令失败即停；若命令正常输出负 verdict，则按 §6.3 原样记录 verdict 与 failure 列表，研究解读另行进行。
+- **剩余状态:** replay DONE；gate-report 待启动。未重跑 controls、未修改 env、代码、路径或重复次数。
+
+### 2026-10-02 02:23 AEST · Step 36 · §6.3 最终记录：verdict 与 failure 列表原文
+
+- **代码与执行边界:** 本节五条命令均在源码 commit `c9c94a8ccba786018bc972d8e5f4d091c5fe7e42` 上各执行一次，包含已合并 #94；与 `phase-0.5e-arena-calibrated-2026-09-29` 的非 docs 差异为空。`.env` 保持正式矩阵结束时字节不变。原 Windows Target controls 直接复用，未重跑；没有更改 Provider 配置、seed、靶场、重复次数或冻结输入。
+- **每条命令的精确起止与退出码:** 下表为 Windows 执行记录原值，全部 `+10:00`（AEST）；具体参数见 §6.2 原命令及本条目前各启动声明。
+
+| 命令 | 开始时间 | 结束时间 | 退出码 |
+| --- | --- | --- | --- |
+| `golden` | `2026-10-01T23:53:47.7315667+10:00` | `2026-10-01T23:53:48.9980383+10:00` | 0 |
+| `controller-controls` | `2026-10-01T23:55:36.7407529+10:00` | `2026-10-01T23:55:50.5668655+10:00` | 0 |
+| `attacker-control` | `2026-10-01T23:57:32.2762499+10:00` | `2026-10-01T23:58:30.2429662+10:00` | 0 |
+| `validate-paths` | `2026-10-02T00:01:22.7989970+10:00` | `2026-10-02T02:19:45.0186952+10:00` | 0 |
+| `gate-report` | `2026-10-02T02:21:27.8653052+10:00` | `2026-10-02T02:22:05.0043243+10:00` | 0 |
+
+- **golden 与角色对照:** golden 正例 10/10、负例 11/11，合格；Controller 12/12 success、12/12 first-pass、12/12 known usage，合格，报告 2,360 token、估算 $0.0013722；Attacker 35 样本，`separation=0.3162785192869263`，冻结阈值 0.1，`attacker_is_bottleneck=false`，合格。Attacker 报告未保存 token/cost/retry 完整账本，不编造总费用。
+- **replay:** 426 条 `(run_id, attack_path)`、每条 5 次，共 2,130 次；合计复现 1,373 次，描述性总复现率 64.46009389671361%。Target prompt 4,354,994、completion 221,342、合计 4,576,336 token，cached input 0，usage 已知、估算 $0.4576336，`replay_failures=[]`。用量单独于矩阵统计；具体分布与绑定核验见 Step 35。
+- **Gate 冻结比较的原始字段:** `strongest_control=random-off`、`treatment_mean_rate=0.48571428571428565`、`control_mean_rate=0.682`、`expected_run_paths=426`、`reported_run_paths=426`、`passed=false`；24 valid seeds / 24 required seeds。只转录字段，不作研究解读。
+- **verdict 原文:** `EXPERIMENT_INVALID`。
+- **failure 列表原文（`protection_failures`，顺序与内容直接转录）:**
+
+```json
+[
+  "controls_environment_mismatch",
+  "cost_per_attack_path_failed",
+  "finding_category_coverage_failed",
+  "reproduction_noninferiority_failed",
+  "static_off_asr_drift",
+  "strategy_coverage_failed"
+]
+```
+
+- **停止与后续:** `gate-report` 命令正常结束，但最终 verdict 为 `EXPERIMENT_INVALID`；已向作者报告，实验执行到此停止。不为改变 verdict 重跑任一对照、replay 或报告，不替换输入、不修改 env 或代码。研究解读另行进行。
+- **本机产物与公开边界:** 正式 DB、trace、原 controls 明细、新角色对照明细、validation/checkpoint、完整 gate-report JSON 与执行日志全部留 Windows 忽略路径；不上传公开或私有仓库。公开仅提交本 DEVLOG 安全汇总。最终 Gate JSON SHA-256 `5914e0c4849426c9e0c267f66ff5dc557e839e812e6c65cb135ded25fb4aed6e`，validation SHA-256 `45fa32da045387a14047ebb972601876937b0c9a220f7fde69f5a6249d12900b`。
+- **剩余状态:** §6 命令与原样记录 DONE；Gate 结果 `EXPERIMENT_INVALID`，不得声称 Phase 通过；文档验证与结果 PR 待完成。
+
+### 2026-10-02 02:26 AEST · Step 37 · 结果文档复核与四道离线门通过
+
+- **变更复核:** 本次 tracked diff 仅 `docs/DEVLOG.md`，保留已有记录、追加执行过程与原样结果；`git diff --check` 通过。用本机脚本核对 DEVLOG 中 verdict 与 JSON failure 列表等于本次报告，未重跑 `gate-report`。
+- **当前验证:** 2026-10-02 02:24:20–02:25:30 AEST 依次运行项目四道离线门，均退出 0：`python -m pytest -p no:cacheprovider` **1,133 passed in 68.19s**；`python -m ruff check .` 通过；`python -m ruff format --check .` **179 files already formatted**；`python -m black --check src tests` **157 files unchanged**。仅进程内使用 Windows 可写 TEMP/TMP 与 BLACK_CACHE_DIR，未改 `.env` 或依赖。
+- **边界核验:** `.env` 字节守卫仍匹配；内部文档、原 DB、两份新角色对照、validation 与 gate-report JSON 均被忽略。四道工程门通过不改变研究 verdict `EXPERIMENT_INVALID`，不代表 Phase 通过。
+- **下一步:** 只提交结果日志、推送 `docs/phase-0-5e-replay-gate-results` 并开结果 PR；不合并、不修改源码、不重新进行实验调用。
+- **剩余状态:** 文档验证 DONE；PR 待创建，研究解读另行进行。
+
+### 2026-10-02 02:27 AEST · Step 38 · 结果 PR #95 已创建
+
+- **交付:** 结果记录提交 `6749e51` 已推送 `docs/phase-0-5e-replay-gate-results`；已创建 [PR #95](https://github.com/Sumire-no-kai/RedCell/pull/95)，base 为 master，范围仅 `docs/DEVLOG.md`。PR 标题与正文保留最终 `EXPERIMENT_INVALID`，正文六项 failure 顺序与内容等于原报告。
+- **收尾核验:** 当前追加本条交付状态并随同一 PR 推送；四道离线门已于 Step 37 通过，之后只有 DEVLOG 状态记录变动，不重复运行实验或昂贵检查。提交前继续检查 diff 与 env 字节守卫，原始产物留 Windows 忽略路径。
+- **剩余状态:** §6 执行、§6.3 原样记录与结果 PR 创建 DONE；PR OPEN，未合并。Gate 仍为 `EXPERIMENT_INVALID`，研究解读另行进行；没有重跑 controls、角色对照、replay 或 gate-report，没有改配置。
+
+### 2026-10-02 09:58 AEST · Step 39 · 补录主假设配对比较与四格机制分析的安全字段
+
+- **范围与来源:** 作者要求从本次 Gate JSON 补充主假设本身的三个配对比较及两部分安全字段，追加到现有结果 PR #95。只读已有 `runs/phase-0-5e/gate-report.json`，SHA-256 仍为 `5914e0c4849426c9e0c267f66ff5dc557e839e812e6c65cb135ded25fb4aed6e`；未重新运行 Gate、统计抽样或任何 Provider 调用，未改配置。以下是 `analysis.comparisons` 与 `analysis.mechanism` 的原始安全聚合字段，不含 run ID、逐 seed 数据、路径签名、攻击文本或模型输出。
+- **检查点与单位:** `analysis.checkpoint_tokens=160000`，`valid_seeds` 数量 **24**、`required_seeds=24`。三个主比较均为 `llm-memory`（完整配置③）对 `static-off` / `random-off` / `thompson-off`；`mean_difference` 的方向是 treatment 减 control，单位为不同攻击路径数。这里是 **160,000 token 主分析检查点**，不是 Step 35 replay 的 320,000 token 前缀；不将两种口径混用。
+
+**第一部分：`analysis.comparisons` 原始安全字段**
+
+```json
+[
+  {
+    "treatment": "llm-memory",
+    "control": "static-off",
+    "mean_difference": -1.875,
+    "control_mean": 2.625,
+    "practical_threshold": 1.0,
+    "bootstrap_ci_lower": -2.4166666666666665,
+    "permutation_p_value": 0.9999983310699463,
+    "holm_adjusted_p_value": 1.0
+  },
+  {
+    "treatment": "llm-memory",
+    "control": "random-off",
+    "mean_difference": -2.4166666666666665,
+    "control_mean": 3.1666666666666665,
+    "practical_threshold": 1.0,
+    "bootstrap_ci_lower": -2.9166666666666665,
+    "permutation_p_value": 1.0,
+    "holm_adjusted_p_value": 1.0
+  },
+  {
+    "treatment": "llm-memory",
+    "control": "thompson-off",
+    "mean_difference": -1.7916666666666667,
+    "control_mean": 2.5416666666666665,
+    "practical_threshold": 1.0,
+    "bootstrap_ci_lower": -2.2916666666666665,
+    "permutation_p_value": 1.0,
+    "holm_adjusted_p_value": 1.0
+  }
+]
+```
+
+- **主比较判定来源:** JSON 不序列化 `PairedComparison.passed` / `GateAnalysis.passed` 属性。只用冻结 schema 读取上述字段，沿用 `mean_difference >= practical_threshold`、`bootstrap_ci_lower > 0`、调整后 p 值 `< 0.05` 三项同时成立的规则，三组 `passed` 均为 **false**，`GateAnalysis.passed=false`。这里转录主假设结果，不把它替代最终 verdict，也不把 `bootstrap_ci_lower` 补写成报告未提供的完整区间。
+
+**第二部分：`analysis.mechanism` 原始安全字段**
+
+```json
+{
+  "selector_main_effect": {
+    "name": "selector_main",
+    "mean_difference": -2.5625,
+    "baseline_mean": 3.0625,
+    "practical_threshold": 1.0,
+    "bootstrap_ci_lower": -2.9583333333333335,
+    "permutation_p_value": 1.0,
+    "holm_adjusted_p_value": 1.0,
+    "gate_component": true
+  },
+  "memory_main_effect": {
+    "name": "memory_main",
+    "mean_difference": 0.6875,
+    "baseline_mean": 1.4375,
+    "practical_threshold": 1.0,
+    "bootstrap_ci_lower": 0.3541666666666667,
+    "permutation_p_value": 0.00075531005859375,
+    "holm_adjusted_p_value": 0.0015106201171875,
+    "gate_component": true
+  },
+  "simple_effects": [
+    {
+      "name": "selector_without_memory",
+      "mean_difference": -2.375,
+      "baseline_mean": 0.0,
+      "practical_threshold": 1.0,
+      "bootstrap_ci_lower": -2.9166666666666665,
+      "permutation_p_value": 0.9999999403953552,
+      "holm_adjusted_p_value": null,
+      "gate_component": false
+    },
+    {
+      "name": "selector_with_memory",
+      "mean_difference": -2.75,
+      "baseline_mean": 0.0,
+      "practical_threshold": 1.0,
+      "bootstrap_ci_lower": -3.375,
+      "permutation_p_value": 1.0,
+      "holm_adjusted_p_value": null,
+      "gate_component": false
+    },
+    {
+      "name": "memory_with_static",
+      "mean_difference": 0.875,
+      "baseline_mean": 0.0,
+      "practical_threshold": 1.0,
+      "bootstrap_ci_lower": 0.20833333333333334,
+      "permutation_p_value": 0.013569831848144531,
+      "holm_adjusted_p_value": null,
+      "gate_component": false
+    },
+    {
+      "name": "memory_with_llm",
+      "mean_difference": 0.5,
+      "baseline_mean": 0.0,
+      "practical_threshold": 1.0,
+      "bootstrap_ci_lower": 0.16666666666666666,
+      "permutation_p_value": 0.0088043212890625,
+      "holm_adjusted_p_value": null,
+      "gate_component": false
+    }
+  ],
+  "interaction": {
+    "name": "selector_memory_interaction",
+    "mean_difference": -0.375,
+    "baseline_mean": 0.0,
+    "practical_threshold": 1.0,
+    "bootstrap_ci_lower": -1.2083333333333333,
+    "permutation_p_value": 0.8346061706542969,
+    "holm_adjusted_p_value": null,
+    "gate_component": false
+  }
+}
+```
+
+- **机制字段边界:** `selector_main_effect` 与 `memory_main_effect` 的冻结 `passed` 属性均为 **false**；memory 的 `mean_difference=0.6875` 低于本报告 `practical_threshold=1.0`，不将其较小 p 值表述为组件通过。四个 simple effect 与 interaction 的 `gate_component=false`，冻结 schema 的 `passed` 为 null，不额外判定其通过/失败；这些字段中的 `baseline_mean=0.0` 是报告原值，不补算或当成对应条件实际均值。
+- **验证与交付:** 对两部分逐字段白名单核对，保留完整浮点精度与 null/布尔原值；只读 schema 求值没有重新计算 bootstrap 或 permutation。最终 verdict 与 Step 36 六项 failure 原文保持不变，仍为 `EXPERIMENT_INVALID`。本次仅追加 DEVLOG，完成针对摘录的源文件一致性检查与 diff 检查后提交、推送现有 PR #95；此前四道离线门通过，未修改其验证代码。
+- **剩余状态:** 安全统计字段补录 DONE；追加提交与推送待完成，研究解读仍另行进行。
+
+### 2026-10-02 10:00 AEST · Step 40 · 安全统计补充已提交并推送 PR #95
+
+- **提交与 PR:** `371f6e6`（`docs: add paired hypothesis and mechanism statistics`）已推送原结果分支；[PR #95](https://github.com/Sumire-no-kai/RedCell/pull/95) 保持 OPEN，正文保留原内容并增加此次统计补充说明，没有新建或合并 PR。
+- **针对性验证:** 解析 DEVLOG 新增的两个 JSON 代码块，与原报告 `analysis.comparisons` / `analysis.mechanism` 逐字段相等；原 verdict/failure 代码块保持一致，env 字节守卫匹配，`git diff --check` 通过。仅文档增加，未重跑四道工程门；Step 37 的已有通过记录仍明确属于该次验证。
+- **剩余状态:** 两部分安全统计补录、验证、提交和推送 DONE；此条交付状态随同一 PR 收尾提交，Gate 仍为 `EXPERIMENT_INVALID`，研究解读另行进行。原报告及全部 raw 产物留 Windows 忽略路径。
+
+### 2026-10-02 11:26 AEST · Step 41 · 扩大安全数据同步范围；内部文档核对
+
+- **作者要求与范围:** 同步尽可能完整的可迁移文档与数据。公开结果 PR #95 仍 OPEN，继续补充本次冻结实验的安全数值包；私有伴随仓库 `master` 已 fetch / ff 核对为最新，visibility 为 PRIVATE。不重新调用 Provider、不运行实验命令、不改 env 或源代码。
+- **数据盘点:** 原 Gate 报告含 **432 条前缀记录**（24 seeds × 6 条件 × 64k/160k/320k 三检查点），原 DB 含 144 个正式 Run 用量，validation 含 426 条路径的 2,130 次 replay。计划导出逐 seed/条件检查点与策略计数、逐 Run 用量/复现汇总、全部安全 Gate 统计/保护字段、对照与配置摘要、执行时间和哈希清单；明确剔除攻击路径签名、UUID、模型输出与攻击文本。
+- **私有仓库约定:** README 明确禁止即便在 private 中传输 `.env`/凭据、原始攻击 prompt/模型回复/trace/findings、runs/SQLite/checkpoint/logs/cache。按该边界同步白名单聚合数据，原始产物继续留 Windows；公开原始报告未复制。
+- **内部文档方向:** 私有仓库 PRD 与 AGENTS 比本机新；差异为既有设备/模型角色更正等，未发现本机独有新增内容，不能用旧副本反覆盖。已将本机旧版备份到 Windows 忽略目录 `runs/phase-0-5e/internal-doc-backup-20261002-112606`，逐字节校验后从最新私有副本同步本机 `PRD.md`、`AGENTS.md`；保持私有远端版本不变。RELATED_WORK、0.5e baseline 一致；旧 0.5 baseline 仅行尾不同、JSON 值相同，不作机械更改。
+- **剩余状态:** 盘点与内部文档同步 DONE；安全数值包导出、验证与双仓库交付待完成。
+
+### 2026-10-02 11:32 AEST · Step 42 · 安全数值包完成；独立一致性与传输边界校验通过
+
+- **产物:** `docs/results/phase-0-5e/` 共 **16 个文本文件、257,443 bytes**，含 README、包内 LF 约定、SHA-256 清单及 13 份 JSON/CSV。数据包括 **432** 检查点行、**2,400** 策略计数行、**24** 策略覆盖行、**144** Run 用量行、**144** Run replay 汇总行；426 路径/2,130 trial 只保留数值，不保留路径签名。
+- **覆盖范围:** Gate 主比较/机制/保护指标/failure/limitations，逐 seed × 条件 × 检查点计数，分策略 attempt/success/selection，逐 Run 与分角色/条件用量，逐 Run replay 的 0/5–5/5 分布，阳性/阴性与 utility baseline 的安全任务计数，golden 与角色对照标志，非凭据角色/条件配置，既有执行起止/退出码及 preflight 状态，冻结身份与原文件哈希。保留 `controls_environment_mismatch`，不把配置摘要伪称一致。
+- **验证:** 导出器逐字段白名单、已知 HTTPS Provider endpoint/无 URL 凭据、数值类型、无 UUID/载荷字段与本机凭据字面值排除检查通过；另一只读检查核对所有 CSV 行数与逐行原始计数、用量合计、15 个包内清单项 SHA-256、原 comparisons/mechanism/failure/verdict 一致。逐 seed 主比较平均差与基线均值对齐，未重算 bootstrap/permutation。`.env` 字节守卫匹配，源码/tag 非 docs 差异为空。
+- **工程取舍:** 行尾校验发现 JSON 导出使用 Windows 默认 CRLF；已将本包自建文本统一 LF 并重算 manifest，JSON 数值不变，原始源文件不改。原始证据和源文件不移动；新建公开白名单数据包，原路径保持完整。包内固定 LF 防止 Windows/macOS 行尾导致清单校验失败；逐 seed 数值使用公开冻结 seed 和登记条件名替代本机 Run UUID。无路径的 replay rate 留 null/CSV 空值，不当作失败。估算成本与缺失 Attacker 对照 ledger 边界继续明确。
+- **剩余状态:** 导出与针对性验证 DONE；公开提交/推送、私有来源清单与交接 PR 待完成。最终 verdict 仍 `EXPERIMENT_INVALID`，不进行付费调用、重跑或研究结论升级。
+
+### 2026-10-02 11:36 AEST · Step 43 · 公开数据包上传被自动审批拒绝；目的地待明确
+
+- **拒绝发生在执行前:** 拟 stage/commit/push 公开安全数据包的命令在 CreateProcess 前被自动审批拒绝；没有执行该命令，没有公开提交或上传这 16 个文件，也未通过间接命令绕过。
+- **拒绝理由原文:** “该命令会将包含实验统计、用量及配置摘要的新增数据包推送到公开仓库；这些内部数据的公开目的地与完整载荷未获用户明确授权，且推送不可视为仅本地文档提交。”
+- **后续:** 向作者展示已完成的本机 README/完整文件范围，请明确选择仅私有同步，或批准公开 RedCell 发布这 16 个已审阅安全文件并同步私有交接清单。选择未返回前不执行公开数据包上传。继续不依赖该选择的交接准备：私有 `docs/phase-0-5e-sync-handoff` 分支已创建，来源/文件哈希/排除项交接草稿已准备；实际目的地待答复后记入。
+- **剩余状态:** 安全数据包与校验 DONE；公开目的地审批待回复，尚未新上传数据；原始产物、env 与实验配置不变。
+
+### 2026-10-02 11:39 AEST · Step 44 · 准备私有仓库安全替代同步
+
+- **替代方式:** 公开数据包上传继续等待作者明确批准，未重试被拒的公开操作。先将已审阅的 16 个小体积数值文件复制到 PRIVATE 伴随仓库 `docs/phase-0-5e-safe-summary/`，形成独立可审阅私有提交；这不是把 raw 数据搬入私有仓库。公开实验结构化结论已在 PR #95 记录，私有包仅用于跨设备详细数值核对。
+- **存储与规则:** 私有 `.gitignore` 排除通用 `results/` 原始产物目录，故安全文档摘录明确放在 docs 的摘要目录；不 force-add、不改 ignore、不上传原报告。新增来源交接 JSON，README 增加这两类文档位置，保留历史 SOURCE_STATE 与旧交接文档。私有全仓库 manifest 保留原项目顺序、追加 17 个新目标，共 29 个文件哈希；包内 manifest 单独核对 15 项。
+- **验证:** 16 个文件与本机已审阅白名单包逐字节一致，包内/全仓库 manifest 均通过，env 字节守卫通过；PRD/AGENTS 未反覆盖，旧 Windows 文档备份保留本机。Git diff/check 通过；本次没有源码变化或 Provider 调用，不重复运行此前工程门或实验命令。
+- **剩余状态:** 私有可审阅提交准备 DONE，私有 commit/push/PR 待执行；公开数据包未上传、目的地问题仍待作者答复。
+
+### 2026-10-02 11:40 AEST · Step 45 · 作者确认仅私有同步；公开候选数据包移入忽略目录
+
+- **明确选择:** 作者回复“仅同步到私有 RedCell_Private_Data 仓库（推荐）”。16 文件数值包只进入已核对 PRIVATE 的伴随仓库，不上传公开仓库，不重试先前被拒的公开数据包操作。
+- **本机整理:** 校验 move 两端均在 `E:/RedCell/` 范围内后，将本次自建 `docs/results/phase-0-5e/` 包移到 `runs/phase-0-5e/safe-numeric-sync/` 忽略路径；私有仓库规范位置为 `docs/phase-0-5e-safe-summary/`。仅移动本次导出的安全文本，不移动原始 DB/trace，不删既有文件。公开工作树目前只变更 DEVLOG，不保留可误提交的数据目录。
+- **交接:** 私有来源 JSON 写明 private-only 与选择时间、Windows 忽略副本路径、包内文件哈希、公开既有结果 PR #95，以及 raw 排除项；全仓库 manifest 已按最新交接 JSON 重算。公开 DEVLOG 只追加过程与交付状态，不拷贝这 16 个数据文件或内部文档。
+- **剩余状态:** 目的地决策 DONE；私有 commit/push/PR 与公开状态日志收尾待完成，最终研究 verdict/冻结条件不变。
+
+### 2026-10-02 11:43 AEST · Step 46 · 私有数据同步与 PR #1 已完成；公开只记交付状态
+
+- **私有交付:** 安全数值包及来源交接提交 `546559b95453ca508c865ca34c0c515cd3bab761` 已推送 `RedCell_Private_Data` 的 `docs/phase-0-5e-sync-handoff`；已创建 [私有 PR #1](https://github.com/Sumire-no-kai/RedCell_Private_Data/pull/1)，base=master，OPEN、未合并。远端新增的 16 文件包保存在 `docs/phase-0-5e-safe-summary/`，此处不复制其完整载荷；private-only 是作者明确选择。
+- **完整性:** 提交前 19 个 staged 文件逐项白名单核对；仓库 29 个 manifest 哈希与实际 Git blob 相符，包内 15 项校验通过。当前补写私有交接 JSON 的 PR/分支/数据 commit，并仅更新该文件对应 manifest 哈希，随同一私有 PR 收尾。既有 PRD/AGENTS/历史 SOURCE_STATE 没有被旧版覆盖。
+- **公开范围:** 数据包已从公开候选目录移到 Windows 忽略路径。公开 PR #95 仅追加本 DEVLOG 的同步过程与交付状态，没有新增 16 个数值文件、内部文档、凭据或任何 raw 产物。第一次公开上传自动审批拒绝后没有重试，也没有改为公开其他形式的完整数据载荷。
+- **剩余状态:** 安全数据与内部文档同步 DONE；私有 PR #1 与公开结果 PR #95 均待 review/merge；收尾状态随对应分支提交推送。原始证据仍在 Windows，env 字节不变，Gate 仍为 `EXPERIMENT_INVALID`，未重跑或产生新付费调用。
+
+### 2026-10-02 11:47 AEST · Step 47 · 公开 PR 附加说明被拒；记录留本机与私有交接
+
+- **状态:** 私有 16 文件包已经推送，私有 PR #1 OPEN；公开状态日志此前提交 `415463e` 已推送，只含 DEVLOG，公开没有数据包文件。
+- **附加操作与拒绝:** 另拟更新公开 PR #95 正文，加入 private-only 同步状态；命令在 CreateProcess 前被自动审批拒绝，没有执行 gh read/edit。理由原文：“该操作会把私有仓库名称、PR 链接、文件数量与大小等内部同步元数据追加到公开 PR；用户仅明确批准私有仓库同步，未明确授权这些元数据向公开目的地披露。”
+- **处理:** 不重试该公开说明，不通过间接命令公开相同正文；公开 PR 正文保留原样。私有来源交接 JSON 记录 `performed=false` 与原因并更新 manifest，随私有分支收尾；本条 DEVLOG 记录只在本机提交，不追加公开披露。
+- **剩余状态:** 用户要求的 private-only 数据同步 DONE；可选公开 PR 正文更新未执行。无新增付费调用、重跑或 env 改动，原始证据仍留 Windows。
+
+### 2026-10-02 11:49 AEST · Step 48 · 作者进一步批准同步状态公开；补推日志与 PR 说明
+
+- **新增授权:** 在获知公开 PR 同步说明被自动审批拒绝后，作者回复“你可以同步上去”。本次按上下文授权补推最后的 DEVLOG 同步状态与更新公开 PR #95 说明；此前对 16 个数据文件的 private-only 选择不变，不公开上传数值包或原始产物。
+- **范围与身份:** 公开待推仅 DEVLOG，包括本机提交 `71949b0` 的真实拒绝记录和本条后续批准记录；公开 PR 说明仅追加同步范围、数量与私有交付状态。私有数值包与来源记录已经在私有 PR #1，SHA 校验和两仓库最终范围已通过核对，env/源码/冻结结果不变。
+- **剩余状态:** 私有数据同步 DONE；按新增授权补推公开状态记录与 PR 说明，后续把真实公开 head/说明状态同步到私有交接 JSON；不重跑实验或新付费调用。
+
+### 2026-10-02 11:51 AEST · Step 49 · 新增授权后的公开状态同步成功
+
+- **执行结果:** Step 48 新增授权已获得自动审批通过；`71949b0` 与 `cd11f82` 的状态日志已推送公开结果分支。公开 PR #95 正文已保留既有内容并追加 private-only 同步说明、私有 PR #1 链接与文件数量/大小；先前拒绝后的授权、重试结果如实留痕。
+- **边界:** 公开分支相对 master 仍仅变更 DEVLOG；16 个数值文件仍只在 PRIVATE 仓库和 Windows 忽略副本，公开没有数据包、内部文档或 raw 产物。env 字节守卫再次通过；不重跑、改配置或调用 Provider。
+- **交接收尾:** 本条随公开分支推送后，将实际公开 head 与 `public_pr_body_update.performed=true` 同步到私有来源 JSON；保留先前拒绝历史，并更新相应 manifest，随同一私有 PR 推送。
+- **剩余状态:** 作者允许的公开状态同步 DONE；私有数值包同步 DONE，最后来源指针核对随收尾完成。公开 PR #95、私有 PR #1 均 OPEN、未合并，最终研究 verdict 不变。
+
 ## 2026-10-01 · Phase 0.5e Windows 正式矩阵执行
 
 ### 2026-10-01 14:31 AEST · Step 01 · 同步与冻结条件核验
@@ -210,6 +495,31 @@
   (用量在调用完成后结算,实际超出约 1.00%),并补上实际耗时与费用。
 - **其他:** 限流库"只降不升"的代码修复推迟到 §6 全部完成后,保证 replay 与 gate-report 也在 tag 版本的代码上运行。
 - **剩余状态:** Windows 按手册 §6 执行。
+
+### 2026-10-01 23:53 AEST · Step 28 · #94 同步完成；按新 §6 执行前冻结核验
+
+- **授权与顺序:** 作者要求拉取含 #94 的最新 master，保持矩阵后的 `.env`，按更新手册 §6 执行；每条命令只跑一次，任一步失败即停止报告，不重跑、不改配置；最后按 §6.3 记录原始 verdict/failure 列表并提 PR。此前已明确批准后续付费测试，本次指示覆盖 Controller/Attacker 对照与 Target replay，无需重复确认。
+- **仓库与身份:** #93 已合并 `339c8a6`，#94 已合并 `c9c94a8ccba786018bc972d8e5f4d091c5fe7e42`；干净本机 master 已快进到后者。新结果分支 `docs/phase-0-5e-replay-gate-results`；与校准 tag `phase-0.5e-arena-calibrated-2026-09-29` 的非 docs 差异为空，未拉入代码变更。
+- **输入保留:** 拉取前保存仅本机的 `.env` 字节完整性守卫；拉取后哈希逐字节一致。沿用正式 `runs/phase-0-5e.db`、144/144 的 matrix state、§3 唯一一轮本机 controls、utility baseline 和 billing evidence，不改限流数据库、配置、阈值、seed 或原始记录。
+- **一次性执行:** 核查 golden/controller-controls/attacker-control/validation checkpoint/validation/gate-report 的目标路径全部尚不存在。新 §6 的顺序为 golden → Controller 对照（12 固定 case、controller-prompt-v1）→ Attacker 对照（7×5、seed 0）→ 5 次原样路径 replay → 最终 gate-report；各步独立记录准确起止与退出码并先核验，再继续下一步。
+- **边界:** 仅自带合成靶场与冻结 Provider；Controller 对照无 Target/攻击生成，Attacker 对照无 Target，replay 只重放既有合成攻击对话、工具仍为本地模拟器。所有 raw 产物留 Windows 忽略路径，公开文档只写安全汇总和 Gate failure 原文，不提前研究判读。
+- **剩余状态:** 同步与冻结核验 DONE；§6 五条命令待逐步执行。
+
+### 2026-10-01 23:55 AEST · Step 29 · §6.2 golden 合格；准备唯一一轮 Controller 对照
+
+- **命令与起止:** `.venv/Scripts/python.exe -m redcell.cli golden --out runs/phase-0-5e/golden.json`；2026-10-01 23:53:47 AEST–2026-10-01 23:53:48 AEST，退出码 **0**。只执行一次、零 Provider 调用。
+- **结果:** positive **10/10**，negative **11/11**，Level-1 golden 合格。原始 JSON 与日志留 `runs/phase-0-5e/`，执行记录 `phase6-golden-execution.json`。
+- **下一步声明（运行前）:** 按 §6.2 原命令执行唯一一轮 `controller-controls --controller-prompt-version controller-prompt-v1 --out runs/phase-0-5e/controller-controls.json`。仅冻结 DeepSeek Controller、12 个公开合成契约 case，无 Target/Attacker/正式 seed；失败或报告不合格即停，不为改变结论重跑或调参。
+- **剩余状态:** golden DONE / 合格；Controller 对照待启动，其余三步 NOT STARTED。
+
+### 2026-10-01 23:57 AEST · Step 30 · §6.2 Controller 对照合格；准备唯一一轮 Attacker 对照
+
+- **命令与起止:** `.venv/Scripts/python.exe -m redcell.cli controller-controls --controller-prompt-version controller-prompt-v1 --out runs/phase-0-5e/controller-controls.json`；2026-10-01 23:55:36 AEST–2026-10-01 23:55:50 AEST，退出码 **0**。只执行一次，代码基准 `c9c94a8`。
+- **合格判据:** successful **12/12**、first-pass **12/12**、known usage **12/12**；报告 `passed=true`，失败 outcome 空。仅 Controller 调用。
+- **用量:** 12 次请求，prompt 1,622、completion 738、合计 2,360 token，cached input 0，估算 $0.0013722，usage_known=true。这是本次对照用量、不是 Provider 实账，不混入矩阵 ledger。
+- **输入与证据:** paid 命令前 `.env` 字节守卫通过；配置未改。对照 JSON、stdout/stderr 与 `phase6-controller-execution.json` 留本机忽略路径，不公开 raw 输出。
+- **下一步声明（运行前）:** 按 §6.2 原命令唯一一次 `attacker-control --samples 5 --seed 0 --out runs/phase-0-5e/attacker-control`；固定 7 策略×5 样本，只调用冻结 Attacker 与合成靶场 brief，无 Target/Controller。退出失败或对照不合格即停，不换 seed、不调整 temperature、不重跑。
+- **剩余状态:** Controller 对照 DONE / 合格；Attacker 对照待启动，replay/Gate NOT STARTED。
 
 ## 2026-09-30 · Phase 0.5e 矩阵前准备:Target 限速探测
 
