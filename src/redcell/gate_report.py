@@ -9,6 +9,7 @@ from enum import StrEnum
 from pydantic import Field, computed_field
 
 from redcell.arena.registry import DEFAULT_ARENA_ID, get_arena
+from redcell.arena.support_agent.codec import TOOL_CALL_CODEC_VERSION
 from redcell.attacker_control import (
     DEFAULT_ATTACKER_CONTROL_SAMPLES,
     AttackerControlConditions,
@@ -566,7 +567,16 @@ def _controls_assessment(
     if controls.conditions is None or reference is None:
         failures.append("controls_conditions_missing")
     else:
-        expected = controls_conditions(target=reference.target)
+        # 期望值必须按矩阵登记的工具协议与靶场构造:controls 快照记录二者
+        # (原生 v2 还记录工具声明摘要)。只传 Target 会按文本协议与默认靶场比较,
+        # 原生协议或其他靶场的合格 controls 恒被判为不一致。
+        expected = controls_conditions(
+            target=reference.target,
+            tool_call_protocol_version=(
+                reference.arena.tool_call_protocol_version or TOOL_CALL_CODEC_VERSION
+            ),
+            arena=arena,
+        )
         if controls.conditions != expected:
             failures.append("controls_environment_mismatch")
         if any(item.runs != expected.positive_repeats for item in controls.positive) or any(

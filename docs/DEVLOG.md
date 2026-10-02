@@ -290,6 +290,30 @@
 - **交接收尾:** 本条随公开分支推送后，将实际公开 head 与 `public_pr_body_update.performed=true` 同步到私有来源 JSON；保留先前拒绝历史，并更新相应 manifest，随同一私有 PR 推送。
 - **剩余状态:** 作者允许的公开状态同步 DONE；私有数值包同步 DONE，最后来源指针核对随收尾完成。公开 PR #95、私有 PR #1 均 OPEN、未合并，最终研究 verdict 不变。
 
+### 2026-10-02 11:58 AEST · Step 50 · #95 与私有 #1 合并;修复 gate-report 原生协议 controls 比较
+
+- **进度:** 作者指示合并 #95 与私有仓库 PR #1,并修复 gate-report 的 bug。#95 已合并(`fd4d8b3`);私有 #1 已合并(`bb38b1e`),
+  私有仓库 29 项 manifest 校验通过。合并前已核对:16 个数值文件包内清单吻合,无密钥、Run UUID、攻击文本或路径签名;
+  用原始计数独立重算三组主比较差值(−1.875 / −2.417 / −1.792)、总用量 46,540,300 token、Controller 4,406,136 与估算
+  $5.96,均与报告一致。
+- **bug 与根因:** `gate_report._controls_assessment` 用 `controls_conditions(target=reference.target)` 构造期望值,
+  没有传入矩阵登记的工具协议与靶场,于是按文本协议默认值比较。原生 v2 的 controls 快照记录 `native-function-calling-v2`
+  与工具声明摘要,必然不等,合格的 controls 恒报 `controls_environment_mismatch`。0.5e 是第一个原生协议实验,此前未触发;
+  preflight 用的是另一条比较路径,所以通过。同一处也会让非默认靶场的 controls 恒被判不一致。
+- **复现:** 用 Mac 矩阵前 controls 按旧方式构造期望值,差异恰为 `negative_arena.tool_call_protocol_version` 与
+  `tool_schema_sha256` 两项;传入协议后完全相等。
+- **修复:** 期望值改为按 `reference.arena.tool_call_protocol_version`(旧记录为空时取文本协议)与该实验靶场构造。
+  文本协议 + 默认靶场的期望值与修复前逐字节相同,0.5d 等历史判定不受影响。
+- **回归测试:** 原生 v2 参考条件下,匹配的 controls 不再报 mismatch,按文本协议构造的 controls 仍报 mismatch;
+  修复前该测试失败。全量 1134 passed;`ruff check`、`ruff format --check`、`black --check`、`git diff --check` 通过。
+- **对已有报告的处理:** 原 gate-report(SHA-256 `5914e0c4…`,verdict `EXPERIMENT_INVALID`)原样保留。修复合并后,
+  Windows 在同一批输入上重新生成一份修正报告(手册 §6.4,零成本、确定性),两份并列记录。这是修正分析仪器,
+  不是为改变结论重跑;controls、对照、replay 与矩阵都不重跑。修正报告使用修复后的代码,master 与校准 tag 的非文档差异
+  从此不再为空,这只影响分析代码,矩阵与 replay 均已在 tag 版本上完成。
+- **预期(写于重新生成之前):** 修复只去掉 `controls_environment_mismatch`;`static_off_asr_drift` 不在
+  `NOT_SUPPORTED` 类失败集合内,所以修正报告的 verdict 预计仍为 `EXPERIMENT_INVALID`,其余五项 failure 不变。
+- **剩余状态:** 修复 PR 待合并;随后 Windows 执行 §6.4。漂移检查的历史基线是否适用于 0.5e 由作者决定。
+
 ## 2026-10-01 · Phase 0.5e Windows 正式矩阵执行
 
 ### 2026-10-01 14:31 AEST · Step 01 · 同步与冻结条件核验

@@ -192,6 +192,31 @@ controls 用 §3 那份(`controls-prematrix-windows`);阴性 raw Finding 为 0,�
 - verdict 只有 `SUPPORTED` / `NOT_SUPPORTED` / `INCOMPLETE` / `EXPERIMENT_INVALID` 四种。`INCOMPLETE` 表示缺证据或证据不匹配,
   报告里的 failure 列表会写明是哪一项;先按名字核对文件路径是否传对,**不得为改变 verdict 而重跑对照或替换输入**。
 
+### 6.4 修正报告(gate-report 原生协议 bug 修复后,零成本)
+
+原报告把合格的原生协议 controls 误判为 `controls_environment_mismatch`(DEVLOG 2026-10-02 Step 50)。修复合并后,
+拉取最新 master,在**完全相同的输入**上重新生成一份修正报告,写到新文件,**原 `gate-report.json` 不覆盖、不删除**:
+
+```powershell
+.venv\Scripts\python.exe -m redcell.cli gate-report `
+  --db sqlite:///runs/phase-0-5e.db `
+  --seed-plan-json docs/PHASE0_5E_SEED_PLAN.json `
+  --matrix-state-json runs/phase-0-5e/gate-matrix-state.json `
+  --validation-json runs/phase-0-5e/validation.json `
+  --controls-json runs/phase-0-5e/controls-prematrix-windows/controls.json `
+  --utility-baseline-json docs/PHASE0_5E_UTILITY_BASELINE.json `
+  --billing-evidence-json runs/phase-0-5e/billing-evidence.json `
+  --golden-json runs/phase-0-5e/golden.json `
+  --attacker-control-json runs/phase-0-5e/attacker-control/attacker-control-seed0.json `
+  --controller-controls-json runs/phase-0-5e/controller-controls.json `
+  --out runs/phase-0-5e/gate-report-corrected.json
+```
+
+- 不调用任何 Provider,也不重跑 controls、对照、replay 或矩阵;`.env` 保持原样。
+- DEVLOG 记录:代码 commit、退出码、修正报告的 verdict 与 failure 列表原文、SHA-256,以及和原报告的逐项差异。
+  `analysis.comparisons` 与 `analysis.mechanism` 应与原报告逐字段相同(修复不涉及它们),如有不同要单独写明。
+- 预期只少 `controls_environment_mismatch` 一项;如果还有其他差异,停下来报告。
+
 ### 6.3 记录
 
 DEVLOG 记:代码 commit;每条命令的起止时间与退出码;golden 结果;两份对照是否合格;replay 的路径条数、
