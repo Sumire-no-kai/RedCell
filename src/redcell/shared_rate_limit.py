@@ -16,6 +16,9 @@ class SQLiteRateLimiter:
     The database contains only a non-secret endpoint/model key and timing state.  A
     child that receives a 429 records one shared cooldown before it releases its
     lease, so sibling processes do not each start their own retry storm.
+
+    The caller's configured cap and interval decide; the stored values merely record the
+    latest configuration, so state left by an earlier run never pins a later one.
     """
 
     RATE_LIMIT_BASE_SECONDS = 5.0
@@ -96,8 +99,7 @@ class SQLiteRateLimiter:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT active_count, last_started_at, min_interval_seconds, max_concurrency, "
-                "blocked_until "
+                "SELECT last_started_at, blocked_until "
                 "FROM shared_provider_rate_limit WHERE provider_key = ?",
                 (self._provider_key,),
             ).fetchone()
@@ -110,13 +112,12 @@ class SQLiteRateLimiter:
                 "SELECT COUNT(*) FROM shared_provider_rate_limit_lease WHERE provider_key = ?",
                 (self._provider_key,),
             ).fetchone()[0]
+            # 调用方当前的配置决定上限与间隔(0 表示不限)。库里的两列只记录最近一次配置,
+            # 绝不参与判定:此前取"库里的值与配置中更严的一个"再写回,上限与间隔因此只降不升,
+            # 校准期留下的 1 路 / 长间隔会一直压住后来调高的配置。
+            interval, limit = self._min_interval, self._max_concurrency
             if row is None:
-                last_started, interval, limit, blocked_until = (
-                    None,
-                    self._min_interval,
-                    self._max_concurrency,
-                    None,
-                )
+                last_started, blocked_until = None, None
                 connection.execute(
                     "INSERT INTO shared_provider_rate_limit "
                     "(provider_key, active_count, last_started_at, "
@@ -126,10 +127,7 @@ class SQLiteRateLimiter:
                     (self._provider_key, interval, limit),
                 )
             else:
-                _stored_active, last_started, saved_interval, saved_limit, blocked_until = row
-                interval = max(float(saved_interval), self._min_interval)
-                limits = [item for item in (int(saved_limit), self._max_concurrency) if item > 0]
-                limit = min(limits) if limits else 0
+                last_started, blocked_until = row
                 connection.execute(
                     "UPDATE shared_provider_rate_limit SET min_interval_seconds = ?, "
                     "max_concurrency = ? "
