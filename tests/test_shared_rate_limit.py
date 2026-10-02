@@ -34,6 +34,70 @@ async def test_two_instances_share_one_concurrency_limit(tmp_path) -> None:
     assert peak == 1
 
 
+async def _acquire_up_to(limiter: SQLiteRateLimiter, count: int) -> int:
+    """How many leases `limiter` hands out within a short window (none are released)."""
+    granted = 0
+    for index in range(count):
+        try:
+            await asyncio.wait_for(limiter.acquire(f"lease-{index}"), timeout=0.3)
+        except TimeoutError:
+            break
+        granted += 1
+    return granted
+
+
+def _stored_limits(path) -> tuple[int, float]:
+    with sqlite3.connect(path) as connection:
+        return connection.execute(
+            "SELECT max_concurrency, min_interval_seconds FROM shared_provider_rate_limit"
+        ).fetchone()
+
+
+@pytest.mark.parametrize(
+    ("saved", "configured", "granted"),
+    [(1, 3, 3), (3, 1, 1), (1, 0, 4)],
+    ids=["raised", "lowered", "unlimited"],
+)
+async def test_configured_concurrency_cap_replaces_the_saved_one(
+    tmp_path, saved: int, configured: int, granted: int
+) -> None:
+    """Phase 0.5e: a calibration-era cap of 1 kept pinning the later, higher configuration."""
+    path = tmp_path / "rate-limit.db"
+    database_url = f"sqlite:///{path}"
+    earlier = SQLiteRateLimiter(
+        database_url, provider_key="provider|model", min_interval_seconds=0, max_concurrency=saved
+    )
+    await earlier.acquire("earlier-run")
+    await earlier.release("earlier-run")
+
+    current = SQLiteRateLimiter(
+        database_url,
+        provider_key="provider|model",
+        min_interval_seconds=0,
+        max_concurrency=configured,
+    )
+
+    assert await _acquire_up_to(current, 4) == granted
+    assert _stored_limits(path)[0] == configured
+
+
+async def test_configured_interval_replaces_the_saved_one(tmp_path) -> None:
+    path = tmp_path / "rate-limit.db"
+    database_url = f"sqlite:///{path}"
+    earlier = SQLiteRateLimiter(
+        database_url, provider_key="provider|model", min_interval_seconds=60, max_concurrency=0
+    )
+    await earlier.acquire("earlier-run")
+    await earlier.release("earlier-run")
+
+    current = SQLiteRateLimiter(
+        database_url, provider_key="provider|model", min_interval_seconds=0, max_concurrency=0
+    )
+
+    assert await _acquire_up_to(current, 2) == 2
+    assert _stored_limits(path)[1] == 0
+
+
 async def test_expired_lease_does_not_block_a_restarted_child(tmp_path) -> None:
     database_url = f"sqlite:///{tmp_path / 'rate-limit.db'}"
     abandoned = SQLiteRateLimiter(
