@@ -220,6 +220,12 @@
 - **验证与交付:** 对两部分逐字段白名单核对，保留完整浮点精度与 null/布尔原值；只读 schema 求值没有重新计算 bootstrap 或 permutation。最终 verdict 与 Step 36 六项 failure 原文保持不变，仍为 `EXPERIMENT_INVALID`。本次仅追加 DEVLOG，完成针对摘录的源文件一致性检查与 diff 检查后提交、推送现有 PR #95；此前四道离线门通过，未修改其验证代码。
 - **剩余状态:** 安全统计字段补录 DONE；追加提交与推送待完成，研究解读仍另行进行。
 
+### 2026-10-02 10:00 AEST · Step 40 · 安全统计补充已提交并推送 PR #95
+
+- **提交与 PR:** `371f6e6`（`docs: add paired hypothesis and mechanism statistics`）已推送原结果分支；[PR #95](https://github.com/Sumire-no-kai/RedCell/pull/95) 保持 OPEN，正文保留原内容并增加此次统计补充说明，没有新建或合并 PR。
+- **针对性验证:** 解析 DEVLOG 新增的两个 JSON 代码块，与原报告 `analysis.comparisons` / `analysis.mechanism` 逐字段相等；原 verdict/failure 代码块保持一致，env 字节守卫匹配，`git diff --check` 通过。仅文档增加，未重跑四道工程门；Step 37 的已有通过记录仍明确属于该次验证。
+- **剩余状态:** 两部分安全统计补录、验证、提交和推送 DONE；此条交付状态随同一 PR 收尾提交，Gate 仍为 `EXPERIMENT_INVALID`，研究解读另行进行。原报告及全部 raw 产物留 Windows 忽略路径。
+
 ## 2026-10-01 · Phase 0.5e Windows 正式矩阵执行
 
 ### 2026-10-01 14:31 AEST · Step 01 · 同步与冻结条件核验
