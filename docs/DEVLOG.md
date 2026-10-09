@@ -5,6 +5,27 @@
 
 ---
 
+## 2026-10-09 · Target 候选探针:Claude Haiku 5.5
+
+### 2026-10-09 13:43 AEDT · Step 01 · `claude-haiku-5-5` 中性探针被拒:temperature 硬约束
+
+- **进度:** 作者在 `.env` 加入 `ANTHROPIC_API_KEY`(预留位,未接任何模型位),要求评估 Claude Haiku 5.5 能否作靶场。
+  按 2026-09-23 Step 15 的 Luna 探针做法先打一发中性 READY 请求,再决定是否跑资格门。
+- **接入前核对(未调用):** 项目只有 `OpenAICompatibleProvider`,接 Claude 须走 Anthropic 的 OpenAI 兼容端点
+  `https://api.anthropic.com/v1`;官方文档声明该层「主要用于测试和比较模型能力,不是长期/生产方案」。官方迁移文档:
+  Haiku 5.5 的 `temperature` 只接受 1,其他值 400,与 thinking 开关无关;`claude-haiku-5-5` 为滚动名,无带日期快照;
+  thinking 默认开且兼容层不回传思考内容、`completion_tokens_details` 恒空。单价 $0.10 / $0.50。
+- **探针(经作者同意后执行):** 经 `OpenAICompatibleProvider` 向 `claude-haiku-5-5` 发一条 READY 请求,
+  `temperature=0.7`(冻结值)、`max_tokens=512`,2026-10-09 13:43:27 AEDT。**HTTP 400** `invalid_request_error`:
+  「`temperature` is deprecated for this model.」只发了这一次;400 不计费。
+- **结论:** 与 2026-08-01 Step 01 排除 Claude 5 系列、2026-09-23 排除 `gpt-5-nano-2025-08-07` 同一条硬约束——
+  `CALIBRATION.md` §3 冻结 Target temperature=0.7 且不得设 0,而 Haiku 5.5 拒收非默认温度,校准标准从第一次调用起
+  就无法执行。**未跑资格门,不建 `.env.haiku`。** 要让 Claude 系列进候选,须先由作者裁定是否修订 §3 的温度冻结
+  (那是实验条件变更,不是配置),不属于本步范围。
+- **证据:** 探针脚本放在会话临时目录,不入库;`.env.example` 候选筛选记录新增一行 ❌。`.env` 的 `ANTHROPIC_API_KEY`
+  保留,未接线。
+- **剩余状态:** DONE(探针);OPEN(是否为 Claude 系列修订温度冻结,待作者)。
+
 ## 2026-10-02 · Phase 0.5e Windows replay 与 Gate 执行
 
 ### 2026-10-02 00:01 AEST · Step 31 · §6.2 Attacker 对照合格；准备唯一一次路径 replay
